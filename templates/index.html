@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Ops Command Center</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="sidebar">
+        <h2>AI Ops</h2>
+        <a href="/">Dashboard</a>
+        <a href="/api/jobs?keyword=machine learning" target="_blank">Jobs API</a>
+        <a href="/api/events" target="_blank">Events API</a>
+        <a href="/login">Login</a>
+    </div>
+
+    <main>
+        <section class="hero">
+            <h1>AI Operations Command Center</h1>
+            <p>Full-stack AI automation dashboard for job intelligence, email triage, workflow events, and API-driven automation.</p>
+        </section>
+
+        <section class="grid">
+            <div class="card">
+                <h3>AI Job Intelligence</h3>
+                <p>Searches remote AI/ML jobs and exposes results through a Make.com-ready API.</p>
+                <code>/api/jobs</code>
+            </div>
+
+            <div class="card">
+                <h3>Email Intelligence</h3>
+                <p>Classifies messages as Spam or Not Spam and returns automation actions.</p>
+                <code>/api/email-assistant</code>
+            </div>
+
+            <div class="card">
+                <h3>Automation Logs</h3>
+                <p>Stores workflow events in a database for dashboard visibility.</p>
+                <code>SQLite Database</code>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>Recent Automation Events</h2>
+            {% for event in events %}
+            <div class="row">
+                <strong>{{ event.event_type }}</strong>
+                <span>{{ event.status }}</span>
+                <p>{{ event.details }}</p>
+            </div>
+            {% endfor %}
+        </section>
+
+        <section class="panel">
+            <h2>Saved Jobs</h2>
+            {% for job in jobs %}
+            <div class="row">
+                <strong>{{ job.title }}</strong>
+                <span>{{ job.company }}</span>
+                <p>{{ job.location }}</p>
+            </div>
+            {% endfor %}
+        </section>
+    </main>
+</body>
+</html>
