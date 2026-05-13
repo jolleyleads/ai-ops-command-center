@@ -16,31 +16,58 @@
     <main>
         <section class="hero">
             <h1>AI Operations Command Center</h1>
-            <p>Full-stack AI automation dashboard for job intelligence, email triage, workflow events, and API-driven automation.</p>
+            <p>
+                Full-stack AI automation dashboard for job intelligence,
+                email triage, workflow events, and API-driven automation.
+            </p>
         </section>
 
         <section class="grid">
+
             <div class="card">
                 <h3>AI Job Intelligence</h3>
-                <p>Searches remote AI/ML jobs and exposes results through a Make.com-ready API.</p>
+
+                <p>
+                    Searches remote AI/ML jobs and exposes results
+                    through a Make.com-ready API.
+                </p>
+
                 <code>/api/jobs</code>
+
+                <br><br>
+
+                <button onclick="saveDemoJob()">
+                    Save Demo Job
+                </button>
             </div>
 
             <div class="card">
                 <h3>Email Intelligence</h3>
-                <p>Classifies messages as Spam or Not Spam and returns automation actions.</p>
+
+                <p>
+                    Classifies messages as Spam or Not Spam and
+                    returns automation actions.
+                </p>
+
                 <code>/api/email-assistant</code>
             </div>
 
             <div class="card">
                 <h3>Automation Logs</h3>
-                <p>Stores workflow events in a database for dashboard visibility.</p>
+
+                <p>
+                    Stores workflow events in a database
+                    for dashboard visibility.
+                </p>
+
                 <code>SQLite Database</code>
             </div>
+
         </section>
 
         <section class="panel">
             <h2>Recent Automation Events</h2>
+
             {% for event in events %}
             <div class="row">
                 <strong>{{ event.event_type }}</strong>
@@ -52,6 +79,7 @@
 
         <section class="panel">
             <h2>Saved Jobs</h2>
+
             {% for job in jobs %}
             <div class="row">
                 <strong>{{ job.title }}</strong>
@@ -60,6 +88,48 @@
             </div>
             {% endfor %}
         </section>
+
     </main>
+
+<script>
+function saveDemoJob() {
+
+    fetch("/api/save-job", {
+
+        method: "POST",
+
+        headers: {
+            "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+
+            title: "Machine Learning Engineer",
+
+            company: "Remote AI Company",
+
+            source: "AI Ops Demo",
+
+            location: "Remote",
+
+            url: "https://example.com/job"
+
+        })
+
+    })
+
+    .then(response => response.json())
+
+    .then(data => {
+
+        alert("Job saved to dashboard!");
+
+        location.reload();
+
+    });
+
+}
+</script>
+
 </body>
 </html>
