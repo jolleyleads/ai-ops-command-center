@@ -21,14 +21,13 @@
 
         <section class="panel">
             <h2>Search Real AI Jobs</h2>
-            <input id="keywordInput" placeholder="machine learning, ai engineer, python, automation" value="machine learning">
+            <input id="keywordInput" value="machine learning">
             <button onclick="searchJobs()">Search Jobs</button>
             <div id="jobResults"></div>
         </section>
 
         <section class="panel">
             <h2>Saved Jobs</h2>
-
             {% for job in jobs %}
             <div class="row">
                 <strong>{{ job.title }}</strong>
@@ -41,7 +40,6 @@
 
         <section class="panel">
             <h2>Recent Automation Events</h2>
-
             {% for event in events %}
             <div class="row">
                 <strong>{{ event.event_type }}</strong>
@@ -53,51 +51,64 @@
     </main>
 
 <script>
-function searchJobs() {
-    const keyword = document.getElementById("keywordInput").value;
+async function searchJobs() {
+    const keyword = document.getElementById("keywordInput").value || "machine learning";
+    const container = document.getElementById("jobResults");
 
-    fetch("/api/jobs?keyword=" + encodeURIComponent(keyword))
-        .then(response => response.json())
-        .then(data => {
-            const container = document.getElementById("jobResults");
-            container.innerHTML = "";
+    container.innerHTML = "<p>Searching jobs...</p>";
 
-            if (!data.jobs || data.jobs.length === 0) {
-                container.innerHTML = "<p>No jobs found.</p>";
-                return;
-            }
+    try {
+        const response = await fetch("/api/jobs?keyword=" + encodeURIComponent(keyword));
+        const data = await response.json();
 
-            data.jobs.forEach(job => {
-                const div = document.createElement("div");
-                div.className = "row";
+        container.innerHTML = "";
 
-                div.innerHTML = 
-                    <strong>\</strong>
-                    <span>\</span>
-                    <p>\ | \</p>
-                    <a href="\" target="_blank">Open Job</a>
-                    <br><br>
-                    <button onclick='saveJob(\)'>Save This Job</button>
-                ;
+        if (!data.jobs || data.jobs.length === 0) {
+            container.innerHTML = "<p>No jobs found.</p>";
+            return;
+        }
 
-                container.appendChild(div);
+        data.jobs.forEach(function(job) {
+            const div = document.createElement("div");
+            div.className = "row";
+
+            const title = job.title || "No title";
+            const company = job.company || "Unknown company";
+            const location = job.location || "Remote";
+            const source = job.source || "Unknown source";
+            const url = job.url || "#";
+
+            div.innerHTML =
+                "<strong>" + title + "</strong>" +
+                "<span>" + company + "</span>" +
+                "<p>" + location + " | " + source + "</p>" +
+                "<a href='" + url + "' target='_blank'>Open Job</a><br><br>" +
+                "<button>Save This Job</button>";
+
+            div.querySelector("button").addEventListener("click", function() {
+                saveJob(job);
             });
+
+            container.appendChild(div);
         });
+
+    } catch (error) {
+        container.innerHTML = "<p>Error loading jobs. Check the API.</p>";
+        console.error(error);
+    }
 }
 
-function saveJob(job) {
-    fetch("/api/save-job", {
+async function saveJob(job) {
+    await fetch("/api/save-job", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
         },
         body: JSON.stringify(job)
-    })
-    .then(response => response.json())
-    .then(data => {
-        alert("Real job saved to dashboard!");
-        location.reload();
     });
+
+    alert("Job saved!");
+    location.reload();
 }
 </script>
 
