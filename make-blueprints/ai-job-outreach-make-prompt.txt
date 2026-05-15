@@ -1,0 +1,143 @@
+# Make.com Scenario Prompt
+
+Scenario name:
+
+AI Command Center - Job Outreach + Resume Automation
+
+Goal:
+Build a Make.com scenario that pulls AI/ML jobs from my AI Ops Command Center API, deduplicates jobs, saves new jobs to a Make Data Store, downloads my resume from GitHub, creates Gmail drafts with my resume attached, and prepares reply tracking and follow-up automation.
+
+Jobs API endpoint:
+https://ai-ops-command-center.onrender.com/api/jobs?keyword=machine%20learning
+
+Method:
+GET
+
+Jobs array path:
+data.jobs
+
+Each job object includes:
+id
+title
+company
+source
+location
+url
+recruiterEmail
+status
+
+Resume PDF URL:
+https://raw.githubusercontent.com/jolleyleads/ai-ops-command-center/main/resumes/Matthew_Jolley_Resume.pdf
+
+Scenario structure:
+
+1. Manual trigger for testing.
+
+2. HTTP - Make a request
+Name: Fetch AI Jobs
+URL: https://ai-ops-command-center.onrender.com/api/jobs?keyword=machine%20learning
+Method: GET
+Parse response: Yes
+Authentication: No authentication
+
+3. Iterator
+Name: Iterate Jobs
+Array: data.jobs
+
+4. Data Store
+Name: AI Jobs Outreach Tracker
+Primary key: job.id
+If id is missing, use an md5 hash of title + company + source + url.
+
+Fields:
+title
+company
+source
+location
+url
+recruiterEmail
+status
+date_found
+draft_created
+replied
+follow_up_due
+notes
+
+5. Data Store - Check existence of record
+Key: job.id
+
+6. Filter
+Only continue if record does not exist.
+
+7. Data Store - Add/replace record
+Save:
+title = job.title
+company = job.company
+source = job.source
+location = job.location
+url = job.url
+recruiterEmail = job.recruiterEmail
+status = New
+date_found = now
+draft_created = false
+replied = false
+notes = Pulled from AI Ops Command Center Jobs API
+
+8. HTTP - Get a file
+Name: Download Resume
+URL:
+https://raw.githubusercontent.com/jolleyleads/ai-ops-command-center/main/resumes/Matthew_Jolley_Resume.pdf
+
+9. Gmail - Create a draft
+Name: Create Resume Outreach Draft
+
+To:
+Leave blank if recruiterEmail is empty.
+If recruiterEmail exists, map recruiterEmail.
+
+Subject:
+Application Interest: {{title}} at {{company}}
+
+Body:
+Hi,
+
+I’m interested in the {{title}} role at {{company}}.
+
+I’m Matthew Jolley, an AI Automation Engineer and Applied Machine Learning Developer. I build deployed AI systems, NLP applications, Flask APIs, Make.com workflows, Gmail automation systems, and AI-powered business infrastructure.
+
+Relevant projects:
+- AI Ops Command Center: https://ai-ops-command-center.onrender.com
+- GitHub Portfolio: https://github.com/jolleyleads
+- Spam Classifier NLP: https://spam-classifier-nlp.onrender.com
+- Home Price Predictor: https://home-predictor.onrender.com
+
+I attached my resume for review.
+
+Best,
+Matthew Jolley
+
+Attachment:
+Attach the PDF file downloaded from HTTP Get a file.
+
+10. Data Store - Update record
+draft_created = true
+status = Draft Created
+follow_up_due = addDays(now; 7)
+
+11. Future-ready reply tracking
+Later add Gmail Search Emails:
+Search for replies from recruiterEmail or company domain.
+If reply found:
+replied = true
+status = Replied
+
+12. Future-ready follow-up
+If replied = false and follow_up_due <= today:
+Create follow-up Gmail draft.
+
+Rules:
+Do not auto-send emails.
+Only create Gmail drafts.
+Prevent duplicates.
+Keep human approval.
+Use this as a portfolio-worthy AI job outreach automation pipeline.

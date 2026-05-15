@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import requests
 import os
+import hashlib
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
@@ -29,30 +30,73 @@ class SavedJob(db.Model):
     url = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+def make_job_id(title, company, source, url):
+    raw = f"{title}|{company}|{source}|{url}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+def normalize_job(source, title, company, location, url):
+    title = title or "Unknown Title"
+    company = company or "Unknown Company"
+    source = source or "Unknown Source"
+    location = location or "Remote"
+    url = url or ""
+
+    return {
+        "id": make_job_id(title, company, source, url),
+        "title": title,
+        "company": company,
+        "source": source,
+        "location": location,
+        "url": url,
+        "recruiterEmail": "",
+        "status": "New"
+    }
+
 def search_remote_jobs(keyword="machine learning"):
     jobs = []
 
     try:
-        r = requests.get("https://remotive.com/api/remote-jobs", params={"search": keyword}, timeout=10)
+        r = requests.get(
+            "https://remotive.com/api/remote-jobs",
+            params={"search": keyword},
+            timeout=15
+        )
+
         data = r.json()
 
-        for job in data.get("jobs", [])[:15]:
-            jobs.append({
-                "source": "Remotive",
-                "title": job.get("title"),
-                "company": job.get("company_name"),
-                "location": job.get("candidate_required_location"),
-                "url": job.get("url")
-            })
-    except Exception:
-        pass
+        for job in data.get("jobs", [])[:25]:
+            jobs.append(
+                normalize_job(
+                    "Remotive",
+                    job.get("title"),
+                    job.get("company_name"),
+                    job.get("candidate_required_location"),
+                    job.get("url")
+                )
+            )
+    except Exception as e:
+        jobs.append({
+            "id": make_job_id("Error fetching jobs", "System", "AI Ops", ""),
+            "title": "Error fetching jobs",
+            "company": "System",
+            "source": "AI Ops",
+            "location": "N/A",
+            "url": "",
+            "recruiterEmail": "",
+            "status": "Error",
+            "error": str(e)
+        })
 
     return jobs
+
+@app.before_request
+def create_tables():
+    db.create_all()
 
 @app.route("/")
 def index():
     events = AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(10).all()
-    jobs = SavedJob.query.order_by(SavedJob.created_at.desc()).limit(10).all()
+    jobs = SavedJob.query.order_by(SavedJob.created_at.desc()).limit(20).all()
     return render_template("index.html", events=events, jobs=jobs)
 
 @app.route("/login", methods=["GET", "POST"])
@@ -79,10 +123,11 @@ def api_jobs():
 
     event = AutomationEvent(
         event_type="job_search",
-        source="api",
+        source="AI Ops Jobs API",
         status="success",
         details=f"Searched remote jobs for: {keyword}"
     )
+
     db.session.add(event)
     db.session.commit()
 
@@ -108,15 +153,18 @@ def save_job():
 
     event = AutomationEvent(
         event_type="save_job",
-        source="api",
+        source="dashboard_or_make",
         status="success",
-        details=f"Saved job: {data.get('title')}"
+        details=f"Saved job: {data.get('title')} at {data.get('company')}"
     )
-    db.session.add(event)
 
+    db.session.add(event)
     db.session.commit()
 
-    return jsonify({"status": "saved", "job": data})
+    return jsonify({
+        "status": "saved",
+        "job": data
+    })
 
 @app.route("/api/email-assistant", methods=["POST"])
 def email_assistant():
@@ -136,6 +184,7 @@ def email_assistant():
         status="success",
         details=f"Classified message as {classification}"
     )
+
     db.session.add(event)
     db.session.commit()
 
@@ -161,9 +210,13 @@ def api_events():
         for event in events
     ])
 
-@app.before_request
-def create_tables():
-    db.create_all()
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status": "AI Ops Command Center online",
+        "jobs_endpoint": "/api/jobs?keyword=machine%20learning",
+        "resume_url": "https://raw.githubusercontent.com/jolleyleads/ai-ops-command-center/main/resumes/Matthew_Jolley_Resume.pdf"
+    })
 
 if __name__ == "__main__":
     app.run(debug=True)
