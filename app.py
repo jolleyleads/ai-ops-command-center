@@ -4,11 +4,12 @@ from datetime import datetime
 import requests
 import os
 import hashlib
+import json
+import uuid
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
-
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///ai_ops.db"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///ai_ops.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
@@ -30,64 +31,144 @@ class SavedJob(db.Model):
     url = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class Workflow(db.Model):
+    id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default="")
+    status = db.Column(db.String(30), default="draft")
+    definition = db.Column(db.Text, nullable=False, default='{"nodes":[],"edges":[]}')
+    schedule = db.Column(db.String(120), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class WorkflowRun(db.Model):
+    id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workflow_id = db.Column(db.String(64), db.ForeignKey('workflow.id'), nullable=False)
+    status = db.Column(db.String(30), default="queued")
+    input_json = db.Column(db.Text, default='{}')
+    output_json = db.Column(db.Text, default='{}')
+    logs_json = db.Column(db.Text, default='[]')
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    finished_at = db.Column(db.DateTime)
+
+class Credential(db.Model):
+    id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(120), nullable=False)
+    connector = db.Column(db.String(80), nullable=False)
+    env_var = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+NODE_TYPES = {
+    "trigger": "Trigger",
+    "schedule": "Schedule",
+    "webhook": "Webhook",
+    "condition": "IF / ELSE",
+    "ai": "OpenAI",
+    "http": "HTTP Request",
+    "email": "Email",
+    "sms": "SMS",
+    "crm": "CRM",
+    "delay": "Delay",
+    "action": "Action"
+}
+
 def make_job_id(title, company, source, url):
     raw = f"{title}|{company}|{source}|{url}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 def normalize_job(source, title, company, location, url):
-    title = title or "Unknown Title"
-    company = company or "Unknown Company"
-    source = source or "Unknown Source"
-    location = location or "Remote"
-    url = url or ""
-
     return {
-        "id": make_job_id(title, company, source, url),
-        "title": title,
-        "company": company,
-        "source": source,
-        "location": location,
-        "url": url,
-        "recruiterEmail": "",
-        "status": "New"
+        "id": make_job_id(title or "Unknown Title", company or "Unknown Company", source or "Unknown Source", url or ""),
+        "title": title or "Unknown Title", "company": company or "Unknown Company",
+        "source": source or "Unknown Source", "location": location or "Remote",
+        "url": url or "", "recruiterEmail": "", "status": "New"
     }
 
 def search_remote_jobs(keyword="machine learning"):
     jobs = []
-
     try:
-        r = requests.get(
-            "https://remotive.com/api/remote-jobs",
-            params={"search": keyword},
-            timeout=15
-        )
-
+        r = requests.get("https://remotive.com/api/remote-jobs", params={"search": keyword}, timeout=15)
         data = r.json()
-
         for job in data.get("jobs", [])[:25]:
-            jobs.append(
-                normalize_job(
-                    "Remotive",
-                    job.get("title"),
-                    job.get("company_name"),
-                    job.get("candidate_required_location"),
-                    job.get("url")
-                )
-            )
+            jobs.append(normalize_job("Remotive", job.get("title"), job.get("company_name"), job.get("candidate_required_location"), job.get("url")))
     except Exception as e:
-        jobs.append({
-            "id": make_job_id("Error fetching jobs", "System", "AI Ops", ""),
-            "title": "Error fetching jobs",
-            "company": "System",
-            "source": "AI Ops",
-            "location": "N/A",
-            "url": "",
-            "recruiterEmail": "",
-            "status": "Error",
-            "error": str(e)
-        })
-
+        jobs.append({"id": make_job_id("Error fetching jobs", "System", "AI Ops", ""), "title":"Error fetching jobs", "company":"System", "source":"AI Ops", "location":"N/A", "url":"", "recruiterEmail":"", "status":"Error", "error":str(e)})
     return jobs
+
+def parse_definition(workflow):
+    try:
+        return json.loads(workflow.definition or '{}')
+    except Exception:
+        return {"nodes": [], "edges": []}
+
+def evaluate_condition(config, context):
+    field = config.get("field", "")
+    operator = config.get("operator", "equals")
+    expected = config.get("value")
+    actual = context.get(field)
+    if operator == "equals": return str(actual) == str(expected)
+    if operator == "not_equals": return str(actual) != str(expected)
+    if operator == "contains": return str(expected).lower() in str(actual or '').lower()
+    if operator == "exists": return actual not in (None, "")
+    return False
+
+def execute_node(node, context):
+    node_type = node.get("type")
+    config = node.get("config", {})
+    if node_type in ("trigger", "schedule", "webhook"):
+        return {"ok": True, "context": context}
+    if node_type == "condition":
+        result = evaluate_condition(config, context)
+        context["condition_result"] = result
+        return {"ok": True, "branch": "true" if result else "false", "context": context}
+    if node_type == "ai":
+        prompt = config.get("prompt", "")
+        context[config.get("output_key", "ai_output")] = f"AI node ready. Prompt: {prompt}"
+        return {"ok": True, "context": context, "note": "Set OPENAI_API_KEY to replace placeholder execution with a live model call."}
+    if node_type == "http":
+        method = config.get("method", "GET").upper()
+        url = config.get("url", "")
+        if not url:
+            return {"ok": False, "error": "HTTP node requires a URL"}
+        resp = requests.request(method, url, json=config.get("body"), timeout=20)
+        context[config.get("output_key", "http_response")] = {"status": resp.status_code, "text": resp.text[:2000]}
+        return {"ok": resp.ok, "context": context}
+    if node_type in ("email", "sms", "crm", "action", "delay"):
+        context.setdefault("actions", []).append({"type": node_type, "config": config, "status": "prepared"})
+        return {"ok": True, "context": context}
+    return {"ok": False, "error": f"Unsupported node type: {node_type}"}
+
+def run_workflow(workflow, payload):
+    definition = parse_definition(workflow)
+    nodes = definition.get("nodes", [])
+    edges = definition.get("edges", [])
+    by_id = {n.get("id"): n for n in nodes}
+    incoming = {n.get("id"): 0 for n in nodes}
+    for e in edges:
+        if e.get("target") in incoming:
+            incoming[e.get("target")] += 1
+    queue = [nid for nid, count in incoming.items() if count == 0]
+    context = dict(payload or {})
+    logs = []
+    visited = set()
+    while queue:
+        nid = queue.pop(0)
+        if nid in visited or nid not in by_id:
+            continue
+        visited.add(nid)
+        node = by_id[nid]
+        result = execute_node(node, context)
+        logs.append({"node_id": nid, "node": node.get("label") or node.get("type"), "result": result})
+        if not result.get("ok"):
+            return False, context, logs
+        context = result.get("context", context)
+        branch = result.get("branch")
+        for e in edges:
+            if e.get("source") == nid:
+                if branch and e.get("branch") and e.get("branch") != branch:
+                    continue
+                queue.append(e.get("target"))
+    return True, context, logs
 
 @app.before_request
 def create_tables():
@@ -97,7 +178,12 @@ def create_tables():
 def index():
     events = AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(10).all()
     jobs = SavedJob.query.order_by(SavedJob.created_at.desc()).limit(20).all()
-    return render_template("index.html", events=events, jobs=jobs)
+    workflow_count = Workflow.query.count()
+    return render_template("index.html", events=events, jobs=jobs, workflow_count=workflow_count)
+
+@app.route("/workflows")
+def workflows_page():
+    return render_template("workflows.html", node_types=NODE_TYPES)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -108,115 +194,105 @@ def login():
 
 @app.route("/logout")
 def logout():
-    session.clear()
-    return redirect(url_for("login"))
+    session.clear(); return redirect(url_for("login"))
+
+@app.route("/api/workflows", methods=["GET", "POST"])
+def workflows_api():
+    if request.method == "GET":
+        rows = Workflow.query.order_by(Workflow.updated_at.desc()).all()
+        return jsonify([{"id":w.id,"name":w.name,"description":w.description,"status":w.status,"schedule":w.schedule,"definition":parse_definition(w),"updated_at":w.updated_at.isoformat()} for w in rows])
+    data = request.get_json(silent=True) or {}
+    wf = Workflow(name=data.get("name") or "Untitled Workflow", description=data.get("description", ""), status=data.get("status", "draft"), schedule=data.get("schedule", ""), definition=json.dumps(data.get("definition") or {"nodes":[],"edges":[]}))
+    db.session.add(wf); db.session.commit()
+    return jsonify({"id": wf.id, "status": "created"}), 201
+
+@app.route("/api/workflows/<workflow_id>", methods=["GET", "PUT", "DELETE"])
+def workflow_detail(workflow_id):
+    wf = Workflow.query.get_or_404(workflow_id)
+    if request.method == "GET":
+        return jsonify({"id":wf.id,"name":wf.name,"description":wf.description,"status":wf.status,"schedule":wf.schedule,"definition":parse_definition(wf)})
+    if request.method == "DELETE":
+        WorkflowRun.query.filter_by(workflow_id=workflow_id).delete(); db.session.delete(wf); db.session.commit(); return jsonify({"status":"deleted"})
+    data = request.get_json(silent=True) or {}
+    wf.name = data.get("name", wf.name); wf.description = data.get("description", wf.description); wf.status = data.get("status", wf.status); wf.schedule = data.get("schedule", wf.schedule)
+    if "definition" in data: wf.definition = json.dumps(data["definition"])
+    db.session.commit(); return jsonify({"status":"updated"})
+
+@app.route("/api/workflows/<workflow_id>/run", methods=["POST"])
+def run_workflow_api(workflow_id):
+    wf = Workflow.query.get_or_404(workflow_id)
+    payload = request.get_json(silent=True) or {}
+    run = WorkflowRun(workflow_id=wf.id, status="running", input_json=json.dumps(payload))
+    db.session.add(run); db.session.commit()
+    ok, output, logs = run_workflow(wf, payload)
+    run.status = "success" if ok else "failed"; run.output_json = json.dumps(output); run.logs_json = json.dumps(logs); run.finished_at = datetime.utcnow(); db.session.commit()
+    db.session.add(AutomationEvent(event_type="workflow_run", source=wf.name, status=run.status, details=f"Workflow {wf.id} run {run.id}")); db.session.commit()
+    return jsonify({"run_id":run.id,"status":run.status,"output":output,"logs":logs})
+
+@app.route("/api/runs")
+def runs_api():
+    rows = WorkflowRun.query.order_by(WorkflowRun.started_at.desc()).limit(50).all()
+    return jsonify([{"id":r.id,"workflow_id":r.workflow_id,"status":r.status,"started_at":r.started_at.isoformat(),"finished_at":r.finished_at.isoformat() if r.finished_at else None} for r in rows])
+
+@app.route("/api/credentials", methods=["GET", "POST"])
+def credentials_api():
+    if request.method == "GET":
+        rows = Credential.query.order_by(Credential.created_at.desc()).all()
+        return jsonify([{"id":c.id,"name":c.name,"connector":c.connector,"env_var":c.env_var,"configured":bool(os.environ.get(c.env_var))} for c in rows])
+    data = request.get_json(silent=True) or {}
+    c = Credential(name=data.get("name") or data.get("connector") or "Credential", connector=data.get("connector") or "custom", env_var=data.get("env_var") or "")
+    db.session.add(c); db.session.commit(); return jsonify({"id":c.id,"status":"saved","note":"Secrets are referenced by environment variable name and are never stored in the database."}), 201
+
+@app.route("/api/ai/generate-workflow", methods=["POST"])
+def generate_workflow():
+    data = request.get_json(silent=True) or {}
+    text = (data.get("description") or "").lower()
+    nodes = [{"id":"trigger-1","type":"trigger","label":"Start","x":80,"y":180,"config":{}}]
+    edges = []
+    last = "trigger-1"
+    def add(ntype,label,config=None):
+        nonlocal last
+        nid = f"{ntype}-{len(nodes)+1}"; nodes.append({"id":nid,"type":ntype,"label":label,"x":80+220*len(nodes),"y":180,"config":config or {}}); edges.append({"source":last,"target":nid}); last=nid
+    if any(k in text for k in ["if ", "condition", "only when"]): add("condition","IF / ELSE",{"field":"status","operator":"equals","value":"new"})
+    if any(k in text for k in ["ai", "openai", "summar", "write", "classif"]): add("ai","OpenAI",{"prompt":data.get("description","")})
+    if "email" in text or "gmail" in text: add("email","Send Email",{"connector":"gmail","to":"{{email}}"})
+    if "sms" in text or "text" in text: add("sms","Send SMS",{"connector":"twilio","to":"{{phone}}"})
+    if "crm" in text or "hubspot" in text or "salesforce" in text: add("crm","CRM Action",{"action":"upsert_contact"})
+    if "webhook" in text: add("webhook","Webhook",{})
+    if len(nodes) == 1: add("action","Action",{"description":data.get("description","")})
+    return jsonify({"name":data.get("name") or "AI Generated Workflow","definition":{"nodes":nodes,"edges":edges}})
 
 @app.route("/api/jobs", methods=["GET", "POST"])
 def api_jobs():
-    if request.method == "POST":
-        data = request.get_json(silent=True) or {}
-        keyword = data.get("keyword", "machine learning")
-    else:
-        keyword = request.args.get("keyword", "machine learning")
-
+    data = request.get_json(silent=True) or {} if request.method == "POST" else {}
+    keyword = data.get("keyword", "machine learning") if request.method == "POST" else request.args.get("keyword", "machine learning")
     jobs = search_remote_jobs(keyword)
-
-    event = AutomationEvent(
-        event_type="job_search",
-        source="AI Ops Jobs API",
-        status="success",
-        details=f"Searched remote jobs for: {keyword}"
-    )
-
-    db.session.add(event)
-    db.session.commit()
-
-    return jsonify({
-        "keyword": keyword,
-        "count": len(jobs),
-        "jobs": jobs
-    })
+    db.session.add(AutomationEvent(event_type="job_search", source="AI Ops Jobs API", status="success", details=f"Searched remote jobs for: {keyword}")); db.session.commit()
+    return jsonify({"keyword":keyword,"count":len(jobs),"jobs":jobs})
 
 @app.route("/api/save-job", methods=["POST"])
 def save_job():
     data = request.get_json(silent=True) or {}
-
-    job = SavedJob(
-        title=data.get("title"),
-        company=data.get("company"),
-        source=data.get("source"),
-        location=data.get("location"),
-        url=data.get("url")
-    )
-
-    db.session.add(job)
-
-    event = AutomationEvent(
-        event_type="save_job",
-        source="dashboard_or_make",
-        status="success",
-        details=f"Saved job: {data.get('title')} at {data.get('company')}"
-    )
-
-    db.session.add(event)
-    db.session.commit()
-
-    return jsonify({
-        "status": "saved",
-        "job": data
-    })
+    job = SavedJob(title=data.get("title"), company=data.get("company"), source=data.get("source"), location=data.get("location"), url=data.get("url"))
+    db.session.add(job); db.session.add(AutomationEvent(event_type="save_job", source="dashboard_or_make", status="success", details=f"Saved job: {data.get('title')} at {data.get('company')}")); db.session.commit()
+    return jsonify({"status":"saved","job":data})
 
 @app.route("/api/email-assistant", methods=["POST"])
 def email_assistant():
-    data = request.get_json(silent=True) or {}
-    message = data.get("message", "")
-
-    if "free" in message.lower() or "winner" in message.lower() or "click now" in message.lower():
-        classification = "Spam"
-        suggested_action = "Label as AI-Spam"
-    else:
-        classification = "Not Spam"
-        suggested_action = "Draft a follow-up response"
-
-    event = AutomationEvent(
-        event_type="email_classification",
-        source="gmail_make_api",
-        status="success",
-        details=f"Classified message as {classification}"
-    )
-
-    db.session.add(event)
-    db.session.commit()
-
-    return jsonify({
-        "classification": classification,
-        "suggested_action": suggested_action,
-        "draft_reply": "Thanks for reaching out. I will review this and follow up shortly."
-    })
+    data = request.get_json(silent=True) or {}; message = data.get("message", "")
+    classification = "Spam" if any(k in message.lower() for k in ["free","winner","click now"]) else "Not Spam"
+    suggested_action = "Label as AI-Spam" if classification == "Spam" else "Draft a follow-up response"
+    db.session.add(AutomationEvent(event_type="email_classification", source="gmail_make_api", status="success", details=f"Classified message as {classification}")); db.session.commit()
+    return jsonify({"classification":classification,"suggested_action":suggested_action,"draft_reply":"Thanks for reaching out. I will review this and follow up shortly."})
 
 @app.route("/api/events")
 def api_events():
     events = AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(25).all()
-
-    return jsonify([
-        {
-            "id": event.id,
-            "event_type": event.event_type,
-            "source": event.source,
-            "status": event.status,
-            "details": event.details,
-            "created_at": event.created_at.isoformat()
-        }
-        for event in events
-    ])
+    return jsonify([{"id":e.id,"event_type":e.event_type,"source":e.source,"status":e.status,"details":e.details,"created_at":e.created_at.isoformat()} for e in events])
 
 @app.route("/api/health")
 def health():
-    return jsonify({
-        "status": "AI Ops Command Center online",
-        "jobs_endpoint": "/api/jobs?keyword=machine%20learning",
-        "resume_url": "https://raw.githubusercontent.com/jolleyleads/ai-ops-command-center/main/resumes/Matthew_Jolley_Resume.pdf"
-    })
+    return jsonify({"status":"AI Ops Universal Automation online","workflow_builder":"/workflows","workflows_api":"/api/workflows","runs_api":"/api/runs"})
 
 if __name__ == "__main__":
     app.run(debug=True)
