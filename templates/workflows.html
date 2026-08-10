@@ -1,0 +1,6 @@
+<!DOCTYPE html><html><head><title>Workflow Builder</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<div class="sidebar"><h2>AI Ops</h2><a href="/">Dashboard</a><a href="/workflows">Workflow Builder</a><a href="/api/runs" target="_blank">Run History</a><a href="/api/credentials" target="_blank">Credentials API</a></div>
+<main class="builder-main"><section class="hero compact"><h1>Universal Workflow Builder</h1><p>Describe it, build it, save it, run it.</p></section>
+<div class="builder-toolbar"><input id="workflowName" value="New Automation"><input id="aiDescription" placeholder="Describe an automation, e.g. When a lead arrives, use AI to qualify it, then text qualified leads"><button id="aiBuild">Build with AI</button><button id="saveWorkflow">Save Workflow</button><button id="runWorkflow">Run</button></div>
+<div class="builder-layout"><aside class="node-palette"><h3>Nodes</h3>{% for key,label in node_types.items() %}<button class="node-add" data-type="{{ key }}">+ {{ label }}</button>{% endfor %}<hr><h3>Saved</h3><div id="workflowList"></div></aside><section><div id="canvas" class="workflow-canvas"></div><pre id="runOutput" class="run-output">Ready.</pre></section></div>
+</main><script src="/static/workflows.js"></script></body></html>
