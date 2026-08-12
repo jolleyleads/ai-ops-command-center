@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from .services import run as run_service
+from .openai_service import run as run_service
 
 
 def execute_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -13,8 +13,8 @@ def execute_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
     result = run_service(input_data)
 
     return {
-        "success": True,
-        "status": "completed",
+        "success": result.get("status") == "success",
+        "status": "completed" if result.get("status") == "success" else "error",
         "input": input_data,
         "result": result,
     }
