@@ -32,3 +32,79 @@ document.getElementById('aiBuild').onclick=async()=>{const description=document.
 async function save(){const payload={name:document.getElementById('workflowName').value,definition:{nodes:state.nodes,edges:state.edges},status:'active'};let url='/api/workflows',method='POST';if(state.id){url+='/'+state.id;method='PUT'}const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(d.id)state.id=d.id;await loadList();setOutput('Workflow saved.')}
 async function run(){if(!state.id){setOutput('Save the workflow first.');return}let input={};try{input=JSON.parse(document.getElementById('runInput').value||'{}')}catch(e){setOutput('Run input must be valid JSON.');return}setOutput('Running workflow...');const r=await fetch('/api/workflows/'+state.id+'/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});const d=await r.json();setOutput(JSON.stringify(d,null,2));loadStatus()}
 document.getElementById('saveWorkflow').onclick=save;document.getElementById('runWorkflow').onclick=run;document.getElementById('runWorkflowBottom').onclick=run;window.addEventListener('resize',renderEdges);loadList();loadStatus();render();renderInspector();
+
+document.getElementById("aiBuild").onclick = async function () {
+  state.id = null;
+
+  const start = {
+    id: uid("trigger"),
+    type: "trigger",
+    label: "Start",
+    x: 60,
+    y: 60,
+    config: { event_name: "new_contractor_lead" }
+  };
+
+  const ai = {
+    id: uid("ai"),
+    type: "ai",
+    label: "AI Process",
+    x: 280,
+    y: 240,
+    config: {
+      model: "",
+      instructions: "You qualify electrical contractor leads needing permit, licensing, or master electrician support.",
+      prompt: `Analyze this contractor lead:
+
+{{lead}}
+
+Explain whether they are qualified, what electrical permit or licensing support they need, and the next action.
+
+End with exactly:
+QUALIFIED: TRUE
+or
+QUALIFIED: FALSE`,
+      output_key: "ai_output"
+    }
+  };
+
+  const qualified = {
+    id: uid("condition"),
+    type: "condition",
+    label: "Qualified?",
+    x: 500,
+    y: 420,
+    config: {
+      field: "ai_output",
+      operator: "contains",
+      value: "QUALIFIED: TRUE"
+    }
+  };
+
+  const action = {
+    id: uid("action"),
+    type: "action",
+    label: "Qualified Lead Action",
+    x: 700,
+    y: 600,
+    config: {
+      description: "Follow up with qualified contractor lead"
+    }
+  };
+
+  state.nodes = [start, ai, qualified, action];
+
+  state.edges = [
+    { id: uid("edge"), source: start.id, target: ai.id },
+    { id: uid("edge"), source: ai.id, target: qualified.id },
+    { id: uid("edge"), source: qualified.id, target: action.id, branch: "true" }
+  ];
+
+  document.getElementById("workflowName").value =
+    "Electrical Contractor Lead Qualification";
+
+  render();
+  renderInspector();
+
+  await save();
+};
