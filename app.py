@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+ghfrom flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from email.message import EmailMessage
@@ -183,7 +183,21 @@ def execute_node(node, context):
         result=evaluate_condition(config,context); context["condition_result"]=result
         return {"ok":True,"branch":"true" if result else "false","context":context,"summary":f"Condition = {result}"}
     if node_type=="ai":
-        prompt=render_template_string(config.get("prompt", "{{input}}"),context)
+    prompt_template=config.get("prompt") or "{{input}}"
+
+    if "{{lead}}" in prompt_template and not context.get("lead"):
+        context["lead"]={
+            k:v for k,v in context.items()
+            if k not in (
+                "ai_output",
+                "condition_result",
+                "openai_response_id",
+                "sms_result",
+                "gmail_result"
+            )
+        }
+
+    prompt=render_template_string(prompt_template,context)
         instructions=render_template_string(config.get("instructions",""),context)
         text,response_id=openai_text(prompt,instructions,config.get("model") or None)
         key=config.get("output_key","ai_output"); context[key]=text; context["openai_response_id"]=response_id
