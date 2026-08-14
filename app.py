@@ -168,7 +168,7 @@ def send_gmail(to,subject,body,from_email=None):
 def send_sms(to,body,from_number=None):
     sid=os.environ.get("TWILIO_ACCOUNT_SID")
     token=os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number=from_number or os.environ.get("TWILIO_FROM_NUMBER")
+    from_number=from_number or os.environ.get("TWILIO_FROM_NUMBER") or os.environ.get("TWILIO_PHONE_NUMBER")
     if not all([sid,token,from_number]): raise RuntimeError("Twilio is not configured on Render")
     url=f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
     r=requests.post(url,auth=(sid,token),data={"To":to,"From":from_number,"Body":body},timeout=30)
