@@ -1,6 +1,4 @@
-FILE: app.py
-====================
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+     flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from email.message import EmailMessage
