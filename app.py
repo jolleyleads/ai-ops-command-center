@@ -73,6 +73,15 @@ class QualifiedLead(db.Model):
     source = db.Column(db.String(100), default="Electrical Contractor Lead Qualification")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+class LeadPipeline(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    qualified_lead_id = db.Column(db.Integer, unique=True, nullable=False)
+    stage = db.Column(db.String(50), default="New")
+    notes = db.Column(db.Text, default="")
+    follow_up_date = db.Column(db.String(20), default="")
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 NODE_TYPES = {
     "trigger": "Trigger", "schedule": "Schedule", "webhook": "Webhook",
     "condition": "IF / ELSE", "ai": "OpenAI", "http": "HTTP Request",
@@ -279,13 +288,37 @@ def index():
     events=AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(10).all()
     jobs=SavedJob.query.order_by(SavedJob.created_at.desc()).limit(20).all()
     workflow_count=Workflow.query.count()
-    qualified_leads=QualifiedLead.query.order_by(QualifiedLead.created_at.desc()).limit(25).all()
+
+    leads=QualifiedLead.query.order_by(QualifiedLead.created_at.desc()).limit(100).all()
+    pipeline_rows=LeadPipeline.query.all()
+    pipeline_by_lead={row.qualified_lead_id:row for row in pipeline_rows}
+
+    qualified_leads=[]
+    for lead in leads:
+        pipeline=pipeline_by_lead.get(lead.id)
+        qualified_leads.append({
+            "id":lead.id,
+            "lead":lead.lead,
+            "ai_output":lead.ai_output,
+            "source":lead.source,
+            "created_at":lead.created_at,
+            "stage":pipeline.stage if pipeline else "New",
+            "notes":pipeline.notes if pipeline else "",
+            "follow_up_date":pipeline.follow_up_date if pipeline else ""
+        })
+
+    pipeline_counts={
+        stage:sum(1 for lead in qualified_leads if lead["stage"]==stage)
+        for stage in ["New","Contacted","Qualified","Proposal Sent","Won","Lost"]
+    }
+
     return render_template(
         "index.html",
         events=events,
         jobs=jobs,
         workflow_count=workflow_count,
-        qualified_leads=qualified_leads
+        qualified_leads=qualified_leads,
+        pipeline_counts=pipeline_counts
     )
 
 @app.route("/workflows")
@@ -423,6 +456,72 @@ def save_job():
 @app.route("/api/events")
 def api_events():
     events=AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(25).all(); return jsonify([{"id":e.id,"event_type":e.event_type,"source":e.source,"status":e.status,"details":e.details,"created_at":e.created_at.isoformat()} for e in events])
+
+@app.route("/api/qualified-leads/<int:lead_id>/pipeline", methods=["GET","POST"])
+def qualified_lead_pipeline_api(lead_id):
+    lead=QualifiedLead.query.get_or_404(lead_id)
+    row=LeadPipeline.query.filter_by(qualified_lead_id=lead.id).first()
+
+    if request.method=="GET":
+        return jsonify({
+            "lead_id":lead.id,
+            "stage":row.stage if row else "New",
+            "notes":row.notes if row else "",
+            "follow_up_date":row.follow_up_date if row else ""
+        })
+
+    data=request.get_json(silent=True) or {}
+    allowed_stages=["New","Contacted","Qualified","Proposal Sent","Won","Lost"]
+    stage=data.get("stage","New")
+
+    if stage not in allowed_stages:
+        return jsonify({"error":"Invalid pipeline stage"}),400
+
+    if not row:
+        row=LeadPipeline(qualified_lead_id=lead.id)
+        db.session.add(row)
+
+    row.stage=stage
+    row.notes=str(data.get("notes",""))[:5000]
+    row.follow_up_date=str(data.get("follow_up_date",""))[:20]
+    row.updated_at=datetime.utcnow()
+
+    db.session.add(
+        AutomationEvent(
+            event_type="lead_pipeline_update",
+            source="AI Ops Dashboard",
+            status=stage,
+            details=f"Lead {lead.id} moved to {stage}"
+        )
+    )
+    db.session.commit()
+
+    return jsonify({
+        "status":"saved",
+        "lead_id":lead.id,
+        "stage":row.stage,
+        "notes":row.notes,
+        "follow_up_date":row.follow_up_date
+    })
+
+@app.route("/api/pipeline")
+def pipeline_api():
+    leads=QualifiedLead.query.order_by(QualifiedLead.created_at.desc()).limit(100).all()
+    pipeline_rows=LeadPipeline.query.all()
+    pipeline_by_lead={row.qualified_lead_id:row for row in pipeline_rows}
+
+    return jsonify([
+        {
+            "id":lead.id,
+            "lead":lead.lead,
+            "source":lead.source,
+            "created_at":lead.created_at.isoformat(),
+            "stage":pipeline_by_lead[lead.id].stage if lead.id in pipeline_by_lead else "New",
+            "notes":pipeline_by_lead[lead.id].notes if lead.id in pipeline_by_lead else "",
+            "follow_up_date":pipeline_by_lead[lead.id].follow_up_date if lead.id in pipeline_by_lead else ""
+        }
+        for lead in leads
+    ])
 
 @app.route("/api/qualified-leads")
 def qualified_leads_api():
