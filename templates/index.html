@@ -1,7 +1,237 @@
-<!DOCTYPE html><html><head><title>AI Ops Command Center</title><link rel="stylesheet" href="/static/style.css"></head><body>
-<div class="sidebar"><h2>AI Ops</h2><a href="/">Dashboard</a><a href="/workflows">Workflow Builder</a><a href="/api/runs" target="_blank">Runs API</a><a href="/api/events" target="_blank">Events API</a><a href="/login">Login</a></div>
-<main><section class="hero"><h1>Universal Automation Command Center</h1><p>Build, run, and monitor automations from one place.</p><a class="cta" href="/workflows">Open Workflow Builder →</a></section>
-<section class="grid"><div class="card"><h3>Workflows</h3><strong>{{ workflow_count }}</strong><p>Saved automations</p></div><div class="card"><h3>Engine</h3><strong>Online</strong><p>Branching + run history</p></div><div class="card"><h3>Connectors</h3><strong>Ready</strong><p>OpenAI, email, SMS, CRM, HTTP</p></div></section>
-<section class="panel"><h2>Search Real AI Jobs</h2><input id="keywordInput" value="machine learning"><button onclick="searchJobs()">Search Jobs</button><div id="jobResults"></div></section>
-<section class="panel"><h2>Recent Automation Events</h2>{% for event in events %}<div class="row"><strong>{{ event.event_type }}</strong><span>{{ event.status }}</span><p>{{ event.details }}</p></div>{% endfor %}</section></main>
-<script>async function searchJobs(){const keyword=document.getElementById('keywordInput').value||'machine learning';const c=document.getElementById('jobResults');c.innerHTML='<p>Searching...</p>';try{const r=await fetch('/api/jobs?keyword='+encodeURIComponent(keyword));const d=await r.json();c.innerHTML='';(d.jobs||[]).forEach(job=>{const div=document.createElement('div');div.className='row';div.innerHTML='<strong>'+job.title+'</strong><span>'+job.company+'</span><p>'+job.location+' | '+job.source+'</p><a href="'+job.url+'" target="_blank">Open Job</a>';c.appendChild(div)});}catch(e){c.innerHTML='<p>Error loading jobs.</p>';}}</script></body></html>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Ops Command Center</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+<div class="sidebar">
+  <h2>AI Ops</h2>
+
+  <a href="/">Dashboard</a>
+  <a href="/workflows">Workflow Builder</a>
+  <a href="/api/runs" target="_blank">Runs API</a>
+  <a href="/api/events" target="_blank">Events API</a>
+  <a href="/api/qualified-leads" target="_blank">Qualified Leads API</a>
+  <a href="/login">Login</a>
+</div>
+
+<main>
+
+  <section class="hero">
+    <h1>Universal Automation Command Center</h1>
+
+    <p>
+      Build, run, and monitor automations from one place.
+    </p>
+
+    <a class="cta" href="/workflows">
+      Open Workflow Builder &rarr;
+    </a>
+  </section>
+
+
+  <section class="grid">
+
+    <div class="card">
+      <h3>Workflows</h3>
+      <strong>{{ workflow_count }}</strong>
+      <p>Saved automations</p>
+    </div>
+
+    <div class="card">
+      <h3>Engine</h3>
+      <strong>Online</strong>
+      <p>Branching + run history</p>
+    </div>
+
+    <div class="card">
+      <h3>Qualified Leads</h3>
+      <strong>{{ qualified_leads|length }}</strong>
+      <p>Recent qualified leads</p>
+    </div>
+
+  </section>
+
+
+  <section class="panel">
+
+    <h2>Qualified Electrical Leads</h2>
+
+    {% if qualified_leads %}
+
+      {% for lead in qualified_leads %}
+
+        <div class="row">
+
+          <strong>
+            Qualified Lead #{{ lead.id }}
+          </strong>
+
+          <span>
+            {{ lead.status }}
+          </span>
+
+          <p>
+            {{ lead.lead }}
+          </p>
+
+          {% if lead.ai_output %}
+
+            <details>
+
+              <summary>
+                View AI qualification
+              </summary>
+
+              <p style="white-space: pre-wrap;">
+                {{ lead.ai_output }}
+              </p>
+
+            </details>
+
+          {% endif %}
+
+          <small>
+            {{ lead.created_at }}
+          </small>
+
+        </div>
+
+      {% endfor %}
+
+    {% else %}
+
+      <p>
+        No qualified leads saved yet.
+        Run a TRUE lead through the workflow and it will appear here.
+      </p>
+
+    {% endif %}
+
+  </section>
+
+
+  <section class="panel">
+
+    <h2>Search Real AI Jobs</h2>
+
+    <input
+      id="keywordInput"
+      value="machine learning"
+    >
+
+    <button onclick="searchJobs()">
+      Search Jobs
+    </button>
+
+    <div id="jobResults"></div>
+
+  </section>
+
+
+  <section class="panel">
+
+    <h2>Recent Automation Events</h2>
+
+    {% for event in events %}
+
+      <div class="row">
+
+        <strong>
+          {{ event.event_type }}
+        </strong>
+
+        <span>
+          {{ event.status }}
+        </span>
+
+        <p>
+          {{ event.details }}
+        </p>
+
+      </div>
+
+    {% endfor %}
+
+  </section>
+
+</main>
+
+
+<script>
+
+async function searchJobs() {
+
+  const keyword =
+    document.getElementById("keywordInput").value ||
+    "machine learning";
+
+  const container =
+    document.getElementById("jobResults");
+
+  container.innerHTML =
+    "<p>Searching...</p>";
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/jobs?keyword=" +
+        encodeURIComponent(keyword)
+      );
+
+    const data =
+      await response.json();
+
+    container.innerHTML = "";
+
+    (data.jobs || []).forEach(job => {
+
+      const div =
+        document.createElement("div");
+
+      div.className =
+        "row";
+
+      div.innerHTML =
+        "<strong>" +
+        job.title +
+        "</strong>" +
+
+        "<span>" +
+        job.company +
+        "</span>" +
+
+        "<p>" +
+        job.location +
+        " | " +
+        job.source +
+        "</p>" +
+
+        '<a href="' +
+        job.url +
+        '" target="_blank">' +
+        "Open Job" +
+        "</a>";
+
+      container.appendChild(div);
+
+    });
+
+  } catch (error) {
+
+    container.innerHTML =
+      "<p>Error loading jobs.</p>";
+
+  }
+
+}
+
+</script>
+
+</body>
+</html>
