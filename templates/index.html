@@ -2,7 +2,7 @@
 <html>
 <head>
   <title>AI Ops Command Center</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -16,12 +16,15 @@
   <a href="/api/runs" target="_blank">Runs API</a>
   <a href="/api/events" target="_blank">Events API</a>
   <a href="/api/qualified-leads" target="_blank">Qualified Leads API</a>
+  <a href="/api/pipeline" target="_blank">Pipeline API</a>
   <a href="/login">Login</a>
 </div>
+
 
 <main>
 
   <section class="hero">
+
     <h1>Universal Automation Command Center</h1>
 
     <p>
@@ -31,6 +34,7 @@
     <a class="cta" href="/workflows">
       Open Workflow Builder &rarr;
     </a>
+
   </section>
 
 
@@ -59,25 +63,118 @@
 
   <section class="panel">
 
-    <h2>Qualified Electrical Leads</h2>
+    <h2>Lead Pipeline</h2>
+
+
+    <div class="grid">
+
+      <div class="card">
+        <h3>New</h3>
+        <strong>{{ pipeline_counts["New"] }}</strong>
+      </div>
+
+      <div class="card">
+        <h3>Contacted</h3>
+        <strong>{{ pipeline_counts["Contacted"] }}</strong>
+      </div>
+
+      <div class="card">
+        <h3>Qualified</h3>
+        <strong>{{ pipeline_counts["Qualified"] }}</strong>
+      </div>
+
+      <div class="card">
+        <h3>Proposal Sent</h3>
+        <strong>{{ pipeline_counts["Proposal Sent"] }}</strong>
+      </div>
+
+      <div class="card">
+        <h3>Won</h3>
+        <strong>{{ pipeline_counts["Won"] }}</strong>
+      </div>
+
+      <div class="card">
+        <h3>Lost</h3>
+        <strong>{{ pipeline_counts["Lost"] }}</strong>
+      </div>
+
+    </div>
+
 
     {% if qualified_leads %}
 
       {% for lead in qualified_leads %}
 
-        <div class="row">
+        <div class="row" id="lead-{{ lead.id }}">
 
           <strong>
-            Qualified Lead #{{ lead.id }}
+            Lead #{{ lead.id }}
           </strong>
 
-          <span>
-            {{ lead.status }}
+          <span id="stage-label-{{ lead.id }}">
+            {{ lead.stage }}
           </span>
+
 
           <p>
             {{ lead.lead }}
           </p>
+
+
+          <label>
+            Pipeline Stage
+
+            <select id="stage-{{ lead.id }}">
+
+              {% for option in ["New","Contacted","Qualified","Proposal Sent","Won","Lost"] %}
+
+                <option
+                  value="{{ option }}"
+                  {% if lead.stage == option %}selected{% endif %}
+                >
+                  {{ option }}
+                </option>
+
+              {% endfor %}
+
+            </select>
+
+          </label>
+
+
+          <label>
+
+            Follow-up Date
+
+            <input
+              type="date"
+              id="follow-up-{{ lead.id }}"
+              value="{{ lead.follow_up_date }}"
+            >
+
+          </label>
+
+
+          <label>
+
+            Notes
+
+            <textarea
+              id="notes-{{ lead.id }}"
+              rows="3"
+              placeholder="Add notes about calls, pricing, objections, next steps..."
+            >{{ lead.notes }}</textarea>
+
+          </label>
+
+
+          <button onclick="savePipeline({{ lead.id }})">
+            Save Lead
+          </button>
+
+
+          <span id="save-status-{{ lead.id }}"></span>
+
 
           {% if lead.ai_output %}
 
@@ -95,6 +192,7 @@
 
           {% endif %}
 
+
           <small>
             {{ lead.created_at }}
           </small>
@@ -103,11 +201,11 @@
 
       {% endfor %}
 
+
     {% else %}
 
       <p>
         No qualified leads saved yet.
-        Run a TRUE lead through the workflow and it will appear here.
       </p>
 
     {% endif %}
@@ -164,17 +262,118 @@
 
 <script>
 
+async function savePipeline(leadId) {
+
+  const stage =
+    document.getElementById(
+      "stage-" + leadId
+    ).value;
+
+
+  const notes =
+    document.getElementById(
+      "notes-" + leadId
+    ).value;
+
+
+  const followUp =
+    document.getElementById(
+      "follow-up-" + leadId
+    ).value;
+
+
+  const status =
+    document.getElementById(
+      "save-status-" + leadId
+    );
+
+
+  status.textContent =
+    "Saving...";
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/qualified-leads/" +
+        leadId +
+        "/pipeline",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+            stage: stage,
+            notes: notes,
+            follow_up_date: followUp
+          })
+        }
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Could not save lead"
+      );
+
+    }
+
+
+    document.getElementById(
+      "stage-label-" + leadId
+    ).textContent =
+      data.stage;
+
+
+    status.textContent =
+      "Saved";
+
+
+    setTimeout(
+      () => window.location.reload(),
+      500
+    );
+
+
+  } catch (error) {
+
+    status.textContent =
+      "Save failed";
+
+  }
+
+}
+
+
 async function searchJobs() {
 
   const keyword =
-    document.getElementById("keywordInput").value ||
+    document.getElementById(
+      "keywordInput"
+    ).value ||
     "machine learning";
 
+
   const container =
-    document.getElementById("jobResults");
+    document.getElementById(
+      "jobResults"
+    );
+
 
   container.innerHTML =
     "<p>Searching...</p>";
+
 
   try {
 
@@ -184,43 +383,58 @@ async function searchJobs() {
         encodeURIComponent(keyword)
       );
 
+
     const data =
       await response.json();
 
-    container.innerHTML = "";
 
-    (data.jobs || []).forEach(job => {
+    container.innerHTML =
+      "";
 
-      const div =
-        document.createElement("div");
 
-      div.className =
-        "row";
+    (data.jobs || []).forEach(
+      job => {
 
-      div.innerHTML =
-        "<strong>" +
-        job.title +
-        "</strong>" +
+        const div =
+          document.createElement(
+            "div"
+          );
 
-        "<span>" +
-        job.company +
-        "</span>" +
 
-        "<p>" +
-        job.location +
-        " | " +
-        job.source +
-        "</p>" +
+        div.className =
+          "row";
 
-        '<a href="' +
-        job.url +
-        '" target="_blank">' +
-        "Open Job" +
-        "</a>";
 
-      container.appendChild(div);
+        div.innerHTML =
 
-    });
+          "<strong>" +
+          job.title +
+          "</strong>" +
+
+          "<span>" +
+          job.company +
+          "</span>" +
+
+          "<p>" +
+          job.location +
+          " | " +
+          job.source +
+          "</p>" +
+
+          '<a href="' +
+          job.url +
+          '" target="_blank">' +
+          "Open Job" +
+          "</a>";
+
+
+        container.appendChild(
+          div
+        );
+
+      }
+    );
+
 
   } catch (error) {
 
@@ -232,6 +446,7 @@ async function searchJobs() {
 }
 
 </script>
+
 
 </body>
 </html>
