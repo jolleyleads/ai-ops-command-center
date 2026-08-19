@@ -65,11 +65,12 @@ class Credential(db.Model):
 
 class QualifiedLead(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    workflow_run_id = db.Column(db.String(64), unique=True, nullable=False)
     lead = db.Column(db.Text, nullable=False)
     ai_output = db.Column(db.Text, default="")
     openai_response_id = db.Column(db.String(200), default="")
     status = db.Column(db.String(50), default="qualified")
-    source = db.Column(db.String(100), default="AI Ops Workflow")
+    source = db.Column(db.String(100), default="Electrical Contractor Lead Qualification")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 NODE_TYPES = {
@@ -238,39 +239,6 @@ def execute_node(node, context):
     if node_type=="delay":
         seconds=max(0,min(float(config.get("seconds",1) or 0),10)); time.sleep(seconds)
         return {"ok":True,"context":context,"summary":f"Waited {seconds}s"}
-    if node_type=="action" and label=="Qualified Lead Action":
-        lead_text=context.get("lead","")
-        if not lead_text:
-            return {"ok":False,"error":"Qualified Lead Action cannot save because lead data is missing."}
-
-        try:
-            saved_lead=QualifiedLead(
-                lead=str(lead_text),
-                ai_output=str(context.get("ai_output","")),
-                openai_response_id=str(context.get("openai_response_id","")),
-                status="qualified",
-                source="Electrical Contractor Lead Qualification"
-            )
-            db.session.add(saved_lead)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            raise
-
-        context["qualified_lead_id"]=saved_lead.id
-        context.setdefault("actions",[]).append({
-            "type":"action",
-            "label":label,
-            "config":config,
-            "status":"saved",
-            "qualified_lead_id":saved_lead.id
-        })
-        return {
-            "ok":True,
-            "context":context,
-            "summary":f"Qualified lead saved to database with ID {saved_lead.id}"
-        }
-
     if node_type in ("crm","action"):
         context.setdefault("actions",[]).append({"type":node_type,"label":label,"config":config,"status":"prepared"})
         return {"ok":True,"context":context,"summary":f"{label} prepared"}
@@ -308,8 +276,17 @@ def create_tables(): db.create_all()
 
 @app.route("/")
 def index():
-    events=AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(10).all(); jobs=SavedJob.query.order_by(SavedJob.created_at.desc()).limit(20).all(); workflow_count=Workflow.query.count()
-    return render_template("index.html",events=events,jobs=jobs,workflow_count=workflow_count)
+    events=AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(10).all()
+    jobs=SavedJob.query.order_by(SavedJob.created_at.desc()).limit(20).all()
+    workflow_count=Workflow.query.count()
+    qualified_leads=QualifiedLead.query.order_by(QualifiedLead.created_at.desc()).limit(25).all()
+    return render_template(
+        "index.html",
+        events=events,
+        jobs=jobs,
+        workflow_count=workflow_count,
+        qualified_leads=qualified_leads
+    )
 
 @app.route("/workflows")
 def workflows_page(): return render_template("workflows.html",node_types=NODE_TYPES)
@@ -340,9 +317,68 @@ def workflow_detail(workflow_id):
 
 @app.route("/api/workflows/<workflow_id>/run",methods=["POST"])
 def run_workflow_api(workflow_id):
-    wf=Workflow.query.get_or_404(workflow_id); payload=request.get_json(silent=True) or {}; run=WorkflowRun(workflow_id=wf.id,status="running",input_json=json.dumps(payload)); db.session.add(run); db.session.commit()
-    ok,output,logs=run_workflow(wf,payload); run.status="success" if ok else "failed"; run.output_json=json.dumps(output); run.logs_json=json.dumps(logs); run.finished_at=datetime.utcnow(); db.session.commit(); db.session.add(AutomationEvent(event_type="workflow_run",source=wf.name,status=run.status,details=f"Workflow {wf.id} run {run.id}")); db.session.commit()
-    return jsonify({"run_id":run.id,"status":run.status,"output":output,"logs":logs})
+    wf=Workflow.query.get_or_404(workflow_id)
+    payload=request.get_json(silent=True) or {}
+
+    run=WorkflowRun(
+        workflow_id=wf.id,
+        status="running",
+        input_json=json.dumps(payload)
+    )
+    db.session.add(run)
+    db.session.commit()
+
+    ok,output,logs=run_workflow(wf,payload)
+
+    run.status="success" if ok else "failed"
+    run.output_json=json.dumps(output)
+    run.logs_json=json.dumps(logs)
+    run.finished_at=datetime.utcnow()
+    db.session.commit()
+
+    db.session.add(
+        AutomationEvent(
+            event_type="workflow_run",
+            source=wf.name,
+            status=run.status,
+            details=f"Workflow {wf.id} run {run.id}"
+        )
+    )
+    db.session.commit()
+
+    # Dashboard save happens only AFTER the working workflow completes.
+    # Any save error is isolated so it cannot break a successful workflow run.
+    if ok and output.get("condition_branch")=="true" and output.get("lead"):
+        try:
+            existing=QualifiedLead.query.filter_by(workflow_run_id=run.id).first()
+            if not existing:
+                saved_lead=QualifiedLead(
+                    workflow_run_id=run.id,
+                    lead=str(output.get("lead","")),
+                    ai_output=str(output.get("ai_output","")),
+                    openai_response_id=str(output.get("openai_response_id","")),
+                    status="qualified",
+                    source=wf.name or "Electrical Contractor Lead Qualification"
+                )
+                db.session.add(saved_lead)
+                db.session.commit()
+
+                output["qualified_lead_id"]=saved_lead.id
+                output["qualified_lead_saved"]=True
+
+                run.output_json=json.dumps(output)
+                db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            output["qualified_lead_saved"]=False
+            output["qualified_lead_save_error"]=str(e)[:300]
+
+    return jsonify({
+        "run_id":run.id,
+        "status":run.status,
+        "output":output,
+        "logs":logs
+    })
 
 @app.route("/api/runs")
 def runs_api():
@@ -394,6 +430,7 @@ def qualified_leads_api():
     return jsonify([
         {
             "id":lead.id,
+            "workflow_run_id":lead.workflow_run_id,
             "lead":lead.lead,
             "ai_output":lead.ai_output,
             "openai_response_id":lead.openai_response_id,
