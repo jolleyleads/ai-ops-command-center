@@ -62,6 +62,16 @@ class Credential(db.Model):
     env_var = db.Column(db.String(120), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+class QualifiedLead(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    lead = db.Column(db.Text, nullable=False)
+    ai_output = db.Column(db.Text, default="")
+    openai_response_id = db.Column(db.String(200), default="")
+    status = db.Column(db.String(50), default="qualified")
+    source = db.Column(db.String(100), default="AI Ops Workflow")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 NODE_TYPES = {
     "trigger": "Trigger", "schedule": "Schedule", "webhook": "Webhook",
     "condition": "IF / ELSE", "ai": "OpenAI", "http": "HTTP Request",
@@ -228,6 +238,39 @@ def execute_node(node, context):
     if node_type=="delay":
         seconds=max(0,min(float(config.get("seconds",1) or 0),10)); time.sleep(seconds)
         return {"ok":True,"context":context,"summary":f"Waited {seconds}s"}
+    if node_type=="action" and label=="Qualified Lead Action":
+        lead_text=context.get("lead","")
+        if not lead_text:
+            return {"ok":False,"error":"Qualified Lead Action cannot save because lead data is missing."}
+
+        try:
+            saved_lead=QualifiedLead(
+                lead=str(lead_text),
+                ai_output=str(context.get("ai_output","")),
+                openai_response_id=str(context.get("openai_response_id","")),
+                status="qualified",
+                source="Electrical Contractor Lead Qualification"
+            )
+            db.session.add(saved_lead)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+
+        context["qualified_lead_id"]=saved_lead.id
+        context.setdefault("actions",[]).append({
+            "type":"action",
+            "label":label,
+            "config":config,
+            "status":"saved",
+            "qualified_lead_id":saved_lead.id
+        })
+        return {
+            "ok":True,
+            "context":context,
+            "summary":f"Qualified lead saved to database with ID {saved_lead.id}"
+        }
+
     if node_type in ("crm","action"):
         context.setdefault("actions",[]).append({"type":node_type,"label":label,"config":config,"status":"prepared"})
         return {"ok":True,"context":context,"summary":f"{label} prepared"}
@@ -344,6 +387,22 @@ def save_job():
 @app.route("/api/events")
 def api_events():
     events=AutomationEvent.query.order_by(AutomationEvent.created_at.desc()).limit(25).all(); return jsonify([{"id":e.id,"event_type":e.event_type,"source":e.source,"status":e.status,"details":e.details,"created_at":e.created_at.isoformat()} for e in events])
+
+@app.route("/api/qualified-leads")
+def qualified_leads_api():
+    rows=QualifiedLead.query.order_by(QualifiedLead.created_at.desc()).limit(100).all()
+    return jsonify([
+        {
+            "id":lead.id,
+            "lead":lead.lead,
+            "ai_output":lead.ai_output,
+            "openai_response_id":lead.openai_response_id,
+            "status":lead.status,
+            "source":lead.source,
+            "created_at":lead.created_at.isoformat()
+        }
+        for lead in rows
+    ])
 
 @app.route("/api/health")
 def health(): return jsonify({"status":"AI Ops Universal Automation v2 online","workflow_builder":"/workflows","credential_status":"/api/credentials/status"})
