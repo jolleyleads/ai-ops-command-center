@@ -6,4 +6,25 @@
 <aside class="node-palette"><h3>Nodes</h3>{% for key,label in node_types.items() %}<button class="node-add" data-type="{{ key }}">+ {{ label }}</button>{% endfor %}<hr><h3>Saved</h3><div id="workflowList"></div></aside>
 <section class="canvas-column"><div class="canvas-help"><span>Tap a node to configure it.</span><span>Tap <b>Connect</b>, then the destination node.</span></div><div id="canvas" class="workflow-canvas"><svg id="edgeLayer" class="edge-layer"></svg><div id="nodeLayer"></div></div><div class="run-input-row"><textarea id="runInput" placeholder='Run input JSON, e.g. {"status":"qualified","email":"lead@example.com","phone":"+17575551212","input":"Write a follow-up"}'>{}</textarea><button id="runWorkflowBottom">Run Workflow</button></div><pre id="runOutput" class="run-output">Ready.</pre></section>
 <aside id="inspector" class="inspector"><div class="inspector-empty"><h3>Node Inspector</h3><p>Tap any node on the canvas.</p></div></aside>
-</div></main><script src="/static/workflows.js"></script></body></html>
+</div></main><script src="/static/workflows.js"></script><script>
+(function(){
+  const baseSave=save;
+  function syncInspectorConfig(){
+    const n=state.nodes.find(x=>x.id===state.selected);
+    if(!n)return;
+    inspector.querySelectorAll('[data-key]').forEach(input=>{
+      const key=input.dataset.key;
+      if(key==='label'){
+        n.label=input.value;
+      }else{
+        n.config[key]=input.type==='number'?Number(input.value):input.value;
+      }
+    });
+  }
+  save=async function(){
+    syncInspectorConfig();
+    return baseSave();
+  };
+  document.getElementById('saveWorkflow').onclick=save;
+})();
+</script></body></html>
