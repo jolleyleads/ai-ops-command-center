@@ -2,6 +2,7 @@ import json
 
 from app import app, db
 from prospect_engine import register_prospect_model, apply_score, score_prospect
+from prospect_sources import google_places_configured, search_google_places
 
 
 Prospect = register_prospect_model(db)
@@ -94,6 +95,31 @@ def _prospect_from_payload(data):
     )
     apply_score(prospect)
     return prospect
+
+
+def _existing_prospect(data):
+    website = _clean_text(data.get("website"))
+    phone = _clean_text(data.get("phone"), 50)
+    source_url = _clean_text(data.get("source_url"))
+    company = _clean_text(data.get("company"), 200)
+    city = _clean_text(data.get("city"), 120)
+    state = _clean_text(data.get("state"), 80)
+
+    if source_url:
+        existing = Prospect.query.filter_by(source_url=source_url).first()
+        if existing:
+            return existing
+    if website:
+        existing = Prospect.query.filter_by(website=website).first()
+        if existing:
+            return existing
+    if phone:
+        existing = Prospect.query.filter_by(phone=phone).first()
+        if existing:
+            return existing
+    if company:
+        return Prospect.query.filter_by(company=company, city=city, state=state).first()
+    return None
 
 
 @app.route("/api/prospects", methods=["GET", "POST"])
@@ -248,6 +274,81 @@ def hot_prospects_api():
     })
 
 
+@app.route("/api/prospects/source/google", methods=["POST"])
+def source_google_prospects_api():
+    from flask import request, jsonify
+
+    data = request.get_json(silent=True) or {}
+    industry = _clean_text(data.get("industry"), 120)
+    location = _clean_text(data.get("location"), 200)
+    limit = min(_safe_int(data.get("limit"), 10, 1), 20)
+    save = _bool_value(data.get("save", True))
+
+    if not industry:
+        return jsonify({"error": "industry is required"}), 400
+    if not location:
+        return jsonify({"error": "location is required"}), 400
+    if not google_places_configured():
+        return jsonify({
+            "error": "GOOGLE_PLACES_API_KEY is not configured",
+            "configured": False,
+        }), 503
+
+    try:
+        sourced = search_google_places(industry, location, limit)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 502
+    except Exception:
+        return jsonify({"error": "prospect source request failed"}), 502
+
+    created = []
+    duplicates = []
+    preview = []
+
+    for item in sourced:
+        if not item.get("company"):
+            continue
+
+        scored_preview = score_prospect(item)
+        item["score"] = scored_preview["score"]
+        item["score_band"] = scored_preview["score_band"]
+        item["score_reason"] = scored_preview["reason"]
+
+        if not save:
+            preview.append(item)
+            continue
+
+        existing = _existing_prospect(item)
+        if existing:
+            duplicates.append(existing.to_dict())
+            continue
+
+        prospect = _prospect_from_payload(item)
+        db.session.add(prospect)
+        db.session.flush()
+        created.append(prospect)
+
+    if save:
+        db.session.commit()
+
+    return jsonify({
+        "status": "ok",
+        "source": "google_places",
+        "industry": industry,
+        "location": location,
+        "save": save,
+        "sourced_count": len(sourced),
+        "created_count": len(created),
+        "duplicate_count": len(duplicates),
+        "preview_count": len(preview),
+        "created": [row.to_dict() for row in created],
+        "duplicates": duplicates,
+        "preview": preview,
+    })
+
+
 @app.route("/api/prospects/health", methods=["GET"])
 def prospect_health_api():
     from flask import jsonify
@@ -264,4 +365,5 @@ def prospect_health_api():
         "prospect_engine": True,
         "database": database_ok,
         "qualification_threshold": 80,
+        "google_places_configured": google_places_configured(),
     }), 200 if database_ok else 503
