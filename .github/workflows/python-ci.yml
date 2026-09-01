@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - prospect-scoring-v1
 
   pull_request:
     branches:
@@ -28,9 +29,10 @@ jobs:
         if [ -f requirements.txt ]; then
           pip install -r requirements.txt
         fi
+        pip install pytest
+
+    - name: Compile Python
+      run: python -m py_compile app.py prospect_engine.py prospect_app.py
 
     - name: Run Tests
-      run: |
-        if [ -d tests ]; then
-          pytest
-        fi
+      run: pytest -q
