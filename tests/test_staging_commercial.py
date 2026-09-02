@@ -21,7 +21,6 @@ def client(monkeypatch):
     commercial_app = importlib.import_module("commercial_app")
     commercial_app.app.config.update(TESTING=True)
 
-    # Prevent any real OpenAI network call during tests.
     monkeypatch.setattr(
         commercial_app,
         "openai_text",
@@ -74,7 +73,9 @@ def test_prospect_detail_static_page_loads(client):
     assert response.status_code == 200
     assert b"Prospect profile" in response.data
     assert b"Pipeline history" in response.data
-    assert b"Nothing is sent from this page" in response.data
+    assert b"Send safeguards" in response.data
+    assert b"Manual send" in response.data
+    assert b"There is no auto-send" in response.data
 
 
 def test_pipeline_change_is_recorded_in_history(client):
