@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - prospect-scoring-v1
-    paths:
-      - .github/workflows/staging-smoke.yml
   workflow_dispatch:
 
 jobs:
@@ -22,7 +20,6 @@ jobs:
           import json
           import os
           import time
-          import urllib.error
           import urllib.request
 
           base = os.environ["BASE_URL"].rstrip("/")
