@@ -35,4 +35,18 @@ jobs:
       run: python -m py_compile app.py prospect_engine.py prospect_sources.py prospect_app.py commercial_app.py
 
     - name: Run Tests
-      run: pytest -q
+      id: pytest
+      shell: bash
+      run: |
+        set +e
+        pytest -q 2>&1 | tee pytest-output.txt
+        status=${PIPESTATUS[0]}
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+        exit $status
+
+    - name: Upload pytest output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-output
+        path: pytest-output.txt
