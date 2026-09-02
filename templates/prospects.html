@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prospect Command Center</title>
+  <style>
+    :root {
+      --bg:#07111f; --panel:#0d1b2b; --panel2:#11243a; --line:#203954;
+      --text:#f4f7fb; --muted:#93a8bd; --blue:#4aa3ff; --green:#35d07f;
+      --yellow:#f2bd4a; --orange:#ff8a4c; --red:#ff5f6d; --shadow:0 16px 40px rgba(0,0,0,.28);
+    }
+    *{box-sizing:border-box} body{margin:0;background:linear-gradient(145deg,#06101d,#0a1627 55%,#07111f);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
+    .shell{max-width:1440px;margin:0 auto;padding:24px}
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}
+    .brand{display:flex;gap:12px;align-items:center}.logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#35d07f);display:grid;place-items:center;font-weight:900;color:#04101c}
+    h1{font-size:24px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}.status{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px}.dot{width:9px;height:9px;border-radius:50%;background:var(--yellow)}.dot.ok{background:var(--green)}
+    .hero{display:grid;grid-template-columns:1.45fr .75fr;gap:18px;margin-bottom:18px}.panel{background:rgba(13,27,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}
+    .search-panel{padding:20px}.search-panel h2,.list-panel h2{margin:0 0 6px;font-size:18px}.search-panel p{margin:0 0 16px;color:var(--muted);font-size:13px;line-height:1.5}
+    .form-grid{display:grid;grid-template-columns:1.2fr 1.2fr .45fr auto;gap:10px}.field label{display:block;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin:0 0 6px}
+    input,select{width:100%;background:#071522;color:var(--text);border:1px solid #29445f;border-radius:10px;padding:12px 12px;outline:none}input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(74,163,255,.12)}
+    button{border:0;border-radius:10px;padding:12px 16px;font-weight:800;cursor:pointer}.primary{background:linear-gradient(135deg,#4aa3ff,#277dd6);color:white;align-self:end}.primary:disabled{opacity:.55;cursor:not-allowed}.ghost{background:#10243a;border:1px solid #29445f;color:var(--text)}
+    .note{margin-top:12px;min-height:20px;font-size:12px;color:var(--muted)}.note.error{color:#ff8e98}.note.success{color:#72e6a5}
+    .score-guide{padding:20px}.score-guide h3{margin:0 0 13px;font-size:14px}.guide-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(32,57,84,.65);font-size:13px}.guide-row:last-child{border-bottom:0}.badge{font-size:11px;font-weight:900;padding:5px 9px;border-radius:999px;text-transform:uppercase}.hot{background:rgba(53,208,127,.15);color:#65e5a0}.strong{background:rgba(74,163,255,.15);color:#7dbdff}.possible{background:rgba(242,189,74,.15);color:#ffd177}.poor{background:rgba(255,95,109,.14);color:#ff909a}
+    .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.metric{padding:16px 18px}.metric .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:800}.metric .value{font-size:28px;font-weight:900;margin-top:5px}.metric .mini{font-size:11px;color:var(--muted);margin-top:4px}
+    .list-panel{padding:18px}.list-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.filters{display:flex;gap:8px;flex-wrap:wrap}.filter{background:#0a1928;border:1px solid #29445f;color:var(--muted);padding:8px 11px;font-size:12px}.filter.active{color:white;border-color:#4aa3ff;background:rgba(74,163,255,.12)}
+    .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:13px}table{width:100%;border-collapse:collapse;min-width:960px;background:#091725}th{font-size:10px;color:#8fa6bc;text-transform:uppercase;letter-spacing:.07em;text-align:left;padding:12px;border-bottom:1px solid var(--line);background:#0c1c2d}td{padding:13px 12px;border-bottom:1px solid rgba(32,57,84,.58);font-size:12px;vertical-align:top}tr:last-child td{border-bottom:0}.company{font-weight:850;font-size:13px}.location{color:var(--muted);margin-top:3px}.score{font-size:22px;font-weight:950}.reason{max-width:340px;color:#b8c7d5;line-height:1.45}.contact a{color:#72b9ff;text-decoration:none}.empty{text-align:center;padding:38px 20px;color:var(--muted)}
+    .evidence{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.chip{background:#10253a;color:#9fb5ca;border:1px solid #26435f;border-radius:999px;padding:3px 7px;font-size:10px}
+    @media(max-width:900px){.hero{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}.topbar{align-items:flex-start;flex-direction:column}}
+    @media(max-width:560px){.shell{padding:14px}.form-grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.primary{width:100%}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><div class="logo">AI</div><div><h1>Prospect Command Center</h1><div class="sub">Discover, score and rank B2B prospects before outreach.</div></div></div>
+    <div class="status"><span id="apiDot" class="dot"></span><span id="apiStatus">Checking prospect engine…</span></div>
+  </div>
+
+  <section class="hero">
+    <div class="panel search-panel">
+      <h2>Find prospects</h2>
+      <p>Choose an industry and location. Google Places sourcing stays disabled until the staging API key is configured; existing scored prospects remain available.</p>
+      <form id="searchForm" class="form-grid">
+        <div class="field"><label for="industry">Industry</label><input id="industry" required placeholder="Electrical contractors" value="Electrical contractors"></div>
+        <div class="field"><label for="location">Location</label><input id="location" required placeholder="Portsmouth, VA"></div>
+        <div class="field"><label for="limit">Limit</label><select id="limit"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></div>
+        <button id="searchButton" class="primary" type="submit">Find prospects</button>
+      </form>
+      <div id="searchNote" class="note">Searches will save new companies, deduplicate them, and run the current 0–100 scoring engine.</div>
+    </div>
+    <div class="panel score-guide">
+      <h3>Score bands</h3>
+      <div class="guide-row"><span><span class="badge hot">Hot</span></span><strong>80–100</strong></div>
+      <div class="guide-row"><span><span class="badge strong">Strong</span></span><strong>60–79</strong></div>
+      <div class="guide-row"><span><span class="badge possible">Possible</span></span><strong>40–59</strong></div>
+      <div class="guide-row"><span><span class="badge poor">Poor</span></span><strong>0–39</strong></div>
+    </div>
+  </section>
+
+  <section class="metrics">
+    <div class="panel metric"><div class="label">Total prospects</div><div id="totalMetric" class="value">—</div><div class="mini">Saved in staging</div></div>
+    <div class="panel metric"><div class="label">Hot prospects</div><div id="hotMetric" class="value">—</div><div class="mini">Score 80+</div></div>
+    <div class="panel metric"><div class="label">Strong prospects</div><div id="strongMetric" class="value">—</div><div class="mini">Score 60–79</div></div>
+    <div class="panel metric"><div class="label">Average score</div><div id="avgMetric" class="value">—</div><div class="mini">Across loaded prospects</div></div>
+  </section>
+
+  <section class="panel list-panel">
+    <div class="list-head">
+      <div><h2>Ranked prospects</h2><div class="sub">Highest score first. Evidence and score reasons stay visible.</div></div>
+      <div class="filters" id="filters">
+        <button class="filter active" data-band="">All</button>
+        <button class="filter" data-band="hot">Hot</button>
+        <button class="filter" data-band="strong">Strong</button>
+        <button class="filter" data-band="possible">Possible</button>
+        <button class="filter" data-band="poor">Poor</button>
+        <button class="ghost" id="refreshButton" type="button">Refresh</button>
+      </div>
+    </div>
+    <div class="table-wrap"><div id="prospectTable" class="empty">Loading prospects…</div></div>
+  </section>
+</div>
+<script>
+  const state = { prospects: [], band: '' };
+  const $ = (id) => document.getElementById(id);
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const parseList = (value) => {
+    if (Array.isArray(value)) return value;
+    if (!value) return [];
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  };
+  const bandClass = (band) => ['hot','strong','possible','poor'].includes(band) ? band : 'poor';
+
+  async function checkHealth(){
+    try {
+      const r = await fetch('/api/prospects/health'); const data = await r.json();
+      $('apiDot').classList.toggle('ok', Boolean(data.database && data.prospect_engine));
+      $('apiStatus').textContent = data.google_places_configured ? 'Prospect engine ready · Google Places connected' : 'Prospect engine ready · Google Places pending';
+    } catch { $('apiStatus').textContent = 'Prospect engine unavailable'; }
+  }
+
+  async function loadProspects(){
+    $('prospectTable').innerHTML = '<div class="empty">Loading prospects…</div>';
+    const params = new URLSearchParams({limit:'500'}); if(state.band) params.set('band',state.band);
+    try {
+      const r = await fetch('/api/prospects?' + params.toString()); const data = await r.json();
+      if(!r.ok) throw new Error(data.error || 'Could not load prospects');
+      state.prospects = data.prospects || []; renderProspects();
+    } catch(err){ $('prospectTable').innerHTML = '<div class="empty">' + escapeHtml(err.message) + '</div>'; }
+  }
+
+  function renderProspects(){
+    const rows = state.prospects;
+    $('totalMetric').textContent = rows.length;
+    $('hotMetric').textContent = rows.filter(p => Number(p.score) >= 80).length;
+    $('strongMetric').textContent = rows.filter(p => Number(p.score) >= 60 && Number(p.score) < 80).length;
+    $('avgMetric').textContent = rows.length ? Math.round(rows.reduce((sum,p)=>sum+Number(p.score||0),0)/rows.length) : 0;
+    if(!rows.length){ $('prospectTable').innerHTML = '<div class="empty">No prospects in this view yet.</div>'; return; }
+    const html = rows.map(p => {
+      const evidence = parseList(p.evidence).slice(0,4).map(x=>'<span class="chip">'+escapeHtml(x)+'</span>').join('');
+      const website = p.website ? '<a href="'+escapeHtml(p.website)+'" target="_blank" rel="noopener">Website</a>' : '—';
+      const phone = p.phone ? '<div>'+escapeHtml(p.phone)+'</div>' : '';
+      return '<tr>'+
+        '<td><div class="score">'+escapeHtml(p.score ?? 0)+'</div><span class="badge '+bandClass(p.score_band)+'">'+escapeHtml(p.score_band || 'poor')+'</span></td>'+
+        '<td><div class="company">'+escapeHtml(p.company)+'</div><div class="location">'+escapeHtml([p.city,p.state].filter(Boolean).join(', '))+'</div><div class="location">'+escapeHtml(p.industry || '')+'</div></td>'+
+        '<td><div>'+escapeHtml(p.google_rating ?? '—')+' ★</div><div class="location">'+escapeHtml(p.review_count ?? 0)+' reviews</div></td>'+
+        '<td class="reason">'+escapeHtml(p.score_reason || 'No score reason recorded')+'<div class="evidence">'+evidence+'</div></td>'+
+        '<td class="contact">'+website+phone+'</td>'+
+        '<td>'+escapeHtml(p.source || 'manual')+'</td>'+
+      '</tr>';
+    }).join('');
+    $('prospectTable').innerHTML = '<table><thead><tr><th>Score</th><th>Company</th><th>Google</th><th>Why it scored</th><th>Contact</th><th>Source</th></tr></thead><tbody>'+html+'</tbody></table>';
+  }
+
+  $('searchForm').addEventListener('submit', async (event) => {
+    event.preventDefault(); const btn=$('searchButton'); const note=$('searchNote');
+    btn.disabled=true; btn.textContent='Searching…'; note.className='note'; note.textContent='Searching Google Places and scoring results…';
+    try {
+      const r = await fetch('/api/prospects/source/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({industry:$('industry').value.trim(),location:$('location').value.trim(),limit:Number($('limit').value),save:true})});
+      const data = await r.json(); if(!r.ok) throw new Error(data.error || 'Prospect search failed');
+      note.className='note success'; note.textContent='Search complete: '+data.created_count+' new, '+data.duplicate_count+' duplicates, '+data.sourced_count+' sourced.'; await loadProspects();
+    } catch(err){ note.className='note error'; note.textContent=err.message.includes('GOOGLE_PLACES_API_KEY') ? 'Google Places is not connected yet. The dashboard and scoring engine are ready; add the staging API key after Google finishes billing activation.' : err.message; }
+    finally { btn.disabled=false; btn.textContent='Find prospects'; }
+  });
+
+  $('filters').addEventListener('click',(event)=>{
+    const button=event.target.closest('[data-band]'); if(!button) return;
+    document.querySelectorAll('.filter').forEach(x=>x.classList.remove('active')); button.classList.add('active'); state.band=button.dataset.band; loadProspects();
+  });
+  $('refreshButton').addEventListener('click',loadProspects);
+  checkHealth(); loadProspects();
+</script>
+</body>
+</html>
