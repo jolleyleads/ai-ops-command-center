@@ -61,16 +61,17 @@ jobs:
           assert "Prospect Command Center" in body
           print("PASS: prospects page", status)
 
-          print("2) Verify Prospect Detail page loads with safety sections")
+          print("2) Verify Prospect Detail page loads with send safeguards")
           status, body = request("/static/prospect-detail.html?id=1")
           assert "Prospect profile" in body
           assert "Pipeline history" in body
-          assert "Contact protection" in body
+          assert "Send safeguards" in body
+          assert "Manual send" in body
+          assert "There is no auto-send" in body
           assert "Outreach history" in body
-          assert "Nothing is sent from this page" in body
-          print("PASS: prospect detail page", status)
+          print("PASS: prospect detail safety UI", status)
 
-          company = f"Staging Smoke Test Contractor {run_id}"
+          company = f"Staging Manual Send Smoke {run_id}"
           email = f"smoke-{run_id}@test.invalid"
           print("3) Create one fake staging prospect")
           status, body = request(
@@ -127,7 +128,7 @@ jobs:
           assert json.loads(body)["status"] == "created"
           print("PASS: note added")
 
-          print("7) Confirm stage change and note in Pipeline History")
+          print("7) Confirm Pipeline History")
           status, body = request(f"/api/prospects/{prospect_id}/history")
           history = json.loads(body)
           assert history["current_status"] == "qualified"
@@ -136,12 +137,13 @@ jobs:
           assert any(e["event_type"] == "note" and "Smoke test note" in e["note"] for e in events)
           print("PASS: pipeline history")
 
-          print("8) Verify contact protection is initially clear")
-          status, body = request(f"/api/prospects/{prospect_id}/outreach-protection")
-          protection = json.loads(body)
-          assert protection["allowed"] is True
-          assert protection["blocked"] is False
-          print("PASS: protection clear")
+          print("8) Confirm unverified recipient blocks send readiness")
+          status, body = request(f"/api/prospects/{prospect_id}/send-readiness")
+          readiness = json.loads(body)
+          assert readiness["ready"] is False
+          assert readiness["recipient_verification"] is None
+          assert readiness["auto_send"] is False
+          print("PASS: unverified recipient blocked")
 
           print("9) Generate live outreach preview and assert sent=false")
           status, body = request(
@@ -151,55 +153,110 @@ jobs:
           )
           preview = json.loads(body)
           assert preview["status"] == "preview"
-          assert preview["prospect_id"] == prospect_id
           assert preview["sent"] is False
           assert preview["body"].strip()
           assert preview["outreach_attempt_id"] > 0
-          print("PASS: outreach preview generated; sent=false")
+          print("PASS: preview generated; sent=false")
 
-          print("10) Verify generated preview is saved in Outreach History")
+          print("10) Prove manual-send endpoint refuses unverified recipient")
+          status, body = request(
+              f"/api/prospects/{prospect_id}/manual-send",
+              method="POST",
+              payload={
+                  "confirm_send": True,
+                  "expected_email": email,
+                  "subject": preview["subject"],
+                  "body": preview["body"],
+              },
+              expected=(409,),
+          )
+          blocked_unverified = json.loads(body)
+          assert blocked_unverified["status"] == "blocked"
+          assert blocked_unverified["sent"] is False
+          assert blocked_unverified["auto_send"] is False
+          print("PASS: manual send blocked before recipient verification")
+
+          print("11) Record fake-prospect recipient verification with source")
+          status, body = request(
+              f"/api/prospects/{prospect_id}/recipient-verification",
+              method="POST",
+              payload={
+                  "verified": True,
+                  "email": email,
+                  "source_url": "https://example.invalid/contact"
+              },
+              expected=(201,),
+          )
+          verification = json.loads(body)
+          assert verification["status"] == "verified"
+          assert verification["verification"]["email"] == email
+          print("PASS: recipient verification recorded")
+
+          print("12) Verify send readiness is clear after verification")
+          status, body = request(f"/api/prospects/{prospect_id}/send-readiness")
+          readiness = json.loads(body)
+          assert readiness["ready"] is True
+          assert readiness["manual_confirmation_required"] is True
+          assert readiness["auto_send"] is False
+          print("PASS: send readiness clear, manual confirmation still required")
+
+          print("13) Prove explicit confirmation is mandatory and no email sends")
+          status, body = request(
+              f"/api/prospects/{prospect_id}/manual-send",
+              method="POST",
+              payload={
+                  "confirm_send": False,
+                  "expected_email": email,
+                  "subject": preview["subject"],
+                  "body": preview["body"],
+              },
+              expected=(400,),
+          )
+          no_confirm = json.loads(body)
+          assert no_confirm["sent"] is False
+          assert no_confirm["manual_confirmation_required"] is True
+          assert no_confirm["auto_send"] is False
+          print("PASS: no confirmation => no send")
+
+          print("14) Verify preview and blocked attempt are logged")
           status, body = request(f"/api/prospects/{prospect_id}/outreach-history")
           outreach = json.loads(body)
-          assert outreach["count"] >= 1
           assert any(a["status"] == "preview" and a["id"] == preview["outreach_attempt_id"] for a in outreach["attempts"])
-          print("PASS: preview recorded with timestamp/status")
+          assert any(a["status"] == "blocked" for a in outreach["attempts"])
+          print("PASS: outreach statuses logged")
 
-          print("11) Record a sent-status audit marker only; endpoint must not send")
+          print("15) Add sent audit marker only to exercise duplicate protection without sending")
           status, body = request(
               f"/api/prospects/{prospect_id}/outreach-attempts",
               method="POST",
-              payload={"status": "sent", "subject": "Smoke test audit marker", "reason": "test marker only; no email sent"},
+              payload={"status": "sent", "subject": "Smoke audit marker", "reason": "test marker only; no email sent"},
               expected=(201,),
           )
           audit = json.loads(body)
-          assert audit["status"] == "recorded"
           assert audit["sent"] is False
           assert "does not send email" in audit["note"]
-          print("PASS: audit marker recorded; no email sent")
+          print("PASS: audit marker recorded without email")
 
-          print("12) Verify duplicate protection now blocks the same company/email")
-          status, body = request(f"/api/prospects/{prospect_id}/outreach-protection")
-          blocked = json.loads(body)
-          assert blocked["allowed"] is False
-          assert blocked["blocked"] is True
-          assert blocked["match_type"] in ("email", "company")
-          assert blocked["previous_attempt"]["status"] == "sent"
-          print("PASS: duplicate contact blocked")
-
-          print("13) Prove a second sent-status record is rejected and sent=false")
+          print("16) Verify duplicate protection blocks manual-send path")
           status, body = request(
-              f"/api/prospects/{prospect_id}/outreach-attempts",
+              f"/api/prospects/{prospect_id}/manual-send",
               method="POST",
-              payload={"status": "sent", "subject": "Duplicate should block"},
+              payload={
+                  "confirm_send": True,
+                  "expected_email": email,
+                  "subject": preview["subject"],
+                  "body": preview["body"],
+              },
               expected=(409,),
           )
           duplicate = json.loads(body)
           assert duplicate["status"] == "blocked"
           assert duplicate["sent"] is False
-          assert duplicate["attempt"]["status"] == "blocked"
-          print("PASS: duplicate record rejected; sent=false")
+          assert duplicate["send_readiness"]["contact_protection"]["blocked"] is True
+          assert duplicate["auto_send"] is False
+          print("PASS: duplicate gate blocked manual-send; sent=false")
 
-          print("STAGING SAFETY SMOKE TEST PASSED")
+          print("STAGING MANUAL-SEND SAFETY SMOKE TEST PASSED")
+          print("No live email was sent by this smoke test.")
           print("prospect_id=", prospect_id)
-          print("company=", company)
           PY
