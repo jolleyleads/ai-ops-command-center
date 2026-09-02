@@ -1,7 +1,34 @@
 import json
+from datetime import datetime
 
-from prospect_app import app, Prospect
+from prospect_app import app, db, Prospect
 from app import openai_text
+
+
+PIPELINE_STATUSES = ["new", "contacted", "qualified", "proposal sent", "won", "lost"]
+
+
+class ProspectHistory(db.Model):
+    __tablename__ = "prospect_history"
+
+    id = db.Column(db.Integer, primary_key=True)
+    prospect_id = db.Column(db.Integer, nullable=False, index=True)
+    event_type = db.Column(db.String(50), nullable=False, index=True)
+    from_status = db.Column(db.String(50), default="")
+    to_status = db.Column(db.String(50), default="")
+    note = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "prospect_id": self.prospect_id,
+            "event_type": self.event_type,
+            "from_status": self.from_status,
+            "to_status": self.to_status,
+            "note": self.note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 def _list_value(value):
@@ -14,6 +41,97 @@ def _list_value(value):
         return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _clean_note(value, max_len=2000):
+    return str(value or "").strip()[:max_len]
+
+
+@app.route("/api/prospects/<int:prospect_id>/history", methods=["GET"])
+def prospect_history_api(prospect_id):
+    from flask import jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+    rows = ProspectHistory.query.filter_by(prospect_id=prospect.id).order_by(
+        ProspectHistory.created_at.desc(),
+        ProspectHistory.id.desc(),
+    ).all()
+
+    return jsonify({
+        "prospect_id": prospect.id,
+        "current_status": prospect.status or "new",
+        "count": len(rows),
+        "history": [row.to_dict() for row in rows],
+    })
+
+
+@app.route("/api/prospects/<int:prospect_id>/pipeline", methods=["POST"])
+def prospect_pipeline_update_api(prospect_id):
+    from flask import request, jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+    data = request.get_json(silent=True) or {}
+    new_status = str(data.get("status") or "").strip().lower()
+    note = _clean_note(data.get("note"))
+
+    if new_status not in PIPELINE_STATUSES:
+        return jsonify({
+            "error": "invalid pipeline status",
+            "allowed_statuses": PIPELINE_STATUSES,
+        }), 400
+
+    old_status = (prospect.status or "new").strip().lower()
+    changed = new_status != old_status
+
+    if changed:
+        prospect.status = new_status
+        db.session.add(ProspectHistory(
+            prospect_id=prospect.id,
+            event_type="status_change",
+            from_status=old_status,
+            to_status=new_status,
+            note=note,
+        ))
+    elif note:
+        db.session.add(ProspectHistory(
+            prospect_id=prospect.id,
+            event_type="note",
+            from_status=old_status,
+            to_status=old_status,
+            note=note,
+        ))
+
+    db.session.commit()
+
+    return jsonify({
+        "status": "updated" if changed else "unchanged",
+        "changed": changed,
+        "prospect": prospect.to_dict(),
+    })
+
+
+@app.route("/api/prospects/<int:prospect_id>/notes", methods=["POST"])
+def prospect_note_create_api(prospect_id):
+    from flask import request, jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+    data = request.get_json(silent=True) or {}
+    note = _clean_note(data.get("note"))
+
+    if not note:
+        return jsonify({"error": "note is required"}), 400
+
+    row = ProspectHistory(
+        prospect_id=prospect.id,
+        event_type="note",
+        from_status=prospect.status or "new",
+        to_status=prospect.status or "new",
+        note=note,
+    )
+    db.session.add(row)
+    db.session.commit()
+
+    return jsonify({"status": "created", "history": row.to_dict()}), 201
 
 
 @app.route("/api/prospects/<int:prospect_id>/outreach-preview", methods=["POST"])
