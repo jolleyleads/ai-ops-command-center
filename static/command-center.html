@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Ops Command Center — Staging</title>
+  <style>
+    :root{--bg:#06101c;--panel:#0c1a2a;--panel2:#102339;--line:#203a55;--text:#f6f8fb;--muted:#92a8bd;--blue:#4aa3ff;--green:#38d17f;--yellow:#f1bd4a;--red:#ff6673;--shadow:0 18px 45px rgba(0,0,0,.28)}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0%,#0d2740 0,#071523 38%,#06101c 72%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}a{color:inherit;text-decoration:none}.shell{max-width:1440px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:12px}.logo{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--blue),var(--green));display:grid;place-items:center;color:#04101c;font-weight:950}.title h1{font-size:24px;margin:0}.title p{margin:4px 0 0;color:var(--muted);font-size:13px}.env{font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;padding:7px 10px;border-radius:999px;background:rgba(241,189,74,.12);color:#ffd06d;border:1px solid rgba(241,189,74,.3)}
+    .nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}.nav a{padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#0a1928;color:#b9c8d6;font-size:12px;font-weight:800}.nav a.active,.nav a:hover{border-color:var(--blue);color:white;background:rgba(74,163,255,.12)}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.panel{background:rgba(12,26,42,.95);border:1px solid var(--line);border-radius:17px;box-shadow:var(--shadow)}.metric{padding:17px}.metric .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:850}.metric .value{font-size:29px;font-weight:950;margin-top:5px}.metric .hint{font-size:11px;color:var(--muted);margin-top:4px}.ok{color:#61e79c}.warn{color:#ffd06d}.bad{color:#ff8c97}
+    .main-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}.section{padding:18px}.section h2{margin:0 0 5px;font-size:17px}.sub{color:var(--muted);font-size:12px;line-height:1.5}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px}.step{padding:14px 10px;border-radius:12px;background:#091827;border:1px solid #25415e;text-align:center}.step strong{display:block;font-size:12px}.step span{display:block;color:var(--muted);font-size:10px;margin-top:5px}.step.ready{border-color:rgba(56,209,127,.55)}.step.pending{border-color:rgba(241,189,74,.55)}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}.action{display:block;padding:15px;border-radius:12px;background:#0a1a2b;border:1px solid #274563}.action:hover{border-color:var(--blue)}.action strong{display:block;font-size:13px}.action span{display:block;color:var(--muted);font-size:11px;margin-top:5px}.status-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(32,58,85,.65);gap:12px}.status-row:last-child{border-bottom:0}.pill{font-size:10px;text-transform:uppercase;font-weight:900;letter-spacing:.06em;padding:5px 8px;border-radius:999px;background:#13273d;color:#a9bdd0}.pill.ok{background:rgba(56,209,127,.12);color:#6be3a0}.pill.warn{background:rgba(241,189,74,.12);color:#ffd06d}.pipeline{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:15px}.pipe{padding:12px 8px;border-radius:11px;background:#091827;border:1px solid #233f5b;text-align:center}.pipe b{font-size:22px;display:block}.pipe span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.footer{margin-top:18px;color:var(--muted);font-size:11px;text-align:center}
+    @media(max-width:1000px){.grid{grid-template-columns:1fr 1fr}.main-grid{grid-template-columns:1fr}.flow{grid-template-columns:1fr 1fr}.pipeline{grid-template-columns:repeat(3,1fr)}}@media(max-width:560px){.shell{padding:14px}.top{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr 1fr}.flow{grid-template-columns:1fr}.actions{grid-template-columns:1fr}.pipeline{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header class="top"><div class="brand"><div class="logo">AI</div><div class="title"><h1>AI Ops Command Center</h1><p>Staging control room for prospecting, scoring, workflows and pipeline.</p></div></div><div class="env">Staging · main protected</div></header>
+  <nav class="nav"><a class="active" href="/static/command-center.html">Command Center</a><a href="/static/prospects.html">Prospects</a><a href="/workflows">Workflow Builder</a><a href="/">Legacy Dashboard</a></nav>
+
+  <section class="grid">
+    <div class="panel metric"><div class="label">Prospects</div><div id="prospects" class="value">—</div><div class="hint">Saved in staging</div></div>
+    <div class="panel metric"><div class="label">Hot leads</div><div id="hot" class="value">—</div><div class="hint">Score 80–100</div></div>
+    <div class="panel metric"><div class="label">Workflows</div><div id="workflows" class="value">—</div><div class="hint">Saved automations</div></div>
+    <div class="panel metric"><div class="label">System</div><div id="system" class="value warn">Checking</div><div id="systemHint" class="hint">Loading health status</div></div>
+  </section>
+
+  <div class="main-grid">
+    <section class="panel section">
+      <h2>Commercial lead flow</h2><div class="sub">The staging product is organized around one controlled path. Outreach stays separate from discovery until a prospect is verified and ready.</div>
+      <div class="flow"><div class="step pending"><strong>1. Discover</strong><span>Google Places pending billing</span></div><div class="step ready"><strong>2. Score</strong><span>0–100 engine ready</span></div><div class="step ready"><strong>3. Review</strong><span>Evidence visible</span></div><div class="step ready"><strong>4. Automate</strong><span>Workflow builder available</span></div><div class="step pending"><strong>5. Outreach</strong><span>Keep human-controlled in staging</span></div></div>
+      <div class="actions"><a class="action" href="/static/prospects.html"><strong>Open Prospect Dashboard →</strong><span>Search, rank, filter and review companies.</span></a><a class="action" href="/workflows"><strong>Open Workflow Builder →</strong><span>Build and test automation sequences.</span></a></div>
+    </section>
+
+    <section class="panel section"><h2>Environment status</h2><div class="sub">Live checks are pulled from the staging APIs. No production settings are changed from this page.</div><div class="status-row"><span>Prospect engine</span><span id="enginePill" class="pill warn">Checking</span></div><div class="status-row"><span>Database</span><span id="dbPill" class="pill warn">Checking</span></div><div class="status-row"><span>Google Places</span><span id="placesPill" class="pill warn">Pending</span></div><div class="status-row"><span>Qualification threshold</span><span id="thresholdPill" class="pill">80</span></div></section>
+  </div>
+
+  <section class="panel section" style="margin-top:18px"><h2>Prospect pipeline</h2><div class="sub">Counts use the existing Prospect status field, so you can begin organizing leads before any new database migration is needed.</div><div class="pipeline"><div class="pipe"><b id="pNew">0</b><span>New</span></div><div class="pipe"><b id="pContacted">0</b><span>Contacted</span></div><div class="pipe"><b id="pQualified">0</b><span>Qualified</span></div><div class="pipe"><b id="pProposal">0</b><span>Proposal</span></div><div class="pipe"><b id="pWon">0</b><span>Won</span></div><div class="pipe"><b id="pLost">0</b><span>Lost</span></div></div></section>
+  <div class="footer">Staging branch: prospect-scoring-v1 · Production main remains separate.</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+async function load(){
+  let health=null, prospects=[];
+  try{const r=await fetch('/api/prospects/health');health=await r.json()}catch(e){}
+  try{const r=await fetch('/api/prospects?limit=500');const d=await r.json();prospects=d.prospects||[]}catch(e){}
+  try{const r=await fetch('/api/workflows');const d=await r.json();$('workflows').textContent=Array.isArray(d)?d.length:'—'}catch(e){$('workflows').textContent='—'}
+  $('prospects').textContent=prospects.length;$('hot').textContent=prospects.filter(p=>Number(p.score)>=80).length;
+  const statuses={new:0,contacted:0,qualified:0,proposal:0,'proposal sent':0,won:0,lost:0};prospects.forEach(p=>{const k=String(p.status||'new').toLowerCase();if(k in statuses)statuses[k]++});
+  $('pNew').textContent=statuses.new;$('pContacted').textContent=statuses.contacted;$('pQualified').textContent=statuses.qualified;$('pProposal').textContent=statuses.proposal+statuses['proposal sent'];$('pWon').textContent=statuses.won;$('pLost').textContent=statuses.lost;
+  if(health){const ok=Boolean(health.database&&health.prospect_engine);$('system').textContent=ok?'Online':'Degraded';$('system').className='value '+(ok?'ok':'bad');$('systemHint').textContent=health.google_places_configured?'Google Places connected':'Google Places awaiting key';$('enginePill').textContent=health.prospect_engine?'Ready':'Unavailable';$('enginePill').className='pill '+(health.prospect_engine?'ok':'warn');$('dbPill').textContent=health.database?'Ready':'Unavailable';$('dbPill').className='pill '+(health.database?'ok':'warn');$('placesPill').textContent=health.google_places_configured?'Connected':'Pending';$('placesPill').className='pill '+(health.google_places_configured?'ok':'warn');$('thresholdPill').textContent=health.qualification_threshold??80}else{$('system').textContent='Unknown';$('system').className='value warn';$('systemHint').textContent='Health endpoint did not respond'}
+}
+load();
+</script>
+</body>
+</html>
