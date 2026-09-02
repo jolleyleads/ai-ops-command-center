@@ -69,6 +69,62 @@ def test_outreach_queue_static_page_loads(client):
     assert b"No auto-send" in response.data
 
 
+def test_prospect_detail_static_page_loads(client):
+    response = client.get("/static/prospect-detail.html?id=1")
+    assert response.status_code == 200
+    assert b"Prospect profile" in response.data
+    assert b"Pipeline history" in response.data
+    assert b"Nothing is sent from this page" in response.data
+
+
+def test_pipeline_change_is_recorded_in_history(client):
+    prospect = _create_hot_prospect(client)
+
+    updated = client.post(
+        f"/api/prospects/{prospect['id']}/pipeline",
+        json={"status": "qualified", "note": "Reviewed before outreach."},
+    )
+    assert updated.status_code == 200
+    payload = updated.get_json()
+    assert payload["changed"] is True
+    assert payload["prospect"]["status"] == "qualified"
+
+    history = client.get(f"/api/prospects/{prospect['id']}/history")
+    assert history.status_code == 200
+    history_payload = history.get_json()
+    assert history_payload["count"] == 1
+    event = history_payload["history"][0]
+    assert event["event_type"] == "status_change"
+    assert event["from_status"] == "new"
+    assert event["to_status"] == "qualified"
+    assert event["note"] == "Reviewed before outreach."
+
+
+def test_note_is_recorded_without_changing_stage(client):
+    prospect = _create_hot_prospect(client)
+
+    created = client.post(
+        f"/api/prospects/{prospect['id']}/notes",
+        json={"note": "Call owner after 2 PM."},
+    )
+    assert created.status_code == 201
+
+    history = client.get(f"/api/prospects/{prospect['id']}/history").get_json()
+    assert history["count"] == 1
+    assert history["history"][0]["event_type"] == "note"
+    assert history["history"][0]["note"] == "Call owner after 2 PM."
+
+
+def test_invalid_pipeline_stage_is_rejected(client):
+    prospect = _create_hot_prospect(client)
+    response = client.post(
+        f"/api/prospects/{prospect['id']}/pipeline",
+        json={"status": "random-stage"},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid pipeline status"
+
+
 def test_outreach_preview_generates_draft_and_never_sends(client):
     prospect = _create_hot_prospect(client)
 
