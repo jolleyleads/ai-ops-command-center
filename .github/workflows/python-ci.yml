@@ -46,6 +46,136 @@ jobs:
         echo "status=$status" >> "$GITHUB_OUTPUT"
         exit $status
 
+    - name: Live staging prospect smoke test
+      if: github.ref == 'refs/heads/prospect-scoring-v1'
+      env:
+        BASE_URL: https://ai-ops-command-center-staging.onrender.com
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        import time
+        import urllib.request
+
+        base = os.environ["BASE_URL"].rstrip("/")
+        run_id = os.environ["RUN_ID"]
+
+        def request(path, method="GET", payload=None, expected=(200,), retries=8):
+            data = None
+            headers = {"Accept": "application/json"}
+            if payload is not None:
+                data = json.dumps(payload).encode("utf-8")
+                headers["Content-Type"] = "application/json"
+            last_error = None
+            for attempt in range(retries):
+                try:
+                    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+                    with urllib.request.urlopen(req, timeout=45) as resp:
+                        body = resp.read().decode("utf-8")
+                        if resp.status not in expected:
+                            raise RuntimeError(f"{method} {path}: unexpected HTTP {resp.status}: {body[:500]}")
+                        return resp.status, body
+                except Exception as exc:
+                    last_error = exc
+                    if attempt == retries - 1:
+                        raise
+                    time.sleep(10)
+            raise last_error
+
+        print("1) Prospects page")
+        status, body = request("/static/prospects.html")
+        assert "Prospect Command Center" in body
+        print("PASS prospects page", status)
+
+        print("2) Prospect Detail page")
+        status, body = request("/static/prospect-detail.html?id=1")
+        assert "Prospect profile" in body
+        assert "Pipeline history" in body
+        assert "Nothing is sent from this page" in body
+        print("PASS prospect detail page", status)
+
+        company = f"Staging Smoke Test Contractor {run_id}"
+        print("3) Create fake prospect")
+        status, body = request(
+            "/api/prospects",
+            method="POST",
+            payload={
+                "company": company,
+                "city": "Portsmouth",
+                "state": "VA",
+                "industry": "Electrical Contractor",
+                "email": "public@example.com",
+                "source": "staging-smoke-test",
+                "hiring_signal": True,
+                "growth_signal": True,
+                "high_lead_volume_signal": True,
+                "manual_followup_signal": True,
+                "crm_need_signal": True,
+                "review_count": 500,
+                "locations_count": 3,
+                "automation_opportunities": ["lead follow-up"],
+                "evidence": ["staging test evidence one", "staging test evidence two"]
+            },
+            expected=(201,),
+        )
+        prospect = json.loads(body)["prospect"]
+        prospect_id = prospect["id"]
+        assert prospect["status"] == "new"
+        print("PASS created", prospect_id, "new")
+
+        print("4) Live detail API")
+        status, body = request(f"/api/prospects/{prospect_id}")
+        detail = json.loads(body)
+        assert detail["company"] == company
+        print("PASS detail API")
+
+        print("5) New -> Qualified")
+        status, body = request(
+            f"/api/prospects/{prospect_id}/pipeline",
+            method="POST",
+            payload={"status": "qualified", "note": "Smoke test stage change before outreach."},
+        )
+        pipeline = json.loads(body)
+        assert pipeline["changed"] is True
+        assert pipeline["prospect"]["status"] == "qualified"
+        print("PASS qualified")
+
+        print("6) Add note")
+        status, body = request(
+            f"/api/prospects/{prospect_id}/notes",
+            method="POST",
+            payload={"note": "Smoke test note: reviewed fake prospect before outreach."},
+            expected=(201,),
+        )
+        assert json.loads(body)["status"] == "created"
+        print("PASS note")
+
+        print("7) Pipeline history")
+        status, body = request(f"/api/prospects/{prospect_id}/history")
+        history = json.loads(body)
+        assert history["current_status"] == "qualified"
+        events = history["history"]
+        assert any(e["event_type"] == "status_change" and e["from_status"] == "new" and e["to_status"] == "qualified" for e in events)
+        assert any(e["event_type"] == "note" and "Smoke test note" in e["note"] for e in events)
+        print("PASS history")
+
+        print("8) Outreach preview")
+        status, body = request(
+            f"/api/prospects/{prospect_id}/outreach-preview",
+            method="POST",
+            payload={},
+        )
+        preview = json.loads(body)
+        assert preview["status"] == "preview"
+        assert preview["prospect_id"] == prospect_id
+        assert preview["sent"] is False
+        assert preview["body"].strip()
+        print("PASS preview sent=false")
+        print("STAGING SMOKE TEST PASSED")
+        print("prospect_id=", prospect_id)
+        PY
+
     - name: Upload pytest output
       if: always()
       uses: actions/upload-artifact@v4
