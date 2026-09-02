@@ -1,9 +1,10 @@
 import json
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 from prospect_app import app, db, Prospect
-from app import openai_text
+from app import openai_text, send_gmail
 
 
 PIPELINE_STATUSES = ["new", "contacted", "qualified", "proposal sent", "won", "lost"]
@@ -67,6 +68,30 @@ class OutreachAttempt(db.Model):
         }
 
 
+class RecipientVerification(db.Model):
+    __tablename__ = "recipient_verification"
+
+    id = db.Column(db.Integer, primary_key=True)
+    prospect_id = db.Column(db.Integer, nullable=False, index=True)
+    email = db.Column(db.String(254), nullable=False)
+    email_normalized = db.Column(db.String(254), nullable=False, index=True)
+    source_url = db.Column(db.Text, nullable=False)
+    verification_method = db.Column(db.String(50), default="manual_public_source", nullable=False)
+    verified = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    verified_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "prospect_id": self.prospect_id,
+            "email": self.email,
+            "source_url": self.source_url,
+            "verification_method": self.verification_method,
+            "verified": bool(self.verified),
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+        }
+
+
 def _list_value(value):
     if isinstance(value, list):
         return value
@@ -87,10 +112,36 @@ def _normalize_email(value):
     return str(value or "").strip().lower()[:254]
 
 
+def _valid_email(value):
+    email = _normalize_email(value)
+    return bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email))
+
+
 def _normalize_company(value):
     text = str(value or "").strip().lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()[:220]
+
+
+def _valid_public_source_url(value):
+    try:
+        parsed = urlparse(str(value or "").strip())
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def _recipient_verification(prospect):
+    email_normalized = _normalize_email(prospect.email)
+    if not email_normalized:
+        return None
+    return RecipientVerification.query.filter_by(
+        prospect_id=prospect.id,
+        email_normalized=email_normalized,
+        verified=True,
+    ).order_by(
+        RecipientVerification.verified_at.desc(), RecipientVerification.id.desc()
+    ).first()
 
 
 def _contact_protection(prospect):
@@ -144,6 +195,29 @@ def _contact_protection(prospect):
     }
 
 
+def _send_readiness(prospect):
+    protection = _contact_protection(prospect)
+    verification = _recipient_verification(prospect)
+    reasons = []
+
+    if not _valid_email(prospect.email):
+        reasons.append("recipient email is missing or invalid")
+    if verification is None:
+        reasons.append("recipient email has not been verified against a public source")
+    if protection["blocked"]:
+        reasons.append(protection["reason"])
+
+    return {
+        "ready": not reasons,
+        "reasons": reasons,
+        "recipient_email": prospect.email or "",
+        "recipient_verification": verification.to_dict() if verification else None,
+        "contact_protection": protection,
+        "manual_confirmation_required": True,
+        "auto_send": False,
+    }
+
+
 def _record_outreach_attempt(prospect, status, subject="", body="", response_id="", provider_message_id="", reason=""):
     row = OutreachAttempt(
         prospect_id=prospect.id,
@@ -161,6 +235,21 @@ def _record_outreach_attempt(prospect, status, subject="", body="", response_id=
     db.session.add(row)
     db.session.commit()
     return row
+
+
+def _record_pipeline_contacted(prospect, note):
+    old_status = (prospect.status or "new").strip().lower()
+    if old_status == "contacted":
+        return
+    prospect.status = "contacted"
+    db.session.add(ProspectHistory(
+        prospect_id=prospect.id,
+        event_type="status_change",
+        from_status=old_status,
+        to_status="contacted",
+        note=note,
+    ))
+    db.session.commit()
 
 
 @app.route("/api/prospects/<int:prospect_id>/history", methods=["GET"])
@@ -250,6 +339,61 @@ def prospect_note_create_api(prospect_id):
     return jsonify({"status": "created", "history": row.to_dict()}), 201
 
 
+@app.route("/api/prospects/<int:prospect_id>/recipient-verification", methods=["GET", "POST"])
+def prospect_recipient_verification_api(prospect_id):
+    from flask import request, jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+
+    if request.method == "GET":
+        verification = _recipient_verification(prospect)
+        return jsonify({
+            "prospect_id": prospect.id,
+            "verified": verification is not None,
+            "verification": verification.to_dict() if verification else None,
+        })
+
+    data = request.get_json(silent=True) or {}
+    supplied_email = _normalize_email(data.get("email"))
+    prospect_email = _normalize_email(prospect.email)
+    source_url = str(data.get("source_url") or "").strip()
+    confirmed = data.get("verified") is True
+
+    if not confirmed:
+        return jsonify({"error": "verified must be explicitly true"}), 400
+    if not _valid_email(prospect_email):
+        return jsonify({"error": "prospect recipient email is missing or invalid"}), 400
+    if supplied_email != prospect_email:
+        return jsonify({"error": "verified email must exactly match the prospect email"}), 400
+    if not _valid_public_source_url(source_url):
+        return jsonify({"error": "a valid public source URL is required"}), 400
+
+    verification = RecipientVerification(
+        prospect_id=prospect.id,
+        email=prospect.email,
+        email_normalized=prospect_email,
+        source_url=source_url,
+        verification_method="manual_public_source",
+        verified=True,
+    )
+    db.session.add(verification)
+    db.session.commit()
+
+    return jsonify({
+        "status": "verified",
+        "verification": verification.to_dict(),
+        "send_readiness": _send_readiness(prospect),
+    }), 201
+
+
+@app.route("/api/prospects/<int:prospect_id>/send-readiness", methods=["GET"])
+def prospect_send_readiness_api(prospect_id):
+    from flask import jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+    return jsonify({"prospect_id": prospect.id, **_send_readiness(prospect)})
+
+
 @app.route("/api/prospects/<int:prospect_id>/outreach-history", methods=["GET"])
 def prospect_outreach_history_api(prospect_id):
     from flask import jsonify
@@ -263,6 +407,7 @@ def prospect_outreach_history_api(prospect_id):
         "prospect_id": prospect.id,
         "count": len(rows),
         "contact_protection": _contact_protection(prospect),
+        "send_readiness": _send_readiness(prospect),
         "attempts": [row.to_dict() for row in rows],
     })
 
@@ -370,7 +515,7 @@ Requirements:
         _record_outreach_attempt(prospect, "failed", reason="outreach preview generation failed")
         return jsonify({"error": "outreach preview generation failed"}), 502
 
-    recipient_ready = bool(_normalize_email(data.get("email")))
+    recipient_ready = bool(_valid_email(data.get("email")))
     subject = f"Quick question for {prospect.company}"
     protection = _contact_protection(prospect)
     attempt = _record_outreach_attempt(
@@ -395,5 +540,114 @@ Requirements:
         "openai_response_id": response_id,
         "outreach_attempt_id": attempt.id,
         "contact_protection": protection,
+        "send_readiness": _send_readiness(prospect),
         "sent": False,
     })
+
+
+@app.route("/api/prospects/<int:prospect_id>/manual-send", methods=["POST"])
+def prospect_manual_send_api(prospect_id):
+    """Explicit manual send only. There is intentionally no auto-send path."""
+    from flask import request, jsonify
+
+    prospect = Prospect.query.get_or_404(prospect_id)
+    data = request.get_json(silent=True) or {}
+    confirm_send = data.get("confirm_send") is True
+    expected_email = _normalize_email(data.get("expected_email"))
+    actual_email = _normalize_email(prospect.email)
+    subject = str(data.get("subject") or "").strip()[:500]
+    body = str(data.get("body") or "").strip()[:10000]
+
+    if not confirm_send:
+        return jsonify({
+            "error": "explicit manual confirmation is required",
+            "sent": False,
+            "manual_confirmation_required": True,
+            "auto_send": False,
+        }), 400
+
+    if expected_email != actual_email:
+        return jsonify({
+            "error": "expected_email must exactly match the prospect recipient email",
+            "sent": False,
+            "auto_send": False,
+        }), 400
+
+    if not subject or not body:
+        return jsonify({
+            "error": "subject and body are required",
+            "sent": False,
+            "auto_send": False,
+        }), 400
+
+    readiness = _send_readiness(prospect)
+    if not readiness["ready"]:
+        blocked = _record_outreach_attempt(
+            prospect,
+            "blocked",
+            subject=subject,
+            body=body,
+            reason="; ".join(readiness["reasons"]),
+        )
+        return jsonify({
+            "status": "blocked",
+            "sent": False,
+            "send_readiness": readiness,
+            "attempt": blocked.to_dict(),
+            "auto_send": False,
+        }), 409
+
+    try:
+        gmail_result = send_gmail(prospect.email, subject, body)
+        provider_message_id = str(gmail_result.get("id") or "")[:255]
+        row = _record_outreach_attempt(
+            prospect,
+            "sent",
+            subject=subject,
+            body=body,
+            provider_message_id=provider_message_id,
+            reason="manual send confirmed and delivered to Gmail API",
+        )
+        _record_pipeline_contacted(
+            prospect,
+            f"Manual Gmail outreach sent. Outreach attempt #{row.id}.",
+        )
+        return jsonify({
+            "status": "sent",
+            "sent": True,
+            "provider": "gmail",
+            "provider_message_id": provider_message_id,
+            "attempt": row.to_dict(),
+            "send_readiness_after": _send_readiness(prospect),
+            "auto_send": False,
+        }), 200
+    except RuntimeError as exc:
+        failed = _record_outreach_attempt(
+            prospect,
+            "failed",
+            subject=subject,
+            body=body,
+            reason=str(exc)[:2000],
+        )
+        return jsonify({
+            "status": "failed",
+            "sent": False,
+            "error": str(exc),
+            "attempt": failed.to_dict(),
+            "auto_send": False,
+        }), 502
+    except Exception:
+        failed = _record_outreach_attempt(
+            prospect,
+            "failed",
+            subject=subject,
+            body=body,
+            reason="manual Gmail send failed",
+        )
+        return jsonify({
+            "status": "failed",
+            "sent": False,
+            "error": "manual Gmail send failed",
+            "attempt": failed.to_dict(),
+            "auto_send": False,
+        }), 502
