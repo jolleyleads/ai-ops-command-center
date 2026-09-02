@@ -32,7 +32,7 @@ jobs:
         pip install pytest
 
     - name: Compile Python
-      run: python -m py_compile app.py prospect_engine.py prospect_app.py
+      run: python -m py_compile app.py prospect_engine.py prospect_sources.py prospect_app.py commercial_app.py
 
     - name: Run Tests
       run: pytest -q
