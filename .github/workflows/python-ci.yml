@@ -37,9 +37,11 @@ jobs:
     - name: Run Tests
       id: pytest
       shell: bash
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
         set +e
-        pytest -q 2>&1 | tee pytest-output.txt
+        python -m pytest -q 2>&1 | tee pytest-output.txt
         status=${PIPESTATUS[0]}
         echo "status=$status" >> "$GITHUB_OUTPUT"
         exit $status
