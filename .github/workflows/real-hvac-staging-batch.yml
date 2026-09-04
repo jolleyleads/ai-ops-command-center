@@ -1,0 +1,90 @@
+name: Real HVAC Staging Batch
+
+on:
+  push:
+    branches:
+      - prospect-scoring-v1
+
+jobs:
+  batch:
+    if: contains(github.event.head_commit.message, 'Run one safe Hampton Roads HVAC staging batch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Source and rank Hampton Roads HVAC prospects without sending email
+        env:
+          BASE_URL: https://ai-ops-command-center-staging.onrender.com
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          base = os.environ['BASE_URL'].rstrip('/')
+
+          def request(path, method='GET', payload=None, expected=(200,)):
+              data = None
+              headers = {'Accept': 'application/json'}
+              if payload is not None:
+                  data = json.dumps(payload).encode('utf-8')
+                  headers['Content-Type'] = 'application/json'
+              req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      body = resp.read().decode('utf-8')
+                      if resp.status not in expected:
+                          raise RuntimeError(f'{method} {path}: HTTP {resp.status}: {body[:2000]}')
+                      return resp.status, json.loads(body)
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode('utf-8', errors='replace')
+                  raise RuntimeError(f'{method} {path}: HTTP {exc.code}: {body[:2000]}')
+
+          print('1) Health check')
+          _, health = request('/api/prospects/health')
+          print(json.dumps(health, indent=2, sort_keys=True))
+          assert health.get('status') == 'ok'
+          assert health.get('google_places_configured') is True
+
+          print('2) Source real Hampton Roads HVAC prospects into staging')
+          _, sourced = request(
+              '/api/prospects/source/google',
+              method='POST',
+              payload={
+                  'industry': 'HVAC contractor',
+                  'location': 'Hampton Roads, Virginia',
+                  'limit': 10,
+                  'save': True,
+              },
+          )
+          print('sourced_count=', sourced.get('sourced_count'))
+          print('created_count=', sourced.get('created_count'))
+          print('duplicate_count=', sourced.get('duplicate_count'))
+
+          rows = (sourced.get('created') or []) + (sourced.get('duplicates') or [])
+          assert rows, 'No HVAC prospects were returned by Google Places'
+
+          print('3) Ranked staging batch (NO EMAIL SENT)')
+          ranked = sorted(rows, key=lambda p: (p.get('score') or 0, p.get('review_count') or 0), reverse=True)
+          for p in ranked:
+              print(json.dumps({
+                  'id': p.get('id'),
+                  'company': p.get('company'),
+                  'website': p.get('website'),
+                  'email': p.get('email'),
+                  'phone': p.get('phone'),
+                  'city': p.get('city'),
+                  'state': p.get('state'),
+                  'google_rating': p.get('google_rating'),
+                  'review_count': p.get('review_count'),
+                  'score': p.get('score'),
+                  'score_band': p.get('score_band'),
+                  'score_reason': p.get('score_reason'),
+                  'evidence': p.get('evidence'),
+                  'automation_opportunities': p.get('automation_opportunities'),
+              }, sort_keys=True))
+
+          verified_email_count = sum(1 for p in ranked if p.get('email'))
+          print('public_email_count=', verified_email_count)
+          print('NO GMAIL SEND ENDPOINT WAS CALLED')
+          PY
