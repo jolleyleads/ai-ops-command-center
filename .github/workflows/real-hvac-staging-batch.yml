@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Source and rank Hampton Roads HVAC prospects without sending email
+      - name: Load verified HVAC prospects, score, verify recipients, and preview only
         env:
           BASE_URL: https://ai-ops-command-center-staging.onrender.com
         run: |
@@ -19,6 +19,7 @@ jobs:
           import json
           import os
           import urllib.error
+          import urllib.parse
           import urllib.request
 
           base = os.environ['BASE_URL'].rstrip('/')
@@ -38,53 +39,169 @@ jobs:
                       return resp.status, json.loads(body)
               except urllib.error.HTTPError as exc:
                   body = exc.read().decode('utf-8', errors='replace')
+                  if exc.code in expected:
+                      return exc.code, json.loads(body)
                   raise RuntimeError(f'{method} {path}: HTTP {exc.code}: {body[:2000]}')
+
+          records = [
+              {
+                  'company': 'Landers Heating & Air Service',
+                  'website': 'https://www.landersair.com/',
+                  'email': 'Jimmy@landersair.com',
+                  'phone': '(757) 940-8665',
+                  'contact_name': 'Jimmy Landers',
+                  'contact_title': 'Owner / HVAC professional',
+                  'source': 'official_site_verified_batch',
+                  'source_url': 'https://www.landersair.com/',
+                  'city': 'Newport News',
+                  'state': 'VA',
+                  'industry': 'HVAC contractor',
+                  'manual_followup_signal': True,
+                  'automation_opportunities': ['appointment-request follow-up automation', 'lead qualification and scheduling'],
+                  'evidence': [
+                      'Official site publishes Jimmy@landersair.com and (757) 940-8665',
+                      'Official site states Jimmy reviews appointment requests and follows up to confirm scheduling',
+                      'Official site identifies Jimmy Landers as the operator and licensed HVAC professional'
+                  ],
+              },
+              {
+                  'company': 'High Tide Contracting',
+                  'website': 'https://www.hightidecontracting.com/',
+                  'email': 'customersupport@hightidecontracting.com',
+                  'phone': '(757) 910-6677',
+                  'source': 'official_site_verified_batch',
+                  'source_url': 'https://www.hightidecontracting.com/',
+                  'city': 'Virginia Beach',
+                  'state': 'VA',
+                  'industry': 'HVAC contractor',
+                  'google_rating': 3.7,
+                  'review_count': 63,
+                  'automation_opportunities': ['multi-service lead routing', 'emergency intake and follow-up', 'project-status follow-up'],
+                  'evidence': [
+                      'Official site publishes customersupport@hightidecontracting.com and (757) 910-6677',
+                      'Official site lists HVAC, restoration, and general contracting services across Hampton Roads',
+                      'Current public business listing shows 3.7 rating from 63 reviews'
+                  ],
+              },
+              {
+                  'company': 'Hobbs Mechanical',
+                  'website': 'https://www.hobbsmech.com/',
+                  'email': 'office@hobbsmech.com',
+                  'phone': '(757) 745-7779',
+                  'source': 'official_site_verified_batch',
+                  'source_url': 'https://www.hobbsmech.com/',
+                  'city': 'Chesapeake',
+                  'state': 'VA',
+                  'industry': 'HVAC contractor',
+                  'google_rating': 3.6,
+                  'review_count': 11,
+                  'automation_opportunities': ['24/7 service-request triage', 'maintenance reminder automation'],
+                  'evidence': [
+                      'Official site publishes office@hobbsmech.com and (757) 745-7779',
+                      'Official site serves homeowners and businesses and accepts calls 24/7',
+                      'Current public business listing shows 3.6 rating from 11 reviews'
+                  ],
+              },
+              {
+                  'company': 'Tradewinds Heating & Cooling',
+                  'website': 'https://www.tradewindsco.org/',
+                  'email': 'office@tradewindsco.org',
+                  'phone': '(757) 405-7629',
+                  'source': 'official_site_verified_batch',
+                  'source_url': 'https://www.tradewindsco.org/',
+                  'city': 'Portsmouth',
+                  'state': 'VA',
+                  'industry': 'HVAC contractor',
+                  'automation_opportunities': ['missed-call text-back and lead capture', 'website service-request follow-up'],
+                  'evidence': [
+                      'Official site publishes office@tradewindsco.org and (757) 405-7629',
+                      'Official site identifies the business as based in Portsmouth and serving Greater Hampton Roads',
+                      'Official site provides a service request/contact form'
+                  ],
+              },
+              {
+                  'company': 'Green Run Heating and Cooling',
+                  'website': 'https://www.greenrunheatingandcooling.com/',
+                  'email': 'samantha@greenrunheatingandcooling.com',
+                  'phone': '(757) 435-3823',
+                  'source': 'official_site_verified_batch',
+                  'source_url': 'https://www.greenrunheatingandcooling.com/',
+                  'city': 'Virginia Beach',
+                  'state': 'VA',
+                  'industry': 'HVAC contractor',
+                  'automation_opportunities': ['property-management lead routing', 'service-request follow-up'],
+                  'evidence': [
+                      'Official site publishes samantha@greenrunheatingandcooling.com and (757) 435-3823',
+                      'Official site states service for residential, property management, and multifamily customers',
+                      'Official site states Hampton Roads service since 1980'
+                  ],
+              },
+          ]
 
           print('1) Health check')
           _, health = request('/api/prospects/health')
-          print(json.dumps(health, indent=2, sort_keys=True))
           assert health.get('status') == 'ok'
-          assert health.get('google_places_configured') is True
+          print(json.dumps(health, sort_keys=True))
 
-          print('2) Source real Hampton Roads HVAC prospects into staging')
-          _, sourced = request(
-              '/api/prospects/source/google',
-              method='POST',
-              payload={
-                  'industry': 'HVAC contractor',
-                  'location': 'Hampton Roads, Virginia',
-                  'limit': 10,
-                  'save': True,
-              },
-          )
-          print('sourced_count=', sourced.get('sourced_count'))
-          print('created_count=', sourced.get('created_count'))
-          print('duplicate_count=', sourced.get('duplicate_count'))
+          created = []
+          for record in records:
+              print('2) Creating verified record:', record['company'])
+              status, result = request('/api/prospects', method='POST', payload=record, expected=(201,))
+              prospect = result['prospect']
+              prospect_id = prospect['id']
 
-          rows = (sourced.get('created') or []) + (sourced.get('duplicates') or [])
-          assert rows, 'No HVAC prospects were returned by Google Places'
+              print('3) Recording recipient verification:', record['company'])
+              _, verification = request(
+                  f'/api/prospects/{prospect_id}/recipient-verification',
+                  method='POST',
+                  payload={
+                      'verified': True,
+                      'email': record['email'],
+                      'source_url': record['source_url'],
+                  },
+                  expected=(201,),
+              )
+              assert verification['verification']['email'].lower() == record['email'].lower()
 
-          print('3) Ranked staging batch (NO EMAIL SENT)')
-          ranked = sorted(rows, key=lambda p: (p.get('score') or 0, p.get('review_count') or 0), reverse=True)
-          for p in ranked:
-              print(json.dumps({
-                  'id': p.get('id'),
-                  'company': p.get('company'),
-                  'website': p.get('website'),
-                  'email': p.get('email'),
-                  'phone': p.get('phone'),
-                  'city': p.get('city'),
-                  'state': p.get('state'),
-                  'google_rating': p.get('google_rating'),
-                  'review_count': p.get('review_count'),
-                  'score': p.get('score'),
-                  'score_band': p.get('score_band'),
-                  'score_reason': p.get('score_reason'),
-                  'evidence': p.get('evidence'),
-                  'automation_opportunities': p.get('automation_opportunities'),
-              }, sort_keys=True))
+              print('4) Generating OpenAI outreach preview only:', record['company'])
+              _, preview = request(
+                  f'/api/prospects/{prospect_id}/outreach-preview',
+                  method='POST',
+                  payload={},
+                  expected=(200,),
+              )
+              assert preview['sent'] is False
+              assert preview['body'].strip()
+              assert preview['send_readiness']['ready'] is True
+              assert preview['send_readiness']['manual_confirmation_required'] is True
+              assert preview['send_readiness']['auto_send'] is False
 
-          verified_email_count = sum(1 for p in ranked if p.get('email'))
-          print('public_email_count=', verified_email_count)
-          print('NO GMAIL SEND ENDPOINT WAS CALLED')
+              created.append({
+                  'id': prospect_id,
+                  'company': prospect['company'],
+                  'email': prospect['email'],
+                  'phone': prospect['phone'],
+                  'website': prospect['website'],
+                  'score': prospect['score'],
+                  'score_band': prospect['score_band'],
+                  'score_reason': prospect['score_reason'],
+                  'verification_source': record['source_url'],
+                  'outreach_subject': preview['subject'],
+                  'outreach_body': preview['body'],
+                  'outreach_attempt_id': preview['outreach_attempt_id'],
+                  'sent': preview['sent'],
+              })
+
+          ranked = sorted(created, key=lambda p: p['score'], reverse=True)
+          print('5) VERIFIED RANKED BATCH')
+          for row in ranked:
+              print(json.dumps(row, sort_keys=True))
+
+          assert len(ranked) == 5
+          assert all(row['email'] for row in ranked)
+          assert all(row['sent'] is False for row in ranked)
+          print('VERIFIED_PUBLIC_EMAIL_COUNT=5')
+          print('OPENAI_PREVIEW_COUNT=5')
+          print('GMAIL_SEND_COUNT=0')
+          print('REAL HVAC STAGING BATCH PASSED')
           PY
