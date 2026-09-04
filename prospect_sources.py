@@ -1,5 +1,7 @@
+import html
 import os
-from urllib.parse import urlparse
+import re
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -18,6 +20,29 @@ GOOGLE_PLACES_FIELDS = ",".join([
     "places.businessStatus",
     "places.types",
 ])
+
+EMAIL_RE = re.compile(
+    r"(?i)(?<![A-Z0-9._%+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![A-Z0-9._%+-])"
+)
+CONTACT_PATHS = ("/contact", "/contact-us", "/about", "/about-us")
+PREFERRED_LOCAL_PARTS = (
+    "info",
+    "contact",
+    "office",
+    "hello",
+    "sales",
+    "service",
+    "support",
+    "admin",
+)
+REJECTED_EMAIL_SUFFIXES = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+)
 
 
 def google_places_configured():
@@ -64,7 +89,58 @@ def search_google_places(industry, location, limit=10):
         )
 
     payload = response.json()
-    return [normalize_google_place(place, industry) for place in payload.get("places", [])]
+    prospects = []
+    for place in payload.get("places", []):
+        prospect = normalize_google_place(place, industry)
+        if prospect.get("website"):
+            enrichment = discover_public_email(prospect["website"])
+            if enrichment.get("email"):
+                prospect["email"] = enrichment["email"]
+                prospect["email_source_url"] = enrichment["source_url"]
+                prospect["evidence"].append(
+                    f"Public email listed on official website: {enrichment['source_url']}"
+                )
+        prospects.append(prospect)
+    return prospects
+
+
+def discover_public_email(website):
+    """Find a public email on the official website without generating or guessing one."""
+    website = str(website or "").strip()
+    if not website:
+        return {"email": "", "source_url": ""}
+
+    root = _root_url(website)
+    if not root:
+        return {"email": "", "source_url": ""}
+
+    root_host = _normalized_host(root)
+    urls = [website]
+    for path in CONTACT_PATHS:
+        urls.append(urljoin(root + "/", path.lstrip("/")))
+
+    seen = set()
+    candidates = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        if _normalized_host(url) != root_host:
+            continue
+
+        text = _fetch_public_page(url)
+        if not text:
+            continue
+
+        for email in _extract_emails(text):
+            candidates.append((email, url))
+
+    if not candidates:
+        return {"email": "", "source_url": ""}
+
+    candidates.sort(key=lambda item: _email_rank(item[0], root_host))
+    email, source_url = candidates[0]
+    return {"email": email, "source_url": source_url}
 
 
 def normalize_google_place(place, industry):
@@ -132,6 +208,75 @@ def normalize_google_place(place, industry):
         "types": place.get("types") or [],
         "formatted_address": place.get("formattedAddress") or "",
     }
+
+
+def _fetch_public_page(url):
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AI-Ops-Prospect-Enrichment/1.0)"
+            },
+            timeout=10,
+            allow_redirects=True,
+        )
+    except requests.RequestException:
+        return ""
+
+    if not response.ok:
+        return ""
+    content_type = str(response.headers.get("Content-Type") or "").lower()
+    if "html" not in content_type and "text" not in content_type:
+        return ""
+    return html.unescape(response.text[:750000])
+
+
+def _extract_emails(text):
+    found = []
+    seen = set()
+    for match in EMAIL_RE.findall(text or ""):
+        email = match.strip().lower().rstrip(".,;:)")
+        if email in seen:
+            continue
+        if any(email.endswith(suffix) for suffix in REJECTED_EMAIL_SUFFIXES):
+            continue
+        if "example.com" in email or "example.org" in email or "example.net" in email:
+            continue
+        seen.add(email)
+        found.append(email)
+    return found
+
+
+def _email_rank(email, root_host):
+    local, _, domain = email.partition("@")
+    domain_host = domain.lower().removeprefix("www.")
+    same_domain = domain_host == root_host or domain_host.endswith("." + root_host)
+    preferred = local.lower() in PREFERRED_LOCAL_PARTS
+    role_prefix = any(local.lower().startswith(prefix) for prefix in PREFERRED_LOCAL_PARTS)
+    return (
+        0 if same_domain else 1,
+        0 if preferred else 1,
+        0 if role_prefix else 1,
+        len(email),
+        email,
+    )
+
+
+def _root_url(url):
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return ""
+
+
+def _normalized_host(url):
+    try:
+        return (urlparse(url).hostname or "").lower().removeprefix("www.")
+    except Exception:
+        return ""
 
 
 def _city_state(components):
