@@ -194,12 +194,29 @@ function addResultRow(result) {
   if (result.rating !== undefined && result.rating !== null) {
     meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
   }
+  if (result.prospect_score !== undefined && result.prospect_score !== null) {
+    meta.push("Prospect score " + result.prospect_score + "/100");
+  }
+  if (result.fit) meta.push("Fit " + result.fit);
+  if (result.saved_to_pipeline) meta.push("Saved to Qualified pipeline");
   if (result.source) meta.push(result.source);
 
   if (meta.length) {
     const info = document.createElement("small");
     info.textContent = meta.join(" | ");
     row.appendChild(info);
+  }
+
+  if (result.analysis) {
+    const analysis = document.createElement("p");
+    analysis.textContent = result.analysis;
+    row.appendChild(analysis);
+  }
+
+  if (result.automation_opportunity) {
+    const opportunity = document.createElement("p");
+    opportunity.textContent = result.automation_opportunity;
+    row.appendChild(opportunity);
   }
 
   const linkUrl = result.website || result.url;
@@ -214,6 +231,23 @@ function addResultRow(result) {
   }
 
   return row;
+}
+
+async function analyzeAndStageProspects(results, query, location) {
+  const response = await fetch("/api/prospect-intake", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({results: results, query: query, location: location})
+  });
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Prospect analysis failed");
+
+  const byId = new Map((data.results || []).map(item => [item.id, item]));
+  return {
+    summary: data,
+    results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))
+  };
 }
 
 async function universalSearch() {
@@ -240,10 +274,28 @@ async function universalSearch() {
       return;
     }
 
-    status.textContent = data.message || ("Found " + data.count + " result" + (data.count === 1 ? "" : "s") + ".");
-    (data.results || []).forEach(result => container.appendChild(addResultRow(result)));
+    let displayResults = data.results || [];
 
-    if (!data.results || data.results.length === 0) {
+    if (mode === "businesses" && displayResults.length > 0) {
+      status.textContent = "Found " + displayResults.length + " businesses. Analyzing and staging qualified prospects...";
+      try {
+        const prospectData = await analyzeAndStageProspects(displayResults, query, location);
+        displayResults = prospectData.results;
+        status.textContent = (
+          "Found " + displayResults.length + " businesses. " +
+          "Analyzed " + prospectData.summary.analyzed + "; " +
+          prospectData.summary.qualified + " qualified and staged. No outreach sent."
+        );
+      } catch (prospectError) {
+        status.textContent = "Found " + displayResults.length + " businesses, but prospect analysis could not complete: " + prospectError.message;
+      }
+    } else {
+      status.textContent = data.message || ("Found " + data.count + " result" + (data.count === 1 ? "" : "s") + ".");
+    }
+
+    displayResults.forEach(result => container.appendChild(addResultRow(result)));
+
+    if (displayResults.length === 0) {
       const empty = document.createElement("p");
       empty.textContent = "No results found for that search.";
       container.appendChild(empty);
