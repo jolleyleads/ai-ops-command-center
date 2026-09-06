@@ -1,25 +1,13 @@
-import os
 from datetime import datetime, timezone
 
-import requests
 from flask import jsonify, request
 
 from app import app
+from universal_app import _search_public_records
 
 
 def _clean(value, limit=300):
     return str(value or "").strip()[:limit]
-
-
-def _google_error_message(response):
-    try:
-        payload = response.json()
-    except ValueError:
-        return ""
-    error = payload.get("error")
-    if isinstance(error, dict):
-        return _clean(error.get("message"), 500)
-    return ""
 
 
 def _location_terms(location):
@@ -82,56 +70,50 @@ def _location_matches(title, snippet, location):
     return any(term in text for term in terms)
 
 
-def _search_google(query, api_key, cx, num=10):
-    response = requests.get(
-        "https://www.googleapis.com/customsearch/v1",
-        params={"key": api_key, "cx": cx, "q": query, "num": num},
-        timeout=20,
-    )
-    if not response.ok:
-        return None, response
-    return response.json(), response
-
-
 @app.route("/api/permit-leads", methods=["POST"])
 def permit_leads():
     data = request.get_json(silent=True) or {}
     location = _clean(data.get("location") or "Portsmouth, VA", 200)
     user_query = _clean(data.get("query") or "electrical permits", 200)
-
-    api_key = os.environ.get("GOOGLE_SEARCH_API_KEY") or ""
-    cx = os.environ.get("GOOGLE_SEARCH_CX") or ""
-    if not api_key or not cx:
-        return jsonify(
-            {
-                "configured": False,
-                "message": "Permit Lead Finder needs GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX.",
-                "results": [],
-            }
-        )
-
     year = datetime.now(timezone.utc).year
+
     targeted_queries = [
-        f'"{location}" "electrical permit" (contractor OR applicant OR "trade name") (applied OR application OR submitted OR pending OR issued) {year}',
-        f'"{location}" "electrical permits" (contractor OR "master electrician" OR license) ("in progress" OR issued OR application) {year}',
+        f'"electrical permit" contractor applicant submitted pending issued {year}',
+        f'"electrical permits" contractor "master electrician" application issued {year}',
     ]
 
     seen = set()
     results = []
+    source_name = "Public Record Search"
 
     for targeted_query in targeted_queries:
-        payload, response = _search_google(targeted_query, api_key, cx)
-        if payload is None:
-            detail = _google_error_message(response)
-            message = f"Google Programmable Search returned HTTP {response.status_code}."
-            if detail:
-                message += f" {detail}"
-            return jsonify({"configured": True, "message": message, "results": []})
+        payload = _search_public_records(targeted_query, location)
+        source_name = payload.get("source") or source_name
 
-        for item in payload.get("items", []):
+        if not payload.get("configured"):
+            return jsonify(
+                {
+                    "configured": False,
+                    "message": payload.get("message") or "Public-record search is not configured.",
+                    "results": [],
+                }
+            )
+
+        if payload.get("message") and not payload.get("results"):
+            return jsonify(
+                {
+                    "configured": True,
+                    "message": payload.get("message"),
+                    "source": source_name,
+                    "results": [],
+                }
+            )
+
+        for item in payload.get("results", []):
             title = item.get("title") or "Permit activity"
-            snippet = item.get("snippet") or ""
-            url = item.get("link") or ""
+            snippet = item.get("subtitle") or ""
+            url = item.get("url") or ""
+
             if not url or url in seen:
                 continue
             if not _has_direct_permit_signal(title, snippet):
@@ -147,13 +129,13 @@ def permit_leads():
                     "title": title,
                     "subtitle": snippet,
                     "url": url,
-                    "source": item.get("displayLink") or "Google Programmable Search",
+                    "source": item.get("source") or source_name,
                     "prospect_score": score,
                     "fit": "High" if score >= 75 else "Medium" if score >= 55 else "Low",
                     "lead_signal": "Direct public evidence of electrical-permit activity",
                     "analysis": (
-                        "This result was kept because the public record mentions electrical permitting "
-                        "plus contractor/applicant/license or active permit-status language."
+                        "Kept because the public result mentions electrical permitting plus "
+                        "contractor/applicant/license or active permit-status language."
                     ),
                 }
             )
@@ -165,7 +147,7 @@ def permit_leads():
             "configured": True,
             "query": user_query,
             "location": location,
-            "source": "Google Programmable Search",
+            "source": source_name,
             "count": len(results),
             "message": (
                 f"Found {len(results)} evidence-backed electrical permit lead"
