@@ -5,12 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="stylesheet" href="/static/style.css">
 </head>
-
 <body>
-
 <div class="sidebar">
   <h2>AI Ops</h2>
-
   <a href="/">Dashboard</a>
   <a href="/workflows">Workflow Builder</a>
   <a href="/api/runs" target="_blank">Runs API</a>
@@ -20,433 +17,241 @@
   <a href="/login">Login</a>
 </div>
 
-
 <main>
-
   <section class="hero">
-
     <h1>Universal Automation Command Center</h1>
-
-    <p>
-      Build, run, and monitor automations from one place.
-    </p>
-
-    <a class="cta" href="/workflows">
-      Open Workflow Builder &rarr;
-    </a>
-
+    <p>Build, run, search, and monitor automations from one place.</p>
+    <a class="cta" href="/workflows">Open Workflow Builder &rarr;</a>
   </section>
 
-
   <section class="grid">
-
     <div class="card">
       <h3>Workflows</h3>
       <strong>{{ workflow_count }}</strong>
       <p>Saved automations</p>
     </div>
-
     <div class="card">
       <h3>Engine</h3>
       <strong>Online</strong>
       <p>Branching + run history</p>
     </div>
-
     <div class="card">
       <h3>Qualified Leads</h3>
       <strong>{{ qualified_leads|length }}</strong>
       <p>Recent qualified leads</p>
     </div>
-
   </section>
 
-
   <section class="panel">
-
     <h2>Lead Pipeline</h2>
-
-
     <div class="grid">
-
-      <div class="card">
-        <h3>New</h3>
-        <strong>{{ pipeline_counts["New"] }}</strong>
-      </div>
-
-      <div class="card">
-        <h3>Contacted</h3>
-        <strong>{{ pipeline_counts["Contacted"] }}</strong>
-      </div>
-
-      <div class="card">
-        <h3>Qualified</h3>
-        <strong>{{ pipeline_counts["Qualified"] }}</strong>
-      </div>
-
-      <div class="card">
-        <h3>Proposal Sent</h3>
-        <strong>{{ pipeline_counts["Proposal Sent"] }}</strong>
-      </div>
-
-      <div class="card">
-        <h3>Won</h3>
-        <strong>{{ pipeline_counts["Won"] }}</strong>
-      </div>
-
-      <div class="card">
-        <h3>Lost</h3>
-        <strong>{{ pipeline_counts["Lost"] }}</strong>
-      </div>
-
+      <div class="card"><h3>New</h3><strong>{{ pipeline_counts["New"] }}</strong></div>
+      <div class="card"><h3>Contacted</h3><strong>{{ pipeline_counts["Contacted"] }}</strong></div>
+      <div class="card"><h3>Qualified</h3><strong>{{ pipeline_counts["Qualified"] }}</strong></div>
+      <div class="card"><h3>Proposal Sent</h3><strong>{{ pipeline_counts["Proposal Sent"] }}</strong></div>
+      <div class="card"><h3>Won</h3><strong>{{ pipeline_counts["Won"] }}</strong></div>
+      <div class="card"><h3>Lost</h3><strong>{{ pipeline_counts["Lost"] }}</strong></div>
     </div>
 
-
     {% if qualified_leads %}
-
       {% for lead in qualified_leads %}
-
         <div class="row" id="lead-{{ lead.id }}">
-
-          <strong>
-            Lead #{{ lead.id }}
-          </strong>
-
-          <span id="stage-label-{{ lead.id }}">
-            {{ lead.stage }}
-          </span>
-
-
-          <p>
-            {{ lead.lead }}
-          </p>
-
-
+          <strong>Lead #{{ lead.id }}</strong>
+          <span id="stage-label-{{ lead.id }}">{{ lead.stage }}</span>
+          <p>{{ lead.lead }}</p>
           <label>
             Pipeline Stage
-
             <select id="stage-{{ lead.id }}">
-
               {% for option in ["New","Contacted","Qualified","Proposal Sent","Won","Lost"] %}
-
-                <option
-                  value="{{ option }}"
-                  {% if lead.stage == option %}selected{% endif %}
-                >
-                  {{ option }}
-                </option>
-
+                <option value="{{ option }}" {% if lead.stage == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
-
             </select>
-
           </label>
-
-
           <label>
-
             Follow-up Date
-
-            <input
-              type="date"
-              id="follow-up-{{ lead.id }}"
-              value="{{ lead.follow_up_date }}"
-            >
-
+            <input type="date" id="follow-up-{{ lead.id }}" value="{{ lead.follow_up_date }}">
           </label>
-
-
           <label>
-
             Notes
-
-            <textarea
-              id="notes-{{ lead.id }}"
-              rows="3"
-              placeholder="Add notes about calls, pricing, objections, next steps..."
-            >{{ lead.notes }}</textarea>
-
+            <textarea id="notes-{{ lead.id }}" rows="3" placeholder="Add notes about calls, pricing, objections, next steps...">{{ lead.notes }}</textarea>
           </label>
-
-
-          <button onclick="savePipeline({{ lead.id }})">
-            Save Lead
-          </button>
-
-
+          <button onclick="savePipeline({{ lead.id }})">Save Lead</button>
           <span id="save-status-{{ lead.id }}"></span>
-
-
           {% if lead.ai_output %}
-
             <details>
-
-              <summary>
-                View AI qualification
-              </summary>
-
-              <p style="white-space: pre-wrap;">
-                {{ lead.ai_output }}
-              </p>
-
+              <summary>View AI qualification</summary>
+              <p style="white-space: pre-wrap;">{{ lead.ai_output }}</p>
             </details>
-
           {% endif %}
-
-
-          <small>
-            {{ lead.created_at }}
-          </small>
-
+          <small>{{ lead.created_at }}</small>
         </div>
-
       {% endfor %}
-
-
     {% else %}
-
-      <p>
-        No qualified leads saved yet.
-      </p>
-
+      <p>No qualified leads saved yet.</p>
     {% endif %}
-
   </section>
 
-
   <section class="panel">
+    <h2>Universal Intelligence Search</h2>
+    <p>Use one search center for jobs, businesses/contractors, and permit or public-record research.</p>
 
-    <h2>Search Real AI Jobs</h2>
+    <label>
+      Search Type
+      <select id="searchMode" onchange="updateSearchPlaceholder()">
+        <option value="jobs">Jobs</option>
+        <option value="businesses">Businesses / Contractors</option>
+        <option value="public_records">Permits / Public Records</option>
+      </select>
+    </label>
 
-    <input
-      id="keywordInput"
-      value="machine learning"
-    >
+    <label>
+      What are you looking for?
+      <input id="searchQuery" value="machine learning" placeholder="machine learning">
+    </label>
 
-    <button onclick="searchJobs()">
-      Search Jobs
-    </button>
+    <label>
+      Location
+      <input id="searchLocation" placeholder="Portsmouth, VA">
+    </label>
 
-    <div id="jobResults"></div>
-
+    <button onclick="universalSearch()">Search</button>
+    <div id="searchStatus"></div>
+    <div id="universalResults"></div>
   </section>
 
-
   <section class="panel">
-
     <h2>Recent Automation Events</h2>
-
     {% for event in events %}
-
       <div class="row">
-
-        <strong>
-          {{ event.event_type }}
-        </strong>
-
-        <span>
-          {{ event.status }}
-        </span>
-
-        <p>
-          {{ event.details }}
-        </p>
-
+        <strong>{{ event.event_type }}</strong>
+        <span>{{ event.status }}</span>
+        <p>{{ event.details }}</p>
       </div>
-
     {% endfor %}
-
   </section>
-
 </main>
 
-
 <script>
-
 async function savePipeline(leadId) {
-
-  const stage =
-    document.getElementById(
-      "stage-" + leadId
-    ).value;
-
-
-  const notes =
-    document.getElementById(
-      "notes-" + leadId
-    ).value;
-
-
-  const followUp =
-    document.getElementById(
-      "follow-up-" + leadId
-    ).value;
-
-
-  const status =
-    document.getElementById(
-      "save-status-" + leadId
-    );
-
-
-  status.textContent =
-    "Saving...";
-
+  const stage = document.getElementById("stage-" + leadId).value;
+  const notes = document.getElementById("notes-" + leadId).value;
+  const followUp = document.getElementById("follow-up-" + leadId).value;
+  const status = document.getElementById("save-status-" + leadId);
+  status.textContent = "Saving...";
 
   try {
+    const response = await fetch("/api/qualified-leads/" + leadId + "/pipeline", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({stage: stage, notes: notes, follow_up_date: followUp})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not save lead");
+    document.getElementById("stage-label-" + leadId).textContent = data.stage;
+    status.textContent = "Saved";
+    setTimeout(() => window.location.reload(), 500);
+  } catch (error) {
+    status.textContent = "Save failed";
+  }
+}
 
-    const response =
-      await fetch(
-        "/api/qualified-leads/" +
-        leadId +
-        "/pipeline",
-        {
-          method: "POST",
+function updateSearchPlaceholder() {
+  const mode = document.getElementById("searchMode").value;
+  const query = document.getElementById("searchQuery");
+  const location = document.getElementById("searchLocation");
 
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
+  if (mode === "jobs") {
+    query.placeholder = "automation engineer";
+    if (query.value === "electrical contractors" || query.value === "electrical permits") query.value = "automation engineer";
+    location.placeholder = "Optional for current remote-job source";
+  } else if (mode === "businesses") {
+    query.placeholder = "electrical contractors";
+    if (!query.value || query.value === "machine learning" || query.value === "automation engineer") query.value = "electrical contractors";
+    location.placeholder = "Portsmouth, VA";
+  } else {
+    query.placeholder = "electrical permits";
+    if (!query.value || query.value === "machine learning" || query.value === "automation engineer" || query.value === "electrical contractors") query.value = "electrical permits";
+    location.placeholder = "Portsmouth, VA";
+  }
+}
 
-          body: JSON.stringify({
-            stage: stage,
-            notes: notes,
-            follow_up_date: followUp
-          })
-        }
-      );
+function addResultRow(result) {
+  const row = document.createElement("div");
+  row.className = "row";
 
+  const title = document.createElement("strong");
+  title.textContent = result.title || "Result";
+  row.appendChild(title);
 
-    const data =
-      await response.json();
+  if (result.subtitle) {
+    const subtitle = document.createElement("p");
+    subtitle.textContent = result.subtitle;
+    row.appendChild(subtitle);
+  }
 
+  const meta = [];
+  if (result.phone) meta.push(result.phone);
+  if (result.rating !== undefined && result.rating !== null) {
+    meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
+  }
+  if (result.source) meta.push(result.source);
 
-    if (!response.ok) {
+  if (meta.length) {
+    const info = document.createElement("small");
+    info.textContent = meta.join(" | ");
+    row.appendChild(info);
+  }
 
-      throw new Error(
-        data.error ||
-        "Could not save lead"
-      );
+  const linkUrl = result.website || result.url;
+  if (linkUrl) {
+    const link = document.createElement("a");
+    link.href = linkUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Source";
+    row.appendChild(document.createElement("br"));
+    row.appendChild(link);
+  }
 
+  return row;
+}
+
+async function universalSearch() {
+  const mode = document.getElementById("searchMode").value;
+  const query = document.getElementById("searchQuery").value.trim();
+  const location = document.getElementById("searchLocation").value.trim();
+  const status = document.getElementById("searchStatus");
+  const container = document.getElementById("universalResults");
+
+  status.textContent = "Searching...";
+  container.replaceChildren();
+
+  try {
+    const response = await fetch("/api/universal-search", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: mode, query: query, location: location})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Search failed");
+
+    if (!data.configured) {
+      status.textContent = data.message || "This search source is not configured yet.";
+      return;
     }
 
+    status.textContent = data.message || ("Found " + data.count + " result" + (data.count === 1 ? "" : "s") + ".");
+    (data.results || []).forEach(result => container.appendChild(addResultRow(result)));
 
-    document.getElementById(
-      "stage-label-" + leadId
-    ).textContent =
-      data.stage;
-
-
-    status.textContent =
-      "Saved";
-
-
-    setTimeout(
-      () => window.location.reload(),
-      500
-    );
-
-
+    if (!data.results || data.results.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "No results found for that search.";
+      container.appendChild(empty);
+    }
   } catch (error) {
-
-    status.textContent =
-      "Save failed";
-
+    status.textContent = "Search could not be completed: " + error.message;
   }
-
 }
-
-
-async function searchJobs() {
-
-  const keyword =
-    document.getElementById(
-      "keywordInput"
-    ).value ||
-    "machine learning";
-
-
-  const container =
-    document.getElementById(
-      "jobResults"
-    );
-
-
-  container.innerHTML =
-    "<p>Searching...</p>";
-
-
-  try {
-
-    const response =
-      await fetch(
-        "/api/jobs?keyword=" +
-        encodeURIComponent(keyword)
-      );
-
-
-    const data =
-      await response.json();
-
-
-    container.innerHTML =
-      "";
-
-
-    (data.jobs || []).forEach(
-      job => {
-
-        const div =
-          document.createElement(
-            "div"
-          );
-
-
-        div.className =
-          "row";
-
-
-        div.innerHTML =
-
-          "<strong>" +
-          job.title +
-          "</strong>" +
-
-          "<span>" +
-          job.company +
-          "</span>" +
-
-          "<p>" +
-          job.location +
-          " | " +
-          job.source +
-          "</p>" +
-
-          '<a href="' +
-          job.url +
-          '" target="_blank">' +
-          "Open Job" +
-          "</a>";
-
-
-        container.appendChild(
-          div
-        );
-
-      }
-    );
-
-
-  } catch (error) {
-
-    container.innerHTML =
-      "<p>Error loading jobs.</p>";
-
-  }
-
-}
-
 </script>
-
-
 </body>
 </html>
