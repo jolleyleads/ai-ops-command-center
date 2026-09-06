@@ -25,21 +25,9 @@
   </section>
 
   <section class="grid">
-    <div class="card">
-      <h3>Workflows</h3>
-      <strong>{{ workflow_count }}</strong>
-      <p>Saved automations</p>
-    </div>
-    <div class="card">
-      <h3>Engine</h3>
-      <strong>Online</strong>
-      <p>Branching + run history</p>
-    </div>
-    <div class="card">
-      <h3>Qualified Leads</h3>
-      <strong>{{ qualified_leads|length }}</strong>
-      <p>Recent qualified leads</p>
-    </div>
+    <div class="card"><h3>Workflows</h3><strong>{{ workflow_count }}</strong><p>Saved automations</p></div>
+    <div class="card"><h3>Engine</h3><strong>Online</strong><p>Branching + run history</p></div>
+    <div class="card"><h3>Qualified Leads</h3><strong>{{ qualified_leads|length }}</strong><p>Recent qualified leads</p></div>
   </section>
 
   <section class="panel">
@@ -59,30 +47,18 @@
           <strong>Lead #{{ lead.id }}</strong>
           <span id="stage-label-{{ lead.id }}">{{ lead.stage }}</span>
           <p>{{ lead.lead }}</p>
-          <label>
-            Pipeline Stage
+          <label>Pipeline Stage
             <select id="stage-{{ lead.id }}">
               {% for option in ["New","Contacted","Qualified","Proposal Sent","Won","Lost"] %}
                 <option value="{{ option }}" {% if lead.stage == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
             </select>
           </label>
-          <label>
-            Follow-up Date
-            <input type="date" id="follow-up-{{ lead.id }}" value="{{ lead.follow_up_date }}">
-          </label>
-          <label>
-            Notes
-            <textarea id="notes-{{ lead.id }}" rows="3" placeholder="Add notes about calls, pricing, objections, next steps...">{{ lead.notes }}</textarea>
-          </label>
+          <label>Follow-up Date<input type="date" id="follow-up-{{ lead.id }}" value="{{ lead.follow_up_date }}"></label>
+          <label>Notes<textarea id="notes-{{ lead.id }}" rows="3" placeholder="Add notes about calls, pricing, objections, next steps...">{{ lead.notes }}</textarea></label>
           <button onclick="savePipeline({{ lead.id }})">Save Lead</button>
           <span id="save-status-{{ lead.id }}"></span>
-          {% if lead.ai_output %}
-            <details>
-              <summary>View AI qualification</summary>
-              <p style="white-space: pre-wrap;">{{ lead.ai_output }}</p>
-            </details>
-          {% endif %}
+          {% if lead.ai_output %}<details><summary>View AI qualification</summary><p style="white-space: pre-wrap;">{{ lead.ai_output }}</p></details>{% endif %}
           <small>{{ lead.created_at }}</small>
         </div>
       {% endfor %}
@@ -93,26 +69,19 @@
 
   <section class="panel">
     <h2>Universal Intelligence Search</h2>
-    <p>Use one search center for jobs, businesses/contractors, and permit or public-record research.</p>
+    <p>Use one search center for jobs, businesses/contractors, permit research, and evidence-backed electrical permit leads.</p>
 
-    <label>
-      Search Type
+    <label>Search Type
       <select id="searchMode" onchange="updateSearchPlaceholder()">
         <option value="jobs">Jobs</option>
         <option value="businesses">Businesses / Contractors</option>
         <option value="public_records">Permits / Public Records</option>
+        <option value="permit_leads">Electrical Permit Leads</option>
       </select>
     </label>
 
-    <label>
-      What are you looking for?
-      <input id="searchQuery" value="machine learning" placeholder="machine learning">
-    </label>
-
-    <label>
-      Location
-      <input id="searchLocation" placeholder="Portsmouth, VA">
-    </label>
+    <label>What are you looking for?<input id="searchQuery" value="machine learning" placeholder="machine learning"></label>
+    <label>Location<input id="searchLocation" placeholder="Portsmouth, VA"></label>
 
     <button onclick="universalSearch()">Search</button>
     <div id="searchStatus"></div>
@@ -122,11 +91,7 @@
   <section class="panel">
     <h2>Recent Automation Events</h2>
     {% for event in events %}
-      <div class="row">
-        <strong>{{ event.event_type }}</strong>
-        <span>{{ event.status }}</span>
-        <p>{{ event.details }}</p>
-      </div>
+      <div class="row"><strong>{{ event.event_type }}</strong><span>{{ event.status }}</span><p>{{ event.details }}</p></div>
     {% endfor %}
   </section>
 </main>
@@ -138,11 +103,9 @@ async function savePipeline(leadId) {
   const followUp = document.getElementById("follow-up-" + leadId).value;
   const status = document.getElementById("save-status-" + leadId);
   status.textContent = "Saving...";
-
   try {
     const response = await fetch("/api/qualified-leads/" + leadId + "/pipeline", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
+      method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({stage: stage, notes: notes, follow_up_date: followUp})
     });
     const data = await response.json();
@@ -150,9 +113,7 @@ async function savePipeline(leadId) {
     document.getElementById("stage-label-" + leadId).textContent = data.stage;
     status.textContent = "Saved";
     setTimeout(() => window.location.reload(), 500);
-  } catch (error) {
-    status.textContent = "Save failed";
-  }
+  } catch (error) { status.textContent = "Save failed"; }
 }
 
 function updateSearchPlaceholder() {
@@ -162,92 +123,56 @@ function updateSearchPlaceholder() {
 
   if (mode === "jobs") {
     query.placeholder = "automation engineer";
-    if (query.value === "electrical contractors" || query.value === "electrical permits") query.value = "automation engineer";
+    if (["electrical contractors","electrical permits","electrical permit activity"].includes(query.value)) query.value = "automation engineer";
     location.placeholder = "Optional for current remote-job source";
   } else if (mode === "businesses") {
     query.placeholder = "electrical contractors";
-    if (!query.value || query.value === "machine learning" || query.value === "automation engineer") query.value = "electrical contractors";
+    if (!query.value || ["machine learning","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
+    location.placeholder = "Portsmouth, VA";
+  } else if (mode === "permit_leads") {
+    query.placeholder = "electrical permit activity";
+    query.value = "electrical permit activity";
     location.placeholder = "Portsmouth, VA";
   } else {
     query.placeholder = "electrical permits";
-    if (!query.value || query.value === "machine learning" || query.value === "automation engineer" || query.value === "electrical contractors") query.value = "electrical permits";
+    if (!query.value || ["machine learning","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
     location.placeholder = "Portsmouth, VA";
   }
 }
 
 function addResultRow(result) {
-  const row = document.createElement("div");
-  row.className = "row";
-
-  const title = document.createElement("strong");
-  title.textContent = result.title || "Result";
-  row.appendChild(title);
-
-  if (result.subtitle) {
-    const subtitle = document.createElement("p");
-    subtitle.textContent = result.subtitle;
-    row.appendChild(subtitle);
-  }
-
+  const row = document.createElement("div"); row.className = "row";
+  const title = document.createElement("strong"); title.textContent = result.title || "Result"; row.appendChild(title);
+  if (result.subtitle) { const subtitle = document.createElement("p"); subtitle.textContent = result.subtitle; row.appendChild(subtitle); }
   const meta = [];
   if (result.phone) meta.push(result.phone);
-  if (result.rating !== undefined && result.rating !== null) {
-    meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
-  }
-  if (result.prospect_score !== undefined && result.prospect_score !== null) {
-    meta.push("Prospect score " + result.prospect_score + "/100");
-  }
+  if (result.rating !== undefined && result.rating !== null) meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
+  if (result.prospect_score !== undefined && result.prospect_score !== null) meta.push("Prospect score " + result.prospect_score + "/100");
   if (result.fit) meta.push("Fit " + result.fit);
+  if (result.lead_signal) meta.push(result.lead_signal);
   if (result.saved_to_pipeline) meta.push("Saved to Qualified pipeline");
   if (result.source) meta.push(result.source);
-
-  if (meta.length) {
-    const info = document.createElement("small");
-    info.textContent = meta.join(" | ");
-    row.appendChild(info);
-  }
-
-  if (result.analysis) {
-    const analysis = document.createElement("p");
-    analysis.textContent = result.analysis;
-    row.appendChild(analysis);
-  }
-
-  if (result.automation_opportunity) {
-    const opportunity = document.createElement("p");
-    opportunity.textContent = result.automation_opportunity;
-    row.appendChild(opportunity);
-  }
-
+  if (meta.length) { const info = document.createElement("small"); info.textContent = meta.join(" | "); row.appendChild(info); }
+  if (result.analysis) { const analysis = document.createElement("p"); analysis.textContent = result.analysis; row.appendChild(analysis); }
+  if (result.automation_opportunity) { const opportunity = document.createElement("p"); opportunity.textContent = result.automation_opportunity; row.appendChild(opportunity); }
   const linkUrl = result.website || result.url;
   if (linkUrl) {
-    const link = document.createElement("a");
-    link.href = linkUrl;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Source";
-    row.appendChild(document.createElement("br"));
-    row.appendChild(link);
+    const link = document.createElement("a"); link.href = linkUrl; link.target = "_blank"; link.rel = "noopener noreferrer";
+    link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Evidence";
+    row.appendChild(document.createElement("br")); row.appendChild(link);
   }
-
   return row;
 }
 
 async function analyzeAndStageProspects(results, query, location) {
   const response = await fetch("/api/prospect-intake", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
+    method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({results: results, query: query, location: location})
   });
-
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Prospect analysis failed");
-
   const byId = new Map((data.results || []).map(item => [item.id, item]));
-  return {
-    summary: data,
-    results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))
-  };
+  return {summary: data, results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))};
 }
 
 async function universalSearch() {
@@ -256,36 +181,26 @@ async function universalSearch() {
   const location = document.getElementById("searchLocation").value.trim();
   const status = document.getElementById("searchStatus");
   const container = document.getElementById("universalResults");
-
-  status.textContent = "Searching...";
+  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : "Searching...";
   container.replaceChildren();
 
   try {
-    const response = await fetch("/api/universal-search", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
+    const endpoint = mode === "permit_leads" ? "/api/permit-leads" : "/api/universal-search";
+    const response = await fetch(endpoint, {
+      method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({mode: mode, query: query, location: location})
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Search failed");
-
-    if (!data.configured) {
-      status.textContent = data.message || "This search source is not configured yet.";
-      return;
-    }
+    if (!data.configured) { status.textContent = data.message || "This search source is not configured yet."; return; }
 
     let displayResults = data.results || [];
-
     if (mode === "businesses" && displayResults.length > 0) {
       status.textContent = "Found " + displayResults.length + " businesses. Analyzing and staging qualified prospects...";
       try {
         const prospectData = await analyzeAndStageProspects(displayResults, query, location);
         displayResults = prospectData.results;
-        status.textContent = (
-          "Found " + displayResults.length + " businesses. " +
-          "Analyzed " + prospectData.summary.analyzed + "; " +
-          prospectData.summary.qualified + " qualified and staged. No outreach sent."
-        );
+        status.textContent = "Found " + displayResults.length + " businesses. Analyzed " + prospectData.summary.analyzed + "; " + prospectData.summary.qualified + " qualified and staged. No outreach sent.";
       } catch (prospectError) {
         status.textContent = "Found " + displayResults.length + " businesses, but prospect analysis could not complete: " + prospectError.message;
       }
@@ -294,15 +209,8 @@ async function universalSearch() {
     }
 
     displayResults.forEach(result => container.appendChild(addResultRow(result)));
-
-    if (displayResults.length === 0) {
-      const empty = document.createElement("p");
-      empty.textContent = "No results found for that search.";
-      container.appendChild(empty);
-    }
-  } catch (error) {
-    status.textContent = "Search could not be completed: " + error.message;
-  }
+    if (displayResults.length === 0) { const empty = document.createElement("p"); empty.textContent = "No evidence-backed results found for that search."; container.appendChild(empty); }
+  } catch (error) { status.textContent = "Search could not be completed: " + error.message; }
 }
 </script>
 </body>
