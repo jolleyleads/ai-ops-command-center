@@ -150,10 +150,67 @@ def _normalize_web_search_results(payload):
     return results
 
 
+def _normalize_brave_search_results(payload):
+    results = []
+    for item in (payload.get("web") or {}).get("results", []):
+        results.append(
+            {
+                "type": "public_record",
+                "title": item.get("title") or "Search result",
+                "subtitle": item.get("description") or "",
+                "url": item.get("url") or "",
+                "source": item.get("profile", {}).get("long_name")
+                or item.get("profile", {}).get("name")
+                or "Brave Search",
+            }
+        )
+    return results
+
+
 def _search_public_records(query, location=""):
+    text_query = " ".join(part for part in [query, location] if part).strip()
+    if not text_query:
+        return {
+            "configured": True,
+            "source": "Public Record Search",
+            "message": "Enter a permit or public-record search.",
+            "results": [],
+        }
+
+    brave_api_key = os.environ.get("BRAVE_SEARCH_API_KEY") or ""
+    if brave_api_key:
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": brave_api_key,
+            },
+            params={
+                "q": text_query,
+                "country": "US",
+                "search_lang": "en",
+                "count": 20,
+            },
+            timeout=20,
+        )
+
+        if response.ok:
+            return {
+                "configured": True,
+                "source": "Brave Search",
+                "message": "",
+                "results": _normalize_brave_search_results(response.json()),
+            }
+
+        return {
+            "configured": True,
+            "source": "Brave Search",
+            "message": f"Brave Search returned HTTP {response.status_code}.",
+            "results": [],
+        }
+
     custom_api_key = os.environ.get("GOOGLE_SEARCH_API_KEY") or ""
     search_engine_id = os.environ.get("GOOGLE_SEARCH_CX") or ""
-
     web_api_key = (
         os.environ.get("GOOGLE_WEB_SEARCH_API_KEY")
         or os.environ.get("GOOGLE_SEARCH_API_KEY")
@@ -161,29 +218,8 @@ def _search_public_records(query, location=""):
     )
     web_client_id = os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID") or ""
 
-    custom_configured = bool(custom_api_key and search_engine_id)
     web_configured = bool(web_api_key and web_client_id)
-
-    if not custom_configured and not web_configured:
-        return {
-            "configured": False,
-            "source": "Google Search",
-            "message": (
-                "Permit/public-record search is not configured. "
-                "Set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX for Programmable Search, "
-                "or GOOGLE_WEB_SEARCH_API_KEY and GOOGLE_WEB_SEARCH_CLIENT_ID for Google's Web Search Service."
-            ),
-            "results": [],
-        }
-
-    text_query = " ".join(part for part in [query, location] if part).strip()
-    if not text_query:
-        return {
-            "configured": True,
-            "source": "Google Search",
-            "message": "Enter a permit or public-record search.",
-            "results": [],
-        }
+    custom_configured = bool(custom_api_key and search_engine_id)
 
     if web_configured:
         user_ip = _request_ip()
@@ -230,28 +266,30 @@ def _search_public_records(query, location=""):
             "results": [],
         }
 
-    response = requests.get(
-        "https://www.googleapis.com/customsearch/v1",
-        params={
-            "key": custom_api_key,
-            "cx": search_engine_id,
-            "q": text_query,
-            "num": 10,
-        },
-        timeout=20,
-    )
+    if custom_configured:
+        response = requests.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={
+                "key": custom_api_key,
+                "cx": search_engine_id,
+                "q": text_query,
+                "num": 10,
+            },
+            timeout=20,
+        )
 
-    if not response.ok:
+        if response.ok:
+            return {
+                "configured": True,
+                "source": "Google Programmable Search",
+                "message": "",
+                "results": _normalize_custom_search_results(response.json()),
+            }
+
         error_detail = _google_error_message(response)
         message = f"Google Programmable Search returned HTTP {response.status_code}."
         if error_detail:
             message += f" {error_detail}"
-        if response.status_code == 403:
-            message += (
-                " The app is configured, but Google denied this request. "
-                "Check the API key's Custom Search API restriction, project/API enablement, billing/quota, "
-                "or migrate this search to Google's Web Search Service with GOOGLE_WEB_SEARCH_CLIENT_ID."
-            )
         return {
             "configured": True,
             "source": "Google Programmable Search",
@@ -260,10 +298,13 @@ def _search_public_records(query, location=""):
         }
 
     return {
-        "configured": True,
-        "source": "Google Programmable Search",
-        "message": "",
-        "results": _normalize_custom_search_results(response.json()),
+        "configured": False,
+        "source": "Brave Search",
+        "message": (
+            "Permit/public-record search is ready for Brave Search. "
+            "Set BRAVE_SEARCH_API_KEY on Render to activate it."
+        ),
+        "results": [],
     }
 
 
@@ -291,6 +332,7 @@ def _normalize_jobs(keyword):
 
 @app.route("/api/universal-search/capabilities")
 def universal_search_capabilities():
+    brave_search = bool(os.environ.get("BRAVE_SEARCH_API_KEY"))
     custom_search = bool(
         os.environ.get("GOOGLE_SEARCH_API_KEY")
         and os.environ.get("GOOGLE_SEARCH_CX")
@@ -300,6 +342,13 @@ def universal_search_capabilities():
         and os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID")
     )
 
+    if brave_search:
+        public_source = "Brave Search"
+    elif web_search:
+        public_source = "Google Web Search Service"
+    else:
+        public_source = "Google Programmable Search"
+
     return jsonify(
         {
             "jobs": {"configured": True, "source": "Remotive"},
@@ -308,12 +357,8 @@ def universal_search_capabilities():
                 "source": "Google Places",
             },
             "public_records": {
-                "configured": custom_search or web_search,
-                "source": (
-                    "Google Web Search Service"
-                    if web_search
-                    else "Google Programmable Search"
-                ),
+                "configured": brave_search or custom_search or web_search,
+                "source": public_source,
             },
         }
     )
