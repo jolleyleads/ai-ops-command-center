@@ -12,18 +12,28 @@ def _clean(value, limit=300):
 
 
 def _location_parts(location):
-    parts = [part.strip().lower() for part in str(location or "").split(",") if part.strip()]
-    city = parts[0] if parts else ""
-    state = parts[1] if len(parts) > 1 else ""
-    return city, state
+    raw = _clean(location, 200)
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    if len(parts) == 1:
+        return parts[0], ""
+    return "", ""
+
+
+def _location_terms(location):
+    raw = _clean(location, 200).lower()
+    terms = [part.strip() for part in raw.split(",") if part.strip()]
+    return terms
 
 
 def _strict_location_matches(title, snippet, location):
-    city, _state = _location_parts(location)
-    if not city:
+    terms = _location_terms(location)
+    if not terms:
         return True
     text = f"{title} {snippet}".lower()
-    return city in text
+    primary = terms[0]
+    return primary in text
 
 
 def _extract_contractor_name(title, snippet):
@@ -104,16 +114,23 @@ def _enrich_contractor(contractor_name, location):
 @app.route("/api/permit-leads", methods=["POST"])
 def permit_leads():
     data = request.get_json(silent=True) or {}
-    location = _clean(data.get("location") or "Portsmouth, VA", 200)
+    location = _clean(data.get("location") or "", 200)
     user_query = _clean(data.get("query") or "electrical permit activity", 200)
-    year = datetime.now(timezone.utc).year
 
-    city, state = _location_parts(location)
-    location_phrase = ", ".join(part for part in [city.title(), state.upper()] if part)
+    if not location:
+        return jsonify({
+            "configured": True,
+            "message": "Enter a city, state, or city/state in Location.",
+            "results": [],
+        })
+
+    year = datetime.now(timezone.utc).year
+    city_or_state, state = _location_parts(location)
+    location_phrase = ", ".join(part for part in [city_or_state, state] if part)
 
     targeted_queries = [
         f'"{location_phrase}" "electrical permit" contractor applicant submitted pending issued {year}',
-        f'"{city.title()}" "electrical permits" contractor applicant application issued {year}',
+        f'"{location_phrase}" "electrical permits" contractor applicant application issued {year}',
     ]
 
     seen = set()
@@ -175,8 +192,8 @@ def permit_leads():
                 "source": item.get("source") or source_name,
                 "prospect_score": score,
                 "fit": "High" if score >= 80 else "Medium" if score >= 65 else "Low",
-                "lead_signal": "Named contractor/applicant in Portsmouth electrical-permit activity",
-                "analysis": "Qualified only because the public search result names a contractor/applicant and explicitly matches Portsmouth electrical-permit activity.",
+                "lead_signal": f"Named contractor/applicant in {location} electrical-permit activity",
+                "analysis": f"Qualified only because the public search result names a contractor/applicant and explicitly matches {location} electrical-permit activity.",
                 "phone": enrichment.get("phone") or "",
                 "website": enrichment.get("website") or "",
                 "rating": enrichment.get("rating"),
@@ -194,8 +211,9 @@ def permit_leads():
         "source": source_name,
         "count": len(results),
         "message": (
-            f"Found {len(results)} named Portsmouth electrical permit contractor lead"
-            + ("." if len(results) == 1 else "s.")
+            f"Found {len(results)} named electrical permit contractor lead"
+            + ("" if len(results) == 1 else "s")
+            + f" matching {location}."
         ),
         "results": results,
     })
