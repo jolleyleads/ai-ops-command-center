@@ -177,38 +177,6 @@ def _search_public_records(query, location=""):
             "results": [],
         }
 
-    brave_api_key = os.environ.get("BRAVE_SEARCH_API_KEY") or ""
-    if brave_api_key:
-        response = requests.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            headers={
-                "Accept": "application/json",
-                "X-Subscription-Token": brave_api_key,
-            },
-            params={
-                "q": text_query,
-                "country": "US",
-                "search_lang": "en",
-                "count": 20,
-            },
-            timeout=20,
-        )
-
-        if response.ok:
-            return {
-                "configured": True,
-                "source": "Brave Search",
-                "message": "",
-                "results": _normalize_brave_search_results(response.json()),
-            }
-
-        return {
-            "configured": True,
-            "source": "Brave Search",
-            "message": f"Brave Search returned HTTP {response.status_code}.",
-            "results": [],
-        }
-
     custom_api_key = os.environ.get("GOOGLE_SEARCH_API_KEY") or ""
     search_engine_id = os.environ.get("GOOGLE_SEARCH_CX") or ""
     web_api_key = (
@@ -217,10 +185,12 @@ def _search_public_records(query, location=""):
         or ""
     )
     web_client_id = os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID") or ""
+    brave_api_key = os.environ.get("BRAVE_SEARCH_API_KEY") or ""
 
     web_configured = bool(web_api_key and web_client_id)
     custom_configured = bool(custom_api_key and search_engine_id)
 
+    # Prefer Google's configured search services. Brave remains a fallback only.
     if web_configured:
         user_ip = _request_ip()
         if not user_ip:
@@ -297,12 +267,43 @@ def _search_public_records(query, location=""):
             "results": [],
         }
 
+    if brave_api_key:
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": brave_api_key,
+            },
+            params={
+                "q": text_query,
+                "country": "US",
+                "search_lang": "en",
+                "count": 20,
+            },
+            timeout=20,
+        )
+
+        if response.ok:
+            return {
+                "configured": True,
+                "source": "Brave Search",
+                "message": "",
+                "results": _normalize_brave_search_results(response.json()),
+            }
+
+        return {
+            "configured": True,
+            "source": "Brave Search",
+            "message": f"Brave Search returned HTTP {response.status_code}.",
+            "results": [],
+        }
+
     return {
         "configured": False,
-        "source": "Brave Search",
+        "source": "Google Programmable Search",
         "message": (
-            "Permit/public-record search is ready for Brave Search. "
-            "Set BRAVE_SEARCH_API_KEY on Render to activate it."
+            "Permit/public-record search is ready for Google Programmable Search. "
+            "Set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX on Render to activate it."
         ),
         "results": [],
     }
@@ -342,10 +343,12 @@ def universal_search_capabilities():
         and os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID")
     )
 
-    if brave_search:
-        public_source = "Brave Search"
-    elif web_search:
+    if web_search:
         public_source = "Google Web Search Service"
+    elif custom_search:
+        public_source = "Google Programmable Search"
+    elif brave_search:
+        public_source = "Brave Search"
     else:
         public_source = "Google Programmable Search"
 
