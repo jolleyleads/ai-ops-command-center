@@ -80,7 +80,7 @@
       </select>
     </label>
 
-    <label>What are you looking for?<input id="searchQuery" value="machine learning" placeholder="machine learning"></label>
+    <label>What are you looking for?<input id="searchQuery" value="machine operator" placeholder="machine operator"></label>
     <label>Location<input id="searchLocation" placeholder="Portsmouth, VA"></label>
 
     <button onclick="universalSearch()">Search</button>
@@ -122,12 +122,12 @@ function updateSearchPlaceholder() {
   const location = document.getElementById("searchLocation");
 
   if (mode === "jobs") {
-    query.placeholder = "automation engineer";
-    if (["electrical contractors","electrical permits","electrical permit activity"].includes(query.value)) query.value = "automation engineer";
-    location.placeholder = "Optional for current remote-job source";
+    query.placeholder = "machine operator";
+    if (["electrical contractors","electrical permits","electrical permit activity","machine learning","automation engineer"].includes(query.value)) query.value = "machine operator";
+    location.placeholder = "Portsmouth, VA";
   } else if (mode === "businesses") {
     query.placeholder = "electrical contractors";
-    if (!query.value || ["machine learning","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
+    if (!query.value || ["machine learning","machine operator","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
     location.placeholder = "Portsmouth, VA";
   } else if (mode === "permit_leads") {
     query.placeholder = "electrical permit activity";
@@ -135,7 +135,7 @@ function updateSearchPlaceholder() {
     location.placeholder = "Portsmouth, VA";
   } else {
     query.placeholder = "electrical permits";
-    if (!query.value || ["machine learning","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
+    if (!query.value || ["machine learning","machine operator","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
     location.placeholder = "Portsmouth, VA";
   }
 }
@@ -227,17 +227,17 @@ async function universalSearch() {
   const location = document.getElementById("searchLocation").value.trim();
   const status = document.getElementById("searchStatus");
   const container = document.getElementById("universalResults");
-  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : "Searching...";
+  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : mode === "jobs" ? "Searching current local job listings..." : "Searching...";
   container.replaceChildren();
 
   try {
-    const endpoint = mode === "permit_leads" ? "/api/permit-leads" : "/api/universal-search";
+    const endpoint = mode === "permit_leads" ? "/api/permit-leads" : mode === "jobs" ? "/api/local-jobs" : "/api/universal-search";
     const response = await fetch(endpoint, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({mode: mode, query: query, location: location})
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Search failed");
+    if (!response.ok) throw new Error(data.error || data.message || "Search failed");
     if (!data.configured) { status.textContent = data.message || "This search source is not configured yet."; return; }
 
     let displayResults = data.results || [];
@@ -255,7 +255,7 @@ async function universalSearch() {
     }
 
     displayResults.forEach(result => container.appendChild(addResultRow(result)));
-    if (displayResults.length === 0) { const empty = document.createElement("p"); empty.textContent = "No evidence-backed results found for that search."; container.appendChild(empty); }
+    if (displayResults.length === 0) { const empty = document.createElement("p"); empty.textContent = "No accurate current results found for that exact search and location."; container.appendChild(empty); }
   } catch (error) { status.textContent = "Search could not be completed: " + error.message; }
 }
 </script>
