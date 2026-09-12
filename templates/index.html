@@ -140,10 +140,47 @@ function updateSearchPlaceholder() {
   }
 }
 
+async function savePermitLead(result, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Saving...";
+  try {
+    const response = await fetch("/api/permit-leads/save", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({result: result})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not save permit lead");
+    result.saved_to_pipeline = true;
+    result.qualified_lead_id = data.qualified_lead_id;
+    button.textContent = "Saved to Qualified";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    alert(error.message);
+  }
+}
+
 function addResultRow(result) {
   const row = document.createElement("div"); row.className = "row";
   const title = document.createElement("strong"); title.textContent = result.title || "Result"; row.appendChild(title);
   if (result.subtitle) { const subtitle = document.createElement("p"); subtitle.textContent = result.subtitle; row.appendChild(subtitle); }
+
+  if (result.type === "permit_lead") {
+    const details = [];
+    if (result.permit_number) details.push("Permit: " + result.permit_number);
+    if (result.permit_date) details.push("Date: " + result.permit_date);
+    if (result.project_address) details.push("Project address: " + result.project_address);
+    if (result.project_type) details.push("Project type: " + result.project_type);
+    if (result.owner_name) details.push("Owner: " + result.owner_name);
+    if (details.length) {
+      const detailBox = document.createElement("p");
+      detailBox.textContent = details.join(" | ");
+      row.appendChild(detailBox);
+    }
+  }
+
   const meta = [];
   if (result.phone) meta.push(result.phone);
   if (result.rating !== undefined && result.rating !== null) meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
@@ -160,6 +197,15 @@ function addResultRow(result) {
     const link = document.createElement("a"); link.href = linkUrl; link.target = "_blank"; link.rel = "noopener noreferrer";
     link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Evidence";
     row.appendChild(document.createElement("br")); row.appendChild(link);
+  }
+
+  if (result.type === "permit_lead") {
+    row.appendChild(document.createElement("br"));
+    const saveButton = document.createElement("button");
+    saveButton.textContent = result.saved_to_pipeline ? "Saved to Qualified" : "Save Qualified Lead";
+    saveButton.disabled = !!result.saved_to_pipeline;
+    saveButton.onclick = () => savePermitLead(result, saveButton);
+    row.appendChild(saveButton);
   }
   return row;
 }
