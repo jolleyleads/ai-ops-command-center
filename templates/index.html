@@ -162,6 +162,19 @@ async function savePermitLead(result, button) {
   }
 }
 
+function safeHttpUrl(value) {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  if (!/^https?:\/\//i.test(text)) return "";
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.href;
+  } catch (_) {
+    return "";
+  }
+}
+
 function addResultRow(result) {
   const row = document.createElement("div"); row.className = "row";
   const title = document.createElement("strong"); title.textContent = result.title || "Result"; row.appendChild(title);
@@ -192,9 +205,13 @@ function addResultRow(result) {
   if (meta.length) { const info = document.createElement("small"); info.textContent = meta.join(" | "); row.appendChild(info); }
   if (result.analysis) { const analysis = document.createElement("p"); analysis.textContent = result.analysis; row.appendChild(analysis); }
   if (result.automation_opportunity) { const opportunity = document.createElement("p"); opportunity.textContent = result.automation_opportunity; row.appendChild(opportunity); }
-  const linkUrl = result.website || result.url;
+
+  const linkUrl = safeHttpUrl(result.website || result.url || "");
   if (linkUrl) {
-    const link = document.createElement("a"); link.href = linkUrl; link.target = "_blank"; link.rel = "noopener noreferrer";
+    const link = document.createElement("a");
+    link.setAttribute("href", linkUrl);
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener noreferrer");
     link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Evidence";
     row.appendChild(document.createElement("br")); row.appendChild(link);
   }
@@ -228,35 +245,58 @@ async function universalSearch() {
   const status = document.getElementById("searchStatus");
   const container = document.getElementById("universalResults");
   status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : mode === "jobs" ? "Searching current local AI/engineering job listings..." : "Searching...";
-  container.replaceChildren();
+  while (container.firstChild) container.removeChild(container.firstChild);
 
+  let data;
   try {
     const endpoint = mode === "permit_leads" ? "/api/permit-leads" : mode === "jobs" ? "/api/local-jobs" : "/api/universal-search";
     const response = await fetch(endpoint, {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({mode: mode, query: query, location: location})
     });
-    const data = await response.json();
+    data = await response.json();
     if (!response.ok) throw new Error(data.error || data.message || "Search failed");
-    if (!data.configured) { status.textContent = data.message || "This search source is not configured yet."; return; }
+  } catch (error) {
+    status.textContent = "Search request failed: " + (error && error.message ? error.message : "Unknown request error");
+    return;
+  }
 
-    let displayResults = data.results || [];
-    if (mode === "businesses" && displayResults.length > 0) {
-      status.textContent = "Found " + displayResults.length + " businesses. Analyzing and staging qualified prospects...";
-      try {
-        const prospectData = await analyzeAndStageProspects(displayResults, query, location);
-        displayResults = prospectData.results;
-        status.textContent = "Found " + displayResults.length + " businesses. Analyzed " + prospectData.summary.analyzed + "; " + prospectData.summary.qualified + " qualified and staged. No outreach sent.";
-      } catch (prospectError) {
-        status.textContent = "Found " + displayResults.length + " businesses, but prospect analysis could not complete: " + prospectError.message;
-      }
-    } else {
-      status.textContent = data.message || ("Found " + data.count + " result" + (data.count === 1 ? "" : "s") + ".");
+  if (!data.configured) {
+    status.textContent = data.message || "This search source is not configured yet.";
+    return;
+  }
+
+  let displayResults = Array.isArray(data.results) ? data.results : [];
+  if (mode === "businesses" && displayResults.length > 0) {
+    status.textContent = "Found " + displayResults.length + " businesses. Analyzing and staging qualified prospects...";
+    try {
+      const prospectData = await analyzeAndStageProspects(displayResults, query, location);
+      displayResults = prospectData.results;
+      status.textContent = "Found " + displayResults.length + " businesses. Analyzed " + prospectData.summary.analyzed + "; " + prospectData.summary.qualified + " qualified and staged. No outreach sent.";
+    } catch (prospectError) {
+      status.textContent = "Found " + displayResults.length + " businesses, but prospect analysis could not complete: " + prospectError.message;
     }
+  } else {
+    status.textContent = data.message || ("Found " + (data.count || displayResults.length) + " result" + ((data.count || displayResults.length) === 1 ? "" : "s") + ".");
+  }
 
-    displayResults.forEach(result => container.appendChild(addResultRow(result)));
-    if (displayResults.length === 0) { const empty = document.createElement("p"); empty.textContent = "No accurate current results found for that exact search and location."; container.appendChild(empty); }
-  } catch (error) { status.textContent = "Search could not be completed: " + error.message; }
+  displayResults.forEach(result => {
+    try {
+      container.appendChild(addResultRow(result));
+    } catch (_) {
+      const fallback = document.createElement("div");
+      fallback.className = "row";
+      fallback.textContent = (result && result.title) ? result.title : "Job result";
+      container.appendChild(fallback);
+    }
+  });
+
+  if (displayResults.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "No accurate current results found for that exact search and location.";
+    container.appendChild(empty);
+  }
 }
 </script>
 </body>
