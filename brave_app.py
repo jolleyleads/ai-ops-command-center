@@ -72,3 +72,4 @@ import prospect_engine  # noqa: E402,F401
 import places_diagnostic  # noqa: E402,F401
 import permit_leads  # noqa: E402,F401
 import verified_job_signals  # noqa: E402,F401
+import local_jobs  # noqa: E402,F401
