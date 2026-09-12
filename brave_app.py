@@ -64,6 +64,11 @@ def _brave_public_records(query, location=""):
     }
 
 
-# Keep the existing app and routes intact; only replace the public-record
-# provider used by universal_app.universal_search at request time.
+# Keep the existing application intact and replace only the public-record
+# provider before loading extension routes that depend on it.
 universal._search_public_records = _brave_public_records
+
+import prospect_engine  # noqa: E402,F401
+import places_diagnostic  # noqa: E402,F401
+import permit_leads  # noqa: E402,F401
+import verified_job_signals  # noqa: E402,F401
