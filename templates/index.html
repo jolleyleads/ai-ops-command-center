@@ -80,7 +80,7 @@
       </select>
     </label>
 
-    <label>What are you looking for?<input id="searchQuery" value="machine operator" placeholder="machine operator"></label>
+    <label>What are you looking for?<input id="searchQuery" value="machine learning engineer" placeholder="machine learning engineer"></label>
     <label>Location<input id="searchLocation" placeholder="Portsmouth, VA"></label>
 
     <button onclick="universalSearch()">Search</button>
@@ -122,12 +122,12 @@ function updateSearchPlaceholder() {
   const location = document.getElementById("searchLocation");
 
   if (mode === "jobs") {
-    query.placeholder = "machine operator";
-    if (["electrical contractors","electrical permits","electrical permit activity","machine learning","automation engineer"].includes(query.value)) query.value = "machine operator";
+    query.placeholder = "machine learning engineer";
+    if (["electrical contractors","electrical permits","electrical permit activity"].includes(query.value)) query.value = "machine learning engineer";
     location.placeholder = "Portsmouth, VA";
   } else if (mode === "businesses") {
     query.placeholder = "electrical contractors";
-    if (!query.value || ["machine learning","machine operator","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
+    if (!query.value || ["machine learning engineer","artificial intelligence engineer","AI engineer","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
     location.placeholder = "Portsmouth, VA";
   } else if (mode === "permit_leads") {
     query.placeholder = "electrical permit activity";
@@ -135,7 +135,7 @@ function updateSearchPlaceholder() {
     location.placeholder = "Portsmouth, VA";
   } else {
     query.placeholder = "electrical permits";
-    if (!query.value || ["machine learning","machine operator","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
+    if (!query.value || ["machine learning engineer","artificial intelligence engineer","AI engineer","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
     location.placeholder = "Portsmouth, VA";
   }
 }
@@ -227,7 +227,7 @@ async function universalSearch() {
   const location = document.getElementById("searchLocation").value.trim();
   const status = document.getElementById("searchStatus");
   const container = document.getElementById("universalResults");
-  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : mode === "jobs" ? "Searching current local job listings..." : "Searching...";
+  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : mode === "jobs" ? "Searching current local AI/engineering job listings..." : "Searching...";
   container.replaceChildren();
 
   try {
