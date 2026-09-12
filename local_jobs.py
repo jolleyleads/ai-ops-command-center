@@ -27,8 +27,14 @@ def _tokens(value):
 
 
 def _location_parts(location):
-    parts = [part.strip().lower() for part in _clean(location, 200).split(",") if part.strip()]
-    return parts
+    raw = _clean(location, 200).lower()
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if "," in raw:
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    words = raw.split()
+    if len(words) >= 2 and words[-1] in {"va", "virginia", "nc", "maryland", "md"}:
+        return [" ".join(words[:-1]), words[-1]]
+    return [raw] if raw else []
 
 
 def _location_matches(text, location):
@@ -56,7 +62,6 @@ def _role_matches(title, snippet, query):
     if not role_tokens:
         return False
     text = f"{title} {snippet}".lower()
-    # Require every meaningful requested term to appear somewhere in the result.
     return all(token in text for token in role_tokens)
 
 
@@ -86,15 +91,18 @@ def _search_brave_jobs(query, location):
     if not api_key:
         return {"configured": False, "message": "BRAVE_SEARCH_API_KEY is missing.", "results": []}
 
+    # Keep Brave queries deliberately simple. Complex Google-style patterns can
+    # be rejected by Brave with a query-pattern validation error.
     search_queries = [
-        f'site:indeed.com/viewjob "{query}" "{location}"',
-        f'site:ziprecruiter.com/jobs "{query}" "{location}"',
-        f'site:linkedin.com/jobs/view "{query}" "{location}"',
-        f'"{query}" "{location}" ("apply" OR "careers") -course -school -training',
+        f'"{query}" "{location}" Indeed',
+        f'"{query}" "{location}" ZipRecruiter',
+        f'"{query}" "{location}" LinkedIn jobs',
+        f'"{query}" "{location}" jobs careers apply',
     ]
 
     seen = set()
     results = []
+    upstream_errors = []
 
     for search_query in search_queries:
         try:
@@ -110,16 +118,19 @@ def _search_brave_jobs(query, location):
                 },
                 timeout=20,
             )
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            upstream_errors.append(type(exc).__name__)
             continue
 
         if not response.ok:
+            upstream_errors.append(f"HTTP {response.status_code}")
             continue
 
         try:
             rows = (response.json().get("web") or {}).get("results") or []
         except ValueError:
-            rows = []
+            upstream_errors.append("Invalid JSON")
+            continue
 
         for item in rows:
             title = _clean(item.get("title"), 300)
@@ -145,8 +156,17 @@ def _search_brave_jobs(query, location):
                 "url": url,
                 "source": _source_name(url),
                 "status": "Current indexed result",
-                "analysis": "Matched the requested job terms and exact city/state in a result indexed within the past month. Open the source to confirm the posting is still accepting applications.",
+                "analysis": "Matched the requested job terms and requested city/state in a result indexed within the past month. Open the source to confirm the posting is still accepting applications.",
             })
+
+    if not results and len(upstream_errors) == len(search_queries):
+        return {
+            "configured": True,
+            "source": "Brave Search",
+            "message": "The live job source could not complete this search. Try again in a moment.",
+            "count": 0,
+            "results": [],
+        }
 
     return {
         "configured": True,
