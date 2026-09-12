@@ -238,6 +238,45 @@ async function analyzeAndStageProspects(results, query, location) {
   return {summary: data, results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))};
 }
 
+function postSearchJson(endpoint, payload) {
+  return new Promise((resolve, reject) => {
+    let xhr;
+    try {
+      xhr = new XMLHttpRequest();
+      xhr.open("POST", endpoint, true);
+      xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    xhr.timeout = 45000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      let data = {};
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+      } catch (_) {
+        reject(new Error("Server returned an unreadable response (HTTP " + xhr.status + ")."));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(data.error || data.message || ("Search failed with HTTP " + xhr.status)));
+        return;
+      }
+      resolve(data);
+    };
+    xhr.onerror = function () { reject(new Error("Network request failed.")); };
+    xhr.ontimeout = function () { reject(new Error("Search timed out.")); };
+
+    try {
+      xhr.send(JSON.stringify(payload));
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 async function universalSearch() {
   const mode = document.getElementById("searchMode").value;
   const query = document.getElementById("searchQuery").value.trim();
@@ -250,13 +289,7 @@ async function universalSearch() {
   let data;
   try {
     const endpoint = mode === "permit_leads" ? "/api/permit-leads" : mode === "jobs" ? "/api/local-jobs" : "/api/universal-search";
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({mode: mode, query: query, location: location})
-    });
-    data = await response.json();
-    if (!response.ok) throw new Error(data.error || data.message || "Search failed");
+    data = await postSearchJson(endpoint, {mode: mode, query: query, location: location});
   } catch (error) {
     status.textContent = "Search request failed: " + (error && error.message ? error.message : "Unknown request error");
     return;
