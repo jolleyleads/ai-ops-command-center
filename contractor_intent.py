@@ -193,4 +193,34 @@ def universal_search_with_contractor_intent():
     return jsonify(payload)
 
 
+@app.route("/api/test-contractor-intent", methods=["GET"])
+def test_contractor_intent():
+    query = _clean(request.args.get("query") or "electrical contractors", 300)
+    location = _clean(request.args.get("location") or "Virginia Beach, VA", 200)
+    payload = _contractor_intent_search(query, location)
+    results = payload.get("results") or []
+    summary = {
+        "diagnostic": True,
+        "configured": bool(payload.get("configured")),
+        "source": payload.get("source"),
+        "query": query,
+        "location": location,
+        "candidates_checked": payload.get("candidates_checked", 0),
+        "verified_count": len(results),
+        "verification_threshold": payload.get("verification_threshold", 60),
+        "message": payload.get("message"),
+        "results": results,
+    }
+    app.logger.warning(
+        "CONTRACTOR_INTENT_DIAGNOSTIC configured=%s candidates=%s verified=%s query=%r location=%r message=%r",
+        summary["configured"],
+        summary["candidates_checked"],
+        summary["verified_count"],
+        query,
+        location,
+        _clean(summary.get("message"), 700).replace("\n", " ").replace("\r", " "),
+    )
+    return jsonify(summary)
+
+
 app.view_functions["universal_search"] = universal_search_with_contractor_intent
