@@ -9,7 +9,7 @@ jobs:
   smoke-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Run live smart-search tests
+      - name: Run live Smart Search end-to-end tests
         shell: bash
         run: |
           set -euo pipefail
@@ -18,22 +18,49 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          base = "https://ai-ops-command-center.onrender.com/api/test-smart-search"
+          origin = "https://ai-ops-command-center.onrender.com"
+          api = origin + "/api/test-smart-search"
+          failed = False
+
+          def get_text(url, timeout=120):
+              request = urllib.request.Request(url, headers={"User-Agent": "AI-Ops-Smoke-Test/1.0"})
+              with urllib.request.urlopen(request, timeout=timeout) as response:
+                  return response.status, response.read().decode("utf-8", errors="replace")
+
+          # Frontend verification: one search interface, one endpoint, no old mode selector.
+          try:
+              status, html = get_text(origin + "/", timeout=60)
+              print(f"FRONTEND HTTP {status}")
+              checks = {
+                  "homepage_http_200": status == 200,
+                  "smart_search_heading": "Smart Search" in html,
+                  "smart_search_endpoint": "/api/smart-search" in html,
+                  "old_mode_selector_removed": 'id="searchMode"' not in html,
+                  "query_input_present": 'id="searchQuery"' in html,
+                  "location_input_present": 'id="searchLocation"' in html,
+              }
+              print(json.dumps(checks, indent=2))
+              if not all(checks.values()):
+                  print("FAIL frontend: unified search UI verification failed")
+                  failed = True
+          except Exception as exc:
+              print(f"FAIL frontend: {exc}")
+              failed = True
+
           tests = [
               ("jobs", "machine learning engineer jobs", "Portsmouth, VA"),
               ("contractors", "contractors looking for a master electrician to pull permits", "Virginia Beach, VA"),
+              ("businesses", "find HVAC companies", "Norfolk, VA"),
               ("permits", "recent electrical permits issued", "Chesapeake, VA"),
+              ("permit_leads", "master electrician permit pulling leads", "Portsmouth, VA"),
           ]
 
-          failed = False
           for expected_intent, query, location in tests:
               params = urllib.parse.urlencode({"query": query, "location": location})
-              url = f"{base}?{params}"
-              print(f"TEST {expected_intent}: {url}")
+              url = f"{api}?{params}"
+              print(f"\nTEST {expected_intent}: query={query!r} location={location!r}")
               try:
-                  with urllib.request.urlopen(url, timeout=120) as response:
-                      status = response.status
-                      body = response.read().decode("utf-8", errors="replace")
+                  status, body = get_text(url)
               except Exception as exc:
                   print(f"FAIL {expected_intent}: request error: {exc}")
                   failed = True
@@ -54,25 +81,54 @@ jobs:
                   continue
 
               actual_intent = payload.get("intent")
-              count = payload.get("count")
-              source = payload.get("source")
-              message = payload.get("message")
-              print(json.dumps({
+              results = payload.get("results")
+              summary = {
                   "expected_intent": expected_intent,
                   "actual_intent": actual_intent,
-                  "count": count,
-                  "source": source,
-                  "message": message,
-              }, indent=2))
+                  "configured": payload.get("configured"),
+                  "count": payload.get("count"),
+                  "source": payload.get("source"),
+                  "message": payload.get("message"),
+              }
+              print(json.dumps(summary, indent=2))
 
               if actual_intent != expected_intent:
                   print(f"FAIL {expected_intent}: routed to {actual_intent!r}")
                   failed = True
-              if not isinstance(payload.get("results"), list):
+              if payload.get("configured") is not True:
+                  print(f"FAIL {expected_intent}: source is not configured")
+                  failed = True
+              if not isinstance(results, list):
                   print(f"FAIL {expected_intent}: results is not a list")
                   failed = True
+                  continue
+              if payload.get("count") != len(results):
+                  print(f"FAIL {expected_intent}: count does not match results length")
+                  failed = True
+
+              # Print only returned source-backed fields; never synthesize missing data.
+              samples = []
+              for item in results[:3]:
+                  samples.append({
+                      "title": item.get("title") or item.get("name") or item.get("company"),
+                      "type": item.get("type"),
+                      "source": item.get("source"),
+                      "verification": item.get("verification"),
+                      "url": item.get("url") or item.get("website") or item.get("direct_url") or item.get("source_url"),
+                  })
+              print("SAMPLES " + json.dumps(samples, indent=2))
+
+              # Result-level sanity checks only when results exist.
+              for index, item in enumerate(results):
+                  if not isinstance(item, dict):
+                      print(f"FAIL {expected_intent}: result {index} is not an object")
+                      failed = True
+                      continue
+                  if not (item.get("title") or item.get("name") or item.get("company")):
+                      print(f"FAIL {expected_intent}: result {index} has no display title")
+                      failed = True
 
           if failed:
               raise SystemExit(1)
-          print("ALL SMART SEARCH SMOKE TESTS PASSED")
+          print("\nALL UNIFIED SMART SEARCH END-TO-END TESTS PASSED")
           PY
