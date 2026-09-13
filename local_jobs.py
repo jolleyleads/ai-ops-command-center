@@ -206,12 +206,23 @@ def _canonical_url(url):
 
 
 def _query_variants(query, location):
+    """Search for individual openings first instead of broad job-category pages."""
     roles = _role_variants(query)[:4]
     loc = _clean(location, 180)
     queries = []
     for role in roles:
-        queries.extend([f'"{role}" "{loc}" Indeed', f'"{role}" "{loc}" ZipRecruiter', f'"{role}" "{loc}" LinkedIn jobs', f'"{role}" "{loc}" careers hiring'])
-    return queries[:12]
+        queries.extend([
+            f'"{role}" "{loc}" site:linkedin.com/jobs/view',
+            f'"{role}" "{loc}" site:indeed.com/viewjob',
+            f'"{role}" "{loc}" site:ziprecruiter.com/c/',
+            f'"{role}" "{loc}" site:glassdoor.com/job-listing/',
+            f'"{role}" "{loc}" site:jobs.lever.co',
+            f'"{role}" "{loc}" site:boards.greenhouse.io',
+            f'"{role}" "{loc}" site:job-boards.greenhouse.io',
+            f'"{role}" "{loc}" site:myworkdayjobs.com',
+            f'"{role}" "{loc}" (careers OR hiring) -linkedin -indeed -ziprecruiter -glassdoor',
+        ])
+    return queries[:24]
 
 
 def _evaluate(item, query, location, allow_remote=False):
@@ -243,7 +254,7 @@ def _evaluate(item, query, location, allow_remote=False):
         "location": location, "posted": "Not publicly listed" if age_days is None else ("Today" if age_days == 0 else f"About {age_days} day(s) ago"),
         "salary": "Not publicly listed", "employment_type": "Not publicly listed", "url": url, "direct_url": url,
         "source": source, "verification": "LIKELY VERIFIED" if trusted else "UNVERIFIED", "quality_score": quality_score,
-        "intent_score": 100, "why_it_matches": "Indexed job result matches the requested role family and requested city/state.",
+        "intent_score": 100, "why_it_matches": "Indexed individual job result matches the requested role family and requested city/state.",
         "last_checked": datetime.now(timezone.utc).isoformat(), "remote": _is_remote(title, snippet), "role_signals": role_signals,
     }, "accepted"
 
@@ -285,6 +296,6 @@ def local_jobs():
     return jsonify({
         "configured": True, "source": "Verified Local Job Search", "query": query, "location": location,
         "allow_remote": allow_remote, "count": len(accepted),
-        "message": f"Found {len(accepted)} source-backed local job result" + ("" if len(accepted) == 1 else "s") + ". Search/category pages, foreign-location mismatches, remote-only, stale, unrelated, and duplicate results were filtered out.",
+        "message": f"Found {len(accepted)} source-backed local job result" + ("" if len(accepted) == 1 else "s") + ". Individual postings were targeted first; search/category pages, foreign-location mismatches, remote-only, stale, unrelated, and duplicate results were filtered out.",
         "results": accepted, "rejected_count": len(rejected), "rejections": rejected[:30], "sources_run": sources_run, "policy": MASTER_SEARCH_POLICY,
     })
