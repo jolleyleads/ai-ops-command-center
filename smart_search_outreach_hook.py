@@ -1,7 +1,20 @@
-from flask import request
+import os
+
+from flask import jsonify, request
 
 from app import app
 from outreach_bridge import ingest_verified_results
+
+
+@app.before_request
+def protect_outreach_followup_processor():
+    if request.path != "/api/outreach/process-followups":
+        return None
+    expected = os.getenv("OUTREACH_CRON_TOKEN", "")
+    provided = request.headers.get("X-Outreach-Token", "")
+    if not expected or provided != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 
 @app.after_request
