@@ -5,3 +5,4 @@ import permit_leads  # noqa: F401
 import verified_job_signals  # noqa: F401
 import local_jobs  # noqa: F401
 import search_overrides  # noqa: F401
+import contractor_intent  # noqa: F401
