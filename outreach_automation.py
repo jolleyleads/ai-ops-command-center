@@ -1,17 +1,14 @@
 import json
 import os
-import sqlite3
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict
 
 import requests
 from flask import jsonify, request
 
-from app import app, gmail_access_token, send_gmail
+from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
 
-DB_PATH = Path(os.getenv("OUTREACH_DB_PATH", "/tmp/ai_ops_outreach.sqlite3"))
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
 FIRST_FOLLOWUP_DAYS = int(os.getenv("OUTREACH_FIRST_FOLLOWUP_DAYS", "3"))
@@ -19,60 +16,69 @@ SECOND_FOLLOWUP_DAYS = int(os.getenv("OUTREACH_SECOND_FOLLOWUP_DAYS", "4"))
 MAX_FOLLOWUPS = int(os.getenv("OUTREACH_MAX_FOLLOWUPS", "2"))
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+class OutreachLead(db.Model):
+    __tablename__ = "outreach_lead"
+
+    id = db.Column(db.Integer, primary_key=True)
+    company = db.Column(db.String(300), nullable=False)
+    contact_email = db.Column(db.String(500), default="")
+    contact_name = db.Column(db.String(300), default="")
+    location = db.Column(db.String(300), default="")
+    source_url = db.Column(db.Text, default="")
+    evidence_json = db.Column(db.Text, default="[]")
+    score = db.Column(db.Integer, nullable=False, default=0)
+    verification = db.Column(db.String(100), default="")
+    status = db.Column(db.String(50), nullable=False, default="review")
+    subject = db.Column(db.String(500), default="")
+    body = db.Column(db.Text, default="")
+    gmail_message_id = db.Column(db.String(255), default="")
+    gmail_thread_id = db.Column(db.String(255), default="")
+    sent_at = db.Column(db.DateTime)
+    follow_up_due_at = db.Column(db.DateTime)
+    follow_up_count = db.Column(db.Integer, nullable=False, default=0)
+    replied_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-def _iso(value: Optional[datetime]) -> Optional[str]:
-    return value.astimezone(timezone.utc).isoformat() if value else None
+with app.app_context():
+    db.create_all()
 
 
 def _clean(value: Any, limit: int = 4000) -> str:
     return str(value or "").strip()[:limit]
 
 
-def _db() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS outreach_leads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company TEXT NOT NULL,
-            contact_email TEXT,
-            contact_name TEXT,
-            location TEXT,
-            source_url TEXT,
-            evidence_json TEXT,
-            score INTEGER NOT NULL,
-            verification TEXT,
-            status TEXT NOT NULL,
-            subject TEXT,
-            body TEXT,
-            gmail_message_id TEXT,
-            gmail_thread_id TEXT,
-            sent_at TEXT,
-            follow_up_due_at TEXT,
-            follow_up_count INTEGER NOT NULL DEFAULT 0,
-            replied_at TEXT,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    return conn
-
-
-def _row(row: sqlite3.Row) -> Dict[str, Any]:
-    data = dict(row)
+def _serialize(lead: OutreachLead) -> Dict[str, Any]:
     try:
-        data["evidence"] = json.loads(data.pop("evidence_json") or "[]")
+        evidence = json.loads(lead.evidence_json or "[]")
     except Exception:
-        data["evidence"] = []
-    return data
+        evidence = []
+
+    return {
+        "id": lead.id,
+        "company": lead.company,
+        "contact_email": lead.contact_email,
+        "contact_name": lead.contact_name,
+        "location": lead.location,
+        "source_url": lead.source_url,
+        "evidence": evidence,
+        "score": lead.score,
+        "verification": lead.verification,
+        "status": lead.status,
+        "subject": lead.subject,
+        "body": lead.body,
+        "gmail_message_id": lead.gmail_message_id,
+        "gmail_thread_id": lead.gmail_thread_id,
+        "sent_at": lead.sent_at.isoformat() if lead.sent_at else None,
+        "follow_up_due_at": lead.follow_up_due_at.isoformat() if lead.follow_up_due_at else None,
+        "follow_up_count": lead.follow_up_count,
+        "replied_at": lead.replied_at.isoformat() if lead.replied_at else None,
+        "last_error": lead.last_error,
+        "created_at": lead.created_at.isoformat() if lead.created_at else None,
+        "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+    }
 
 
 def _rank_status(score: int) -> str:
@@ -83,12 +89,11 @@ def _rank_status(score: int) -> str:
     return "rejected"
 
 
-def _draft_email(lead: Dict[str, Any], follow_up_number: int = 0) -> Dict[str, Any]:
-    company = _clean(lead.get("company"), 300)
-    evidence = lead.get("evidence") or []
-    location = _clean(lead.get("location"), 200)
-    previous_subject = _clean(lead.get("subject"), 500)
-    previous_body = _clean(lead.get("body"), 4000)
+def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any]:
+    try:
+        evidence = json.loads(lead.evidence_json or "[]")
+    except Exception:
+        evidence = []
 
     if follow_up_number:
         instructions = (
@@ -96,16 +101,16 @@ def _draft_email(lead: Dict[str, Any], follow_up_number: int = 0) -> Dict[str, A
             "Do not invent names, needs, credentials, dates, or claims. Return strict JSON with keys subject and body."
         )
         prompt = (
-            f"Write follow-up #{follow_up_number} to {company}. Keep the same subject when appropriate. "
+            f"Write follow-up #{follow_up_number} to {_clean(lead.company, 300)}. Keep the same subject when appropriate. "
             "Reference the prior outreach naturally, be professional, and ask for a simple reply or brief call. "
             "Do not claim they still need help unless the evidence says so."
         )
         workflow_data = {
-            "company": company,
-            "location": location,
+            "company": lead.company,
+            "location": lead.location,
             "evidence": evidence,
-            "previous_subject": previous_subject,
-            "previous_body": previous_body,
+            "previous_subject": lead.subject,
+            "previous_body": lead.body,
         }
     else:
         instructions = (
@@ -118,12 +123,12 @@ def _draft_email(lead: Dict[str, Any], follow_up_number: int = 0) -> Dict[str, A
             "the supplied evidence supports that need. Mention one specific verified signal, avoid hype, and end with a low-friction call to action."
         )
         workflow_data = {
-            "company": company,
-            "location": location,
-            "score": lead.get("score"),
-            "verification": lead.get("verification"),
+            "company": lead.company,
+            "location": lead.location,
+            "score": lead.score,
+            "verification": lead.verification,
             "evidence": evidence,
-            "source_url": lead.get("source_url"),
+            "source_url": lead.source_url,
         }
 
     result = run_ai(
@@ -155,10 +160,10 @@ def _draft_email(lead: Dict[str, Any], follow_up_number: int = 0) -> Dict[str, A
 def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> Dict[str, Any]:
     try:
         if thread_id:
-            token = gmail_access_token()
             from email.message import EmailMessage
             import base64
 
+            token = gmail_access_token()
             msg = EmailMessage()
             msg["To"] = to_email
             msg["Subject"] = subject
@@ -231,142 +236,159 @@ def create_outreach_lead():
     company = _clean(data.get("company") or data.get("title") or data.get("name"), 300)
     if not company:
         return jsonify({"error": "company is required"}), 400
+
     try:
         score = int(data.get("score") if data.get("score") is not None else data.get("intent_score", 0))
     except (TypeError, ValueError):
         return jsonify({"error": "score must be an integer"}), 400
+
     score = max(0, min(score, 100))
-    status = _rank_status(score)
-    now = _iso(_now())
     evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
 
-    conn = _db()
-    cur = conn.execute(
-        """
-        INSERT INTO outreach_leads
-        (company, contact_email, contact_name, location, source_url, evidence_json, score, verification, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            company,
-            _clean(data.get("contact_email") or data.get("email"), 500),
-            _clean(data.get("contact_name"), 300),
-            _clean(data.get("location"), 300),
-            _clean(data.get("source_url") or data.get("url") or data.get("website"), 1500),
-            json.dumps(evidence),
-            score,
-            _clean(data.get("verification"), 100),
-            status,
-            now,
-            now,
-        ),
+    lead = OutreachLead(
+        company=company,
+        contact_email=_clean(data.get("contact_email") or data.get("email"), 500),
+        contact_name=_clean(data.get("contact_name"), 300),
+        location=_clean(data.get("location"), 300),
+        source_url=_clean(data.get("source_url") or data.get("url") or data.get("website"), 1500),
+        evidence_json=json.dumps(evidence),
+        score=score,
+        verification=_clean(data.get("verification"), 100),
+        status=_rank_status(score),
     )
-    conn.commit()
-    lead = _row(conn.execute("SELECT * FROM outreach_leads WHERE id=?", (cur.lastrowid,)).fetchone())
-    conn.close()
-    return jsonify({"lead": lead, "auto_send_eligible": status == "qualified"}), 201
+    db.session.add(lead)
+    db.session.commit()
+    return jsonify({"lead": _serialize(lead), "auto_send_eligible": lead.status == "qualified"}), 201
 
 
 @app.route("/api/outreach/leads/<int:lead_id>/draft", methods=["POST"])
 def draft_outreach(lead_id: int):
-    conn = _db()
-    row = conn.execute("SELECT * FROM outreach_leads WHERE id=?", (lead_id,)).fetchone()
-    if not row:
-        conn.close()
-        return jsonify({"error": "lead not found"}), 404
-    lead = _row(row)
-    if lead["status"] == "rejected":
-        conn.close()
+    lead = OutreachLead.query.get_or_404(lead_id)
+    if lead.status == "rejected":
         return jsonify({"error": "lead is below the review threshold and cannot be auto-drafted"}), 409
+
     drafted = _draft_email(lead)
     if not drafted.get("ok"):
-        conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (drafted.get("error"), _iso(_now()), lead_id))
-        conn.commit(); conn.close()
+        lead.last_error = drafted.get("error") or "OpenAI drafting failed"
+        lead.updated_at = datetime.utcnow()
+        db.session.commit()
         return jsonify(drafted), 502
-    conn.execute(
-        "UPDATE outreach_leads SET subject=?, body=?, status=?, last_error=NULL, updated_at=? WHERE id=?",
-        (drafted["subject"], drafted["body"], "drafted", _iso(_now()), lead_id),
-    )
-    conn.commit()
-    updated = _row(conn.execute("SELECT * FROM outreach_leads WHERE id=?", (lead_id,)).fetchone())
-    conn.close()
-    return jsonify({"ok": True, "lead": updated, "model": drafted.get("model")})
+
+    lead.subject = drafted["subject"]
+    lead.body = drafted["body"]
+    lead.status = "drafted"
+    lead.last_error = ""
+    lead.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "lead": _serialize(lead), "model": drafted.get("model")})
 
 
 @app.route("/api/outreach/leads/<int:lead_id>/send", methods=["POST"])
 def send_outreach(lead_id: int):
-    conn = _db()
-    row = conn.execute("SELECT * FROM outreach_leads WHERE id=?", (lead_id,)).fetchone()
-    if not row:
-        conn.close(); return jsonify({"error": "lead not found"}), 404
-    lead = _row(row)
-    if lead["score"] < AUTO_SEND_MIN_SCORE:
-        conn.close(); return jsonify({"error": f"lead score must be at least {AUTO_SEND_MIN_SCORE} for automatic send"}), 409
-    if not lead.get("contact_email"):
-        conn.close(); return jsonify({"error": "verified contact_email is required before send"}), 409
-    if not lead.get("subject") or not lead.get("body"):
+    lead = OutreachLead.query.get_or_404(lead_id)
+    if lead.score < AUTO_SEND_MIN_SCORE:
+        return jsonify({"error": f"lead score must be at least {AUTO_SEND_MIN_SCORE} for automatic send"}), 409
+    if not lead.contact_email:
+        return jsonify({"error": "verified contact_email is required before send"}), 409
+
+    if not lead.subject or not lead.body:
         drafted = _draft_email(lead)
         if not drafted.get("ok"):
-            conn.close(); return jsonify(drafted), 502
-        lead["subject"], lead["body"] = drafted["subject"], drafted["body"]
-    sent = _gmail_send(lead["contact_email"], lead["subject"], lead["body"])
+            lead.last_error = drafted.get("error") or "OpenAI drafting failed"
+            db.session.commit()
+            return jsonify(drafted), 502
+        lead.subject = drafted["subject"]
+        lead.body = drafted["body"]
+
+    sent = _gmail_send(lead.contact_email, lead.subject, lead.body)
     if not sent.get("ok"):
-        conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (sent.get("error"), _iso(_now()), lead_id)); conn.commit(); conn.close()
+        lead.last_error = sent.get("error") or "Gmail send failed"
+        lead.updated_at = datetime.utcnow()
+        db.session.commit()
         return jsonify(sent), 502
-    sent_at = _now(); due = sent_at + timedelta(days=FIRST_FOLLOWUP_DAYS)
-    conn.execute(
-        """UPDATE outreach_leads SET subject=?, body=?, gmail_message_id=?, gmail_thread_id=?, sent_at=?, follow_up_due_at=?,
-        status='sent', last_error=NULL, updated_at=? WHERE id=?""",
-        (lead["subject"], lead["body"], sent.get("message_id"), sent.get("thread_id"), _iso(sent_at), _iso(due), _iso(sent_at), lead_id),
-    )
-    conn.commit(); updated = _row(conn.execute("SELECT * FROM outreach_leads WHERE id=?", (lead_id,)).fetchone()); conn.close()
-    return jsonify({"ok": True, "lead": updated})
+
+    sent_at = datetime.utcnow()
+    lead.gmail_message_id = _clean(sent.get("message_id"), 255)
+    lead.gmail_thread_id = _clean(sent.get("thread_id"), 255)
+    lead.sent_at = sent_at
+    lead.follow_up_due_at = sent_at + timedelta(days=FIRST_FOLLOWUP_DAYS)
+    lead.status = "sent"
+    lead.last_error = ""
+    lead.updated_at = sent_at
+    db.session.commit()
+    return jsonify({"ok": True, "lead": _serialize(lead)})
 
 
 @app.route("/api/outreach/process-followups", methods=["POST"])
 def process_followups():
-    now = _now(); conn = _db()
-    rows = conn.execute(
-        "SELECT * FROM outreach_leads WHERE status IN ('sent','followup_sent') AND follow_up_due_at IS NOT NULL AND follow_up_due_at <= ? AND replied_at IS NULL",
-        (_iso(now),),
-    ).fetchall()
+    now = datetime.utcnow()
+    leads = OutreachLead.query.filter(
+        OutreachLead.status.in_(["sent", "followup_sent"]),
+        OutreachLead.follow_up_due_at.isnot(None),
+        OutreachLead.follow_up_due_at <= now,
+        OutreachLead.replied_at.is_(None),
+    ).all()
+
     processed = []
-    for row in rows:
-        lead = _row(row); lead_id = lead["id"]
-        if not lead.get("gmail_thread_id"):
-            processed.append({"id": lead_id, "status": "skipped", "reason": "missing Gmail thread id"}); continue
-        reply = _gmail_thread_has_reply(lead["gmail_thread_id"])
+    for lead in leads:
+        if not lead.gmail_thread_id:
+            processed.append({"id": lead.id, "status": "skipped", "reason": "missing Gmail thread id"})
+            continue
+
+        reply = _gmail_thread_has_reply(lead.gmail_thread_id)
         if not reply.get("ok"):
-            conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (reply.get("error"), _iso(now), lead_id))
-            processed.append({"id": lead_id, "status": "error", "error": reply.get("error")}); continue
+            lead.last_error = reply.get("error") or "Gmail reply check failed"
+            lead.updated_at = now
+            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+            continue
+
         if reply.get("replied"):
-            conn.execute("UPDATE outreach_leads SET status='responded', replied_at=?, follow_up_due_at=NULL, last_error=NULL, updated_at=? WHERE id=?", (_iso(now), _iso(now), lead_id))
-            processed.append({"id": lead_id, "status": "responded"}); continue
-        count = int(lead.get("follow_up_count") or 0)
-        if count >= MAX_FOLLOWUPS:
-            conn.execute("UPDATE outreach_leads SET status='completed_no_reply', follow_up_due_at=NULL, updated_at=? WHERE id=?", (_iso(now), lead_id))
-            processed.append({"id": lead_id, "status": "completed_no_reply"}); continue
-        next_number = count + 1
+            lead.status = "responded"
+            lead.replied_at = now
+            lead.follow_up_due_at = None
+            lead.last_error = ""
+            lead.updated_at = now
+            processed.append({"id": lead.id, "status": "responded"})
+            continue
+
+        if lead.follow_up_count >= MAX_FOLLOWUPS:
+            lead.status = "completed_no_reply"
+            lead.follow_up_due_at = None
+            lead.updated_at = now
+            processed.append({"id": lead.id, "status": "completed_no_reply"})
+            continue
+
+        next_number = lead.follow_up_count + 1
         drafted = _draft_email(lead, follow_up_number=next_number)
         if not drafted.get("ok"):
-            conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (drafted.get("error"), _iso(now), lead_id))
-            processed.append({"id": lead_id, "status": "error", "error": drafted.get("error")}); continue
-        sent = _gmail_send(lead["contact_email"], drafted["subject"], drafted["body"], lead["gmail_thread_id"])
+            lead.last_error = drafted.get("error") or "OpenAI follow-up drafting failed"
+            lead.updated_at = now
+            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+            continue
+
+        sent = _gmail_send(lead.contact_email, drafted["subject"], drafted["body"], lead.gmail_thread_id)
         if not sent.get("ok"):
-            conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (sent.get("error"), _iso(now), lead_id))
-            processed.append({"id": lead_id, "status": "error", "error": sent.get("error")}); continue
-        due = now + timedelta(days=SECOND_FOLLOWUP_DAYS)
-        conn.execute(
-            """UPDATE outreach_leads SET subject=?, body=?, gmail_message_id=?, gmail_thread_id=?, follow_up_count=?, follow_up_due_at=?,
-            status='followup_sent', last_error=NULL, updated_at=? WHERE id=?""",
-            (drafted["subject"], drafted["body"], sent.get("message_id"), sent.get("thread_id") or lead["gmail_thread_id"], next_number, _iso(due), _iso(now), lead_id),
-        )
-        processed.append({"id": lead_id, "status": "followup_sent", "follow_up_count": next_number})
-    conn.commit(); conn.close()
+            lead.last_error = sent.get("error") or "Gmail follow-up send failed"
+            lead.updated_at = now
+            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+            continue
+
+        lead.subject = drafted["subject"]
+        lead.body = drafted["body"]
+        lead.gmail_message_id = _clean(sent.get("message_id"), 255)
+        lead.gmail_thread_id = _clean(sent.get("thread_id") or lead.gmail_thread_id, 255)
+        lead.follow_up_count = next_number
+        lead.follow_up_due_at = now + timedelta(days=SECOND_FOLLOWUP_DAYS)
+        lead.status = "followup_sent"
+        lead.last_error = ""
+        lead.updated_at = now
+        processed.append({"id": lead.id, "status": "followup_sent", "follow_up_count": next_number})
+
+    db.session.commit()
     return jsonify({"ok": True, "processed_count": len(processed), "processed": processed})
 
 
 @app.route("/api/outreach/leads", methods=["GET"])
 def list_outreach_leads():
-    conn = _db(); rows = conn.execute("SELECT * FROM outreach_leads ORDER BY id DESC LIMIT 200").fetchall(); conn.close()
-    return jsonify({"leads": [_row(r) for r in rows]})
+    leads = OutreachLead.query.order_by(OutreachLead.id.desc()).limit(200).all()
+    return jsonify({"leads": [_serialize(lead) for lead in leads]})
