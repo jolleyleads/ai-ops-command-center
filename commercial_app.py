@@ -8,6 +8,7 @@ import local_jobs  # noqa: F401
 import smart_search  # noqa: F401
 import outreach_automation  # noqa: F401
 import smart_search_outreach_hook  # noqa: F401
+import outreach_scheduler  # noqa: F401
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
