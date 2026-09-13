@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from flask import jsonify, request
 
 from app import app
@@ -15,8 +17,6 @@ def _clean(value, limit=500):
 def _detect_intent(query):
     text = _clean(query, 1000).lower()
 
-    # High-confidence deterministic rules first. These prevent mixed natural-language
-    # inquiries from being routed by a fragile tie in keyword counts.
     if (
         any(term in text for term in ("permit lead", "permit leads", "permit-pulling lead", "permit pulling lead"))
         or (
@@ -84,6 +84,53 @@ def _permit_lead_payload(query, location):
     }
 
 
+def _permit_record_payload(query, location):
+    payload = _search_public_records(query, location)
+    if not payload.get("configured"):
+        return payload
+
+    text = _clean(query, 800).lower()
+    wants_records = any(term in text for term in (
+        "issued", "recent", "record", "records", "pulled", "active", "permit search",
+        "permit database", "permit activity", "permit report", "open data",
+    ))
+    if not wants_records:
+        return payload
+
+    reject_signals = (
+        "procedure", "procedures", "how to", "apply for", "application", "requirements",
+        "fees", "forms", "faq", "handbook", "guide", "instructions", "code requirements",
+    )
+    record_signals = (
+        "issued permit", "issued permits", "permit search", "permit records", "permit record",
+        "permit portal", "permit report", "permit activity", "open data", "citizen access",
+        "permit database", "permit lookup", "permit history", "recent permits", "active permits",
+        "accela", "energov",
+    )
+
+    kept = []
+    for item in payload.get("results") or []:
+        title = _clean(item.get("title"), 500)
+        subtitle = _clean(item.get("subtitle"), 1500)
+        url = _clean(item.get("url"), 1600)
+        haystack = f"{title} {subtitle} {url}".lower()
+        if any(signal in haystack for signal in reject_signals):
+            continue
+        if not any(signal in haystack for signal in record_signals):
+            continue
+        kept.append(item)
+
+    result = dict(payload)
+    result["results"] = kept
+    result["count"] = len(kept)
+    result["message"] = (
+        f"Found {len(kept)} record-oriented permit result"
+        + ("." if len(kept) == 1 else "s.")
+        + " Procedural, application, fee, and how-to pages were filtered out."
+    )
+    return result
+
+
 def _smart_search(query, location):
     intent, intent_scores = _detect_intent(query)
 
@@ -95,6 +142,8 @@ def _smart_search(query, location):
         payload = _job_payload(query, location)
     elif intent == "businesses":
         payload = search_overrides._search_google_places(query, location)
+    elif intent == "permits":
+        payload = _permit_record_payload(query, location)
     else:
         payload = _search_public_records(query, location)
         if intent == "web":
@@ -114,9 +163,9 @@ def _smart_search(query, location):
         "search_details": {
             "permit_leads": "Strict evidence-backed Master Electrician permit-pulling lead search.",
             "contractors": "Google Places discovery plus independent Brave and Google evidence verification.",
-            "jobs": "Verified local job search with source, location, freshness, and quality filtering.",
+            "jobs": "Verified local job search with search/category pages, location, freshness, and quality filtering.",
             "businesses": "Google Places business discovery using the requested inquiry and location.",
-            "permits": "Public-record/web search using configured authoritative search providers.",
+            "permits": "Record-oriented permit search with procedural/how-to pages suppressed when the inquiry asks for issued or recent records.",
             "web_research": "General public web research using configured search providers.",
         }.get(intent, "Smart Search"),
     }
