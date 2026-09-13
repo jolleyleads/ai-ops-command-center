@@ -226,12 +226,24 @@ def test_business_search():
     query = _clean(request.args.get("query") or "electrical contractors", 300)
     location = _clean(request.args.get("location") or "Portsmouth, VA", 200)
     payload = _search_google_places(query, location)
+    result_count = len(payload.get("results") or [])
     payload.update({
         "diagnostic": True,
         "query": query,
         "location": location,
-        "count": len(payload.get("results") or []),
+        "count": result_count,
     })
+
+    configured = bool(payload.get("configured"))
+    message = _clean(payload.get("message"), 700).replace("\n", " ").replace("\r", " ")
+    app.logger.warning(
+        "GOOGLE_PLACES_DIAGNOSTIC configured=%s count=%d query=%r location=%r message=%r",
+        configured,
+        result_count,
+        query,
+        location,
+        message,
+    )
     return jsonify(payload)
 
 
