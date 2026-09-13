@@ -221,5 +221,19 @@ def universal_search_capabilities_override():
     })
 
 
+@app.route("/api/test-business-search", methods=["GET"])
+def test_business_search():
+    query = _clean(request.args.get("query") or "electrical contractors", 300)
+    location = _clean(request.args.get("location") or "Portsmouth, VA", 200)
+    payload = _search_google_places(query, location)
+    payload.update({
+        "diagnostic": True,
+        "query": query,
+        "location": location,
+        "count": len(payload.get("results") or []),
+    })
+    return jsonify(payload)
+
+
 app.view_functions["universal_search"] = universal_search_override
 app.view_functions["universal_search_capabilities"] = universal_search_capabilities_override
