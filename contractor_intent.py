@@ -220,6 +220,19 @@ def test_contractor_intent():
         location,
         _clean(summary.get("message"), 700).replace("\n", " ").replace("\r", " "),
     )
+    for result in results[:5]:
+        evidence = (result.get("evidence") or [{}])[0]
+        app.logger.warning(
+            "CONTRACTOR_INTENT_RESULT company=%r intent_score=%s verification=%r evidence_score=%s evidence_source=%r evidence_title=%r evidence_url=%r matched_terms=%r",
+            _clean(result.get("title"), 300),
+            result.get("intent_score", 0),
+            _clean(result.get("verification"), 80),
+            evidence.get("score", 0),
+            _clean(evidence.get("source"), 200),
+            _clean(evidence.get("title"), 500).replace("\n", " ").replace("\r", " "),
+            _clean(evidence.get("url"), 1000),
+            evidence.get("matched_terms") or [],
+        )
     return jsonify(summary)
 
 
