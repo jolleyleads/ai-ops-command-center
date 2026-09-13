@@ -22,69 +22,28 @@ not alter the workflow builder, staging center, pipeline, or automation architec
 """.strip()
 
 TRUSTED_JOB_HOSTS = {
-    "indeed.com": "Indeed",
-    "www.indeed.com": "Indeed",
-    "ziprecruiter.com": "ZipRecruiter",
-    "www.ziprecruiter.com": "ZipRecruiter",
-    "linkedin.com": "LinkedIn Jobs",
-    "www.linkedin.com": "LinkedIn Jobs",
-    "glassdoor.com": "Glassdoor",
-    "www.glassdoor.com": "Glassdoor",
-    "jobs.lever.co": "Lever",
-    "boards.greenhouse.io": "Greenhouse",
+    "indeed.com": "Indeed", "www.indeed.com": "Indeed",
+    "ziprecruiter.com": "ZipRecruiter", "www.ziprecruiter.com": "ZipRecruiter",
+    "linkedin.com": "LinkedIn Jobs", "www.linkedin.com": "LinkedIn Jobs",
+    "glassdoor.com": "Glassdoor", "www.glassdoor.com": "Glassdoor",
+    "jobs.lever.co": "Lever", "boards.greenhouse.io": "Greenhouse",
     "job-boards.greenhouse.io": "Greenhouse",
 }
 
 REMOTE_SIGNALS = (
-    "remote",
-    "work from home",
-    "work-from-home",
-    "anywhere in the us",
-    "anywhere in the u.s.",
-    "united states - remote",
-    "us remote",
-    "u.s. remote",
+    "remote", "work from home", "work-from-home", "anywhere in the us",
+    "anywhere in the u.s.", "united states - remote", "us remote", "u.s. remote",
 )
 
 NON_JOB_SIGNALS = (
-    "salary guide",
-    "career guide",
-    "what does",
-    "how to become",
-    "training",
-    "course",
-    "degree",
-    "bootcamp",
-    "certification",
-    "resume example",
-    "interview questions",
+    "salary guide", "career guide", "what does", "how to become", "training",
+    "course", "degree", "bootcamp", "certification", "resume example", "interview questions",
 )
 
 ROLE_EXPANSIONS = {
-    "automation engineer": [
-        "automation engineer",
-        "ai automation engineer",
-        "workflow automation engineer",
-        "ai engineer",
-        "machine learning engineer",
-        "applied ai engineer",
-    ],
-    "machine learning engineer": [
-        "machine learning engineer",
-        "ml engineer",
-        "ai engineer",
-        "applied ai engineer",
-        "generative ai engineer",
-        "llm engineer",
-    ],
-    "ai engineer": [
-        "ai engineer",
-        "artificial intelligence engineer",
-        "machine learning engineer",
-        "applied ai engineer",
-        "generative ai engineer",
-        "llm engineer",
-    ],
+    "automation engineer": ["automation engineer", "ai automation engineer", "workflow automation engineer", "ai engineer", "machine learning engineer", "applied ai engineer"],
+    "machine learning engineer": ["machine learning engineer", "ml engineer", "ai engineer", "applied ai engineer", "generative ai engineer", "llm engineer"],
+    "ai engineer": ["ai engineer", "artificial intelligence engineer", "machine learning engineer", "applied ai engineer", "generative ai engineer", "llm engineer"],
 }
 
 
@@ -139,11 +98,7 @@ def _location_matches(title, snippet, location):
         return False
     if len(parts) > 1:
         state = parts[1]
-        state_map = {
-            "virginia": "va", "va": "virginia",
-            "north carolina": "nc", "nc": "north carolina",
-            "maryland": "md", "md": "maryland",
-        }
+        state_map = {"virginia": "va", "va": "virginia", "north carolina": "nc", "nc": "north carolina", "maryland": "md", "md": "maryland"}
         if state not in haystack and state_map.get(state, "") not in haystack:
             return False
     return True
@@ -159,8 +114,17 @@ def _looks_like_non_job(title, snippet):
     return any(signal in text for signal in NON_JOB_SIGNALS)
 
 
+def _is_foreign_us_mismatch(url, location):
+    parts = _location_parts(location)
+    if len(parts) < 2:
+        return False
+    state = parts[1]
+    us_state = state in {"va", "virginia", "nc", "north carolina", "md", "maryland"}
+    host = _host(url)
+    return us_state and host.endswith((".co.uk", ".uk"))
+
+
 def _is_job_aggregation_page(title, url):
-    """Reject search/category pages that describe collections of jobs, not an opening."""
     text = _clean(title, 500).lower()
     try:
         parsed = urlparse(_clean(url, 1600))
@@ -173,14 +137,22 @@ def _is_job_aggregation_page(title, url):
         return True
     if re.search(r"\bjobs?\s+in\s+.+\(\d+\s+new\)", text):
         return True
+    if "jobs, employment in" in text or re.search(r"\bjobs\s+[^|]+\|\s*(indeed|glassdoor|ziprecruiter)\b", text):
+        return True
 
     host = _host(url)
     if host in {"linkedin.com", "www.linkedin.com"}:
         return path.startswith("/jobs/") and not path.startswith("/jobs/view/")
     if host in {"glassdoor.com", "www.glassdoor.com"}:
-        return path.startswith("/job/") and "/job-listing/" not in path
+        return "/job-listing/" not in path
     if host in {"indeed.com", "www.indeed.com"}:
-        return path.rstrip("/") in {"/jobs", "/q-jobs"} or (path.startswith("/jobs") and "jk=" not in query)
+        direct = path.startswith("/viewjob") or "jk=" in query or path.startswith("/rc/clk")
+        return not direct
+    if host in {"ziprecruiter.com", "www.ziprecruiter.com"}:
+        if path.startswith("/jobs/") and "/-in-" in path:
+            return True
+        if path.startswith("/jobs/") and "jid=" not in query and "/c/" not in path:
+            return True
     return False
 
 
@@ -190,7 +162,6 @@ def _role_signals(title, snippet, query):
     exact = [role for role in variants if role.lower() in text]
     if exact:
         return exact
-
     requested = set(re.findall(r"[a-z0-9]+", _clean(query, 200).lower()))
     title_tokens = set(re.findall(r"[a-z0-9]+", _clean(title, 400).lower()))
     useful = {t for t in requested if len(t) >= 3 and t not in {"job", "jobs"}}
@@ -216,18 +187,12 @@ def _extract_age_days(text):
 
 
 def _freshness_score(age_days):
-    if age_days is None:
-        return 8
-    if age_days <= 1:
-        return 25
-    if age_days <= 3:
-        return 23
-    if age_days <= 7:
-        return 20
-    if age_days <= 14:
-        return 16
-    if age_days <= 30:
-        return 10
+    if age_days is None: return 8
+    if age_days <= 1: return 25
+    if age_days <= 3: return 23
+    if age_days <= 7: return 20
+    if age_days <= 14: return 16
+    if age_days <= 30: return 10
     return 0
 
 
@@ -245,12 +210,7 @@ def _query_variants(query, location):
     loc = _clean(location, 180)
     queries = []
     for role in roles:
-        queries.extend([
-            f'"{role}" "{loc}" Indeed',
-            f'"{role}" "{loc}" ZipRecruiter',
-            f'"{role}" "{loc}" LinkedIn jobs',
-            f'"{role}" "{loc}" careers hiring',
-        ])
+        queries.extend([f'"{role}" "{loc}" Indeed', f'"{role}" "{loc}" ZipRecruiter', f'"{role}" "{loc}" LinkedIn jobs', f'"{role}" "{loc}" careers hiring'])
     return queries[:12]
 
 
@@ -260,24 +220,18 @@ def _evaluate(item, query, location, allow_remote=False):
     url = _clean(item.get("url"), 1600)
     source = _source_name(url, item.get("source"))
 
-    if not title or not url:
-        return None, "missing_title_or_url"
-    if _is_job_aggregation_page(title, url):
-        return None, "job_search_or_category_page"
-    if _looks_like_non_job(title, snippet):
-        return None, "non_job_content"
-    if not allow_remote and _is_remote(title, snippet):
-        return None, "remote_excluded"
-    if not _location_matches(title, snippet, location):
-        return None, "location_not_explicit"
+    if not title or not url: return None, "missing_title_or_url"
+    if _is_foreign_us_mismatch(url, location): return None, "foreign_location_mismatch"
+    if _is_job_aggregation_page(title, url): return None, "job_search_or_category_page"
+    if _looks_like_non_job(title, snippet): return None, "non_job_content"
+    if not allow_remote and _is_remote(title, snippet): return None, "remote_excluded"
+    if not _location_matches(title, snippet, location): return None, "location_not_explicit"
 
     role_signals = _role_signals(title, snippet, query)
-    if not role_signals:
-        return None, "role_not_relevant"
+    if not role_signals: return None, "role_not_relevant"
 
     age_days = _extract_age_days(f"{title} {snippet}")
-    if age_days is not None and age_days > 30:
-        return None, "stale_over_30_days"
+    if age_days is not None and age_days > 30: return None, "stale_over_30_days"
 
     host = _host(url)
     trusted = host in TRUSTED_JOB_HOSTS or host.endswith(".myworkdayjobs.com")
@@ -285,24 +239,12 @@ def _evaluate(item, query, location, allow_remote=False):
     quality_score = min(100, 30 + _freshness_score(age_days) + source_score + 15 + 10)
 
     return {
-        "type": "job",
-        "title": title,
-        "subtitle": snippet,
-        "company": "Not publicly listed",
-        "location": location,
-        "posted": "Not publicly listed" if age_days is None else ("Today" if age_days == 0 else f"About {age_days} day(s) ago"),
-        "salary": "Not publicly listed",
-        "employment_type": "Not publicly listed",
-        "url": url,
-        "direct_url": url,
-        "source": source,
-        "verification": "LIKELY VERIFIED" if trusted else "UNVERIFIED",
-        "quality_score": quality_score,
-        "intent_score": 100,
-        "why_it_matches": "Indexed job result matches the requested role family and requested city/state.",
-        "last_checked": datetime.now(timezone.utc).isoformat(),
-        "remote": _is_remote(title, snippet),
-        "role_signals": role_signals,
+        "type": "job", "title": title, "subtitle": snippet, "company": "Not publicly listed",
+        "location": location, "posted": "Not publicly listed" if age_days is None else ("Today" if age_days == 0 else f"About {age_days} day(s) ago"),
+        "salary": "Not publicly listed", "employment_type": "Not publicly listed", "url": url, "direct_url": url,
+        "source": source, "verification": "LIKELY VERIFIED" if trusted else "UNVERIFIED", "quality_score": quality_score,
+        "intent_score": 100, "why_it_matches": "Indexed job result matches the requested role family and requested city/state.",
+        "last_checked": datetime.now(timezone.utc).isoformat(), "remote": _is_remote(title, snippet), "role_signals": role_signals,
     }, "accepted"
 
 
@@ -316,39 +258,14 @@ def local_jobs():
     if not query:
         return jsonify({"configured": True, "message": "Enter a job title or job type.", "results": [], "count": 0}), 400
     if not location:
-        return jsonify({
-            "configured": True,
-            "message": "Enter a city and state, for example Portsmouth, VA.",
-            "results": [],
-            "count": 0,
-            "policy": MASTER_SEARCH_POLICY,
-        }), 400
+        return jsonify({"configured": True, "message": "Enter a city and state, for example Portsmouth, VA.", "results": [], "count": 0, "policy": MASTER_SEARCH_POLICY}), 400
 
-    accepted = []
-    rejected = []
-    seen_urls = set()
-    seen_titles = set()
-    sources_run = []
-
+    accepted, rejected, seen_urls, seen_titles, sources_run = [], [], set(), set(), []
     for search_query in _query_variants(query, location):
         payload = _search_public_records(search_query, "")
-        sources_run.append({
-            "query": search_query,
-            "source": payload.get("source") or "",
-            "configured": bool(payload.get("configured")),
-            "message": payload.get("message") or "",
-        })
-
+        sources_run.append({"query": search_query, "source": payload.get("source") or "", "configured": bool(payload.get("configured")), "message": payload.get("message") or ""})
         if not payload.get("configured"):
-            return jsonify({
-                "configured": False,
-                "source": payload.get("source") or "Web Search",
-                "message": payload.get("message") or "Web search is not configured.",
-                "results": [],
-                "count": 0,
-                "sources_run": sources_run,
-                "policy": MASTER_SEARCH_POLICY,
-            }), 503
+            return jsonify({"configured": False, "source": payload.get("source") or "Web Search", "message": payload.get("message") or "Web search is not configured.", "results": [], "count": 0, "sources_run": sources_run, "policy": MASTER_SEARCH_POLICY}), 503
 
         for item in payload.get("results") or []:
             raw_url = _clean(item.get("url"), 1600)
@@ -357,35 +274,17 @@ def local_jobs():
             title_key = re.sub(r"[^a-z0-9]+", " ", raw_title.lower()).strip()
             if not raw_url or canonical in seen_urls or (title_key and title_key in seen_titles):
                 continue
-
             row, reason = _evaluate(item, query, location, allow_remote=allow_remote)
             seen_urls.add(canonical)
-            if title_key:
-                seen_titles.add(title_key)
-
-            if row:
-                accepted.append(row)
-            else:
-                rejected.append({"title": raw_title, "url": raw_url, "reason": reason})
+            if title_key: seen_titles.add(title_key)
+            if row: accepted.append(row)
+            else: rejected.append({"title": raw_title, "url": raw_url, "reason": reason})
 
     accepted.sort(key=lambda row: row.get("quality_score", 0), reverse=True)
     accepted = accepted[:30]
-
     return jsonify({
-        "configured": True,
-        "source": "Verified Local Job Search",
-        "query": query,
-        "location": location,
-        "allow_remote": allow_remote,
-        "count": len(accepted),
-        "message": (
-            f"Found {len(accepted)} source-backed local job result"
-            + ("" if len(accepted) == 1 else "s")
-            + ". Search/category pages, remote-only, stale, unrelated, and duplicate results were filtered out."
-        ),
-        "results": accepted,
-        "rejected_count": len(rejected),
-        "rejections": rejected[:30],
-        "sources_run": sources_run,
-        "policy": MASTER_SEARCH_POLICY,
+        "configured": True, "source": "Verified Local Job Search", "query": query, "location": location,
+        "allow_remote": allow_remote, "count": len(accepted),
+        "message": f"Found {len(accepted)} source-backed local job result" + ("" if len(accepted) == 1 else "s") + ". Search/category pages, foreign-location mismatches, remote-only, stale, unrelated, and duplicate results were filtered out.",
+        "results": accepted, "rejected_count": len(rejected), "rejections": rejected[:30], "sources_run": sources_run, "policy": MASTER_SEARCH_POLICY,
     })
