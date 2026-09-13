@@ -1,0 +1,78 @@
+name: Smart Search Smoke Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run live smart-search tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          base = "https://ai-ops-command-center.onrender.com/api/test-smart-search"
+          tests = [
+              ("jobs", "machine learning engineer jobs", "Portsmouth, VA"),
+              ("contractors", "contractors looking for a master electrician to pull permits", "Virginia Beach, VA"),
+              ("permits", "recent electrical permits issued", "Chesapeake, VA"),
+          ]
+
+          failed = False
+          for expected_intent, query, location in tests:
+              params = urllib.parse.urlencode({"query": query, "location": location})
+              url = f"{base}?{params}"
+              print(f"TEST {expected_intent}: {url}")
+              try:
+                  with urllib.request.urlopen(url, timeout=120) as response:
+                      status = response.status
+                      body = response.read().decode("utf-8", errors="replace")
+              except Exception as exc:
+                  print(f"FAIL {expected_intent}: request error: {exc}")
+                  failed = True
+                  continue
+
+              print(f"HTTP {status}")
+              if status != 200:
+                  print(f"FAIL {expected_intent}: HTTP {status}")
+                  failed = True
+                  continue
+
+              try:
+                  payload = json.loads(body)
+              except Exception as exc:
+                  print(f"FAIL {expected_intent}: invalid JSON: {exc}")
+                  print(body[:1000])
+                  failed = True
+                  continue
+
+              actual_intent = payload.get("intent")
+              count = payload.get("count")
+              source = payload.get("source")
+              message = payload.get("message")
+              print(json.dumps({
+                  "expected_intent": expected_intent,
+                  "actual_intent": actual_intent,
+                  "count": count,
+                  "source": source,
+                  "message": message,
+              }, indent=2))
+
+              if actual_intent != expected_intent:
+                  print(f"FAIL {expected_intent}: routed to {actual_intent!r}")
+                  failed = True
+              if not isinstance(payload.get("results"), list):
+                  print(f"FAIL {expected_intent}: results is not a list")
+                  failed = True
+
+          if failed:
+              raise SystemExit(1)
+          print("ALL SMART SEARCH SMOKE TESTS PASSED")
+          PY
