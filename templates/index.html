@@ -68,23 +68,19 @@
   </section>
 
   <section class="panel">
-    <h2>Universal Intelligence Search</h2>
-    <p>Use one search center for jobs, businesses/contractors, permit research, and evidence-backed electrical permit leads.</p>
+    <h2>Smart Search</h2>
+    <p>One search engine for jobs, businesses, contractors, permit records, permit-pulling leads, and general web research. Type what you want; the Command Center chooses the search path automatically.</p>
 
-    <label>Search Type
-      <select id="searchMode" onchange="updateSearchPlaceholder()">
-        <option value="jobs">Jobs</option>
-        <option value="businesses">Businesses / Contractors</option>
-        <option value="public_records">Permits / Public Records</option>
-        <option value="permit_leads">Electrical Permit Leads</option>
-      </select>
+    <label>What are you looking for?
+      <input id="searchQuery" placeholder="Example: contractors looking for a master electrician to pull permits">
+    </label>
+    <label>Location
+      <input id="searchLocation" placeholder="Portsmouth, VA">
     </label>
 
-    <label>What are you looking for?<input id="searchQuery" value="machine learning engineer" placeholder="machine learning engineer"></label>
-    <label>Location<input id="searchLocation" placeholder="Portsmouth, VA"></label>
-
-    <button onclick="universalSearch()">Search</button>
+    <button id="smartSearchButton" onclick="universalSearch()">Search</button>
     <div id="searchStatus"></div>
+    <div id="searchMeta"></div>
     <div id="universalResults"></div>
   </section>
 
@@ -105,7 +101,8 @@ async function savePipeline(leadId) {
   status.textContent = "Saving...";
   try {
     const response = await fetch("/api/qualified-leads/" + leadId + "/pipeline", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({stage: stage, notes: notes, follow_up_date: followUp})
     });
     const data = await response.json();
@@ -113,30 +110,8 @@ async function savePipeline(leadId) {
     document.getElementById("stage-label-" + leadId).textContent = data.stage;
     status.textContent = "Saved";
     setTimeout(() => window.location.reload(), 500);
-  } catch (error) { status.textContent = "Save failed"; }
-}
-
-function updateSearchPlaceholder() {
-  const mode = document.getElementById("searchMode").value;
-  const query = document.getElementById("searchQuery");
-  const location = document.getElementById("searchLocation");
-
-  if (mode === "jobs") {
-    query.placeholder = "machine learning engineer";
-    if (["electrical contractors","electrical permits","electrical permit activity"].includes(query.value)) query.value = "machine learning engineer";
-    location.placeholder = "Portsmouth, VA";
-  } else if (mode === "businesses") {
-    query.placeholder = "electrical contractors";
-    if (!query.value || ["machine learning engineer","artificial intelligence engineer","AI engineer","automation engineer","electrical permits","electrical permit activity"].includes(query.value)) query.value = "electrical contractors";
-    location.placeholder = "Portsmouth, VA";
-  } else if (mode === "permit_leads") {
-    query.placeholder = "electrical permit activity";
-    query.value = "electrical permit activity";
-    location.placeholder = "Portsmouth, VA";
-  } else {
-    query.placeholder = "electrical permits";
-    if (!query.value || ["machine learning engineer","artificial intelligence engineer","AI engineer","automation engineer","electrical contractors","electrical permit activity"].includes(query.value)) query.value = "electrical permits";
-    location.placeholder = "Portsmouth, VA";
+  } catch (error) {
+    status.textContent = "Save failed";
   }
 }
 
@@ -176,44 +151,65 @@ function safeHttpUrl(value) {
 }
 
 function addResultRow(result) {
-  const row = document.createElement("div"); row.className = "row";
-  const title = document.createElement("strong"); title.textContent = result.title || "Result"; row.appendChild(title);
-  if (result.subtitle) { const subtitle = document.createElement("p"); subtitle.textContent = result.subtitle; row.appendChild(subtitle); }
+  const row = document.createElement("div");
+  row.className = "row";
 
-  if (result.type === "permit_lead") {
-    const details = [];
-    if (result.permit_number) details.push("Permit: " + result.permit_number);
-    if (result.permit_date) details.push("Date: " + result.permit_date);
-    if (result.project_address) details.push("Project address: " + result.project_address);
-    if (result.project_type) details.push("Project type: " + result.project_type);
-    if (result.owner_name) details.push("Owner: " + result.owner_name);
-    if (details.length) {
-      const detailBox = document.createElement("p");
-      detailBox.textContent = details.join(" | ");
-      row.appendChild(detailBox);
-    }
+  const title = document.createElement("strong");
+  title.textContent = result.title || result.name || result.company || "Result";
+  row.appendChild(title);
+
+  if (result.subtitle) {
+    const subtitle = document.createElement("p");
+    subtitle.textContent = result.subtitle;
+    row.appendChild(subtitle);
   }
 
-  const meta = [];
-  if (result.phone) meta.push(result.phone);
-  if (result.rating !== undefined && result.rating !== null) meta.push("Rating " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
-  if (result.prospect_score !== undefined && result.prospect_score !== null) meta.push("Prospect score " + result.prospect_score + "/100");
-  if (result.fit) meta.push("Fit " + result.fit);
-  if (result.lead_signal) meta.push(result.lead_signal);
-  if (result.saved_to_pipeline) meta.push("Saved to Qualified pipeline");
-  if (result.source) meta.push(result.source);
-  if (meta.length) { const info = document.createElement("small"); info.textContent = meta.join(" | "); row.appendChild(info); }
-  if (result.analysis) { const analysis = document.createElement("p"); analysis.textContent = result.analysis; row.appendChild(analysis); }
-  if (result.automation_opportunity) { const opportunity = document.createElement("p"); opportunity.textContent = result.automation_opportunity; row.appendChild(opportunity); }
+  const details = [];
+  if (result.company && result.company !== result.title) details.push("Company: " + result.company);
+  if (result.location) details.push("Location: " + result.location);
+  if (result.posted) details.push("Posted: " + result.posted);
+  if (result.salary) details.push("Salary: " + result.salary);
+  if (result.phone) details.push("Phone: " + result.phone);
+  if (result.rating !== undefined && result.rating !== null) details.push("Rating: " + result.rating + (result.review_count ? " (" + result.review_count + " reviews)" : ""));
+  if (result.quality_score !== undefined && result.quality_score !== null) details.push("Quality: " + result.quality_score + "/100");
+  if (result.prospect_score !== undefined && result.prospect_score !== null) details.push("Prospect score: " + result.prospect_score + "/100");
+  if (result.verification) details.push("Verification: " + result.verification);
+  if (result.fit) details.push("Fit: " + result.fit);
+  if (result.lead_signal) details.push(result.lead_signal);
+  if (result.source) details.push("Source: " + result.source);
+  if (result.saved_to_pipeline) details.push("Saved to Qualified pipeline");
 
-  const linkUrl = safeHttpUrl(result.website || result.url || "");
+  if (details.length) {
+    const info = document.createElement("small");
+    info.textContent = details.join(" | ");
+    row.appendChild(info);
+  }
+
+  if (result.analysis) {
+    const analysis = document.createElement("p");
+    analysis.textContent = result.analysis;
+    row.appendChild(analysis);
+  }
+  if (result.reason) {
+    const reason = document.createElement("p");
+    reason.textContent = result.reason;
+    row.appendChild(reason);
+  }
+  if (result.automation_opportunity) {
+    const opportunity = document.createElement("p");
+    opportunity.textContent = result.automation_opportunity;
+    row.appendChild(opportunity);
+  }
+
+  const linkUrl = safeHttpUrl(result.website || result.url || result.direct_url || result.source_url || "");
   if (linkUrl) {
     const link = document.createElement("a");
-    link.setAttribute("href", linkUrl);
-    link.setAttribute("target", "_blank");
-    link.setAttribute("rel", "noopener noreferrer");
-    link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Evidence";
-    row.appendChild(document.createElement("br")); row.appendChild(link);
+    link.href = linkUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = result.type === "job" ? "Open Job" : result.type === "business" ? "Open Business" : "Open Source";
+    row.appendChild(document.createElement("br"));
+    row.appendChild(link);
   }
 
   if (result.type === "permit_lead") {
@@ -224,18 +220,23 @@ function addResultRow(result) {
     saveButton.onclick = () => savePermitLead(result, saveButton);
     row.appendChild(saveButton);
   }
+
   return row;
 }
 
 async function analyzeAndStageProspects(results, query, location) {
   const response = await fetch("/api/prospect-intake", {
-    method: "POST", headers: {"Content-Type": "application/json"},
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
     body: JSON.stringify({results: results, query: query, location: location})
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Prospect analysis failed");
   const byId = new Map((data.results || []).map(item => [item.id, item]));
-  return {summary: data, results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))};
+  return {
+    summary: data,
+    results: results.map(result => Object.assign({}, result, byId.get(result.id) || {}))
+  };
 }
 
 function postSearchJson(endpoint, payload) {
@@ -250,7 +251,7 @@ function postSearchJson(endpoint, payload) {
       return;
     }
 
-    xhr.timeout = 45000;
+    xhr.timeout = 120000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
       let data = {};
@@ -277,31 +278,64 @@ function postSearchJson(endpoint, payload) {
   });
 }
 
+function renderSearchMeta(data) {
+  const meta = document.getElementById("searchMeta");
+  while (meta.firstChild) meta.removeChild(meta.firstChild);
+
+  const pieces = [];
+  if (data.intent) pieces.push("Detected: " + String(data.intent).replace(/_/g, " "));
+  if (data.source) pieces.push("Source: " + data.source);
+  if (data.search_details) pieces.push(data.search_details);
+
+  if (pieces.length) {
+    const info = document.createElement("small");
+    info.textContent = pieces.join(" | ");
+    meta.appendChild(info);
+  }
+}
+
 async function universalSearch() {
-  const mode = document.getElementById("searchMode").value;
   const query = document.getElementById("searchQuery").value.trim();
   const location = document.getElementById("searchLocation").value.trim();
   const status = document.getElementById("searchStatus");
   const container = document.getElementById("universalResults");
-  status.textContent = mode === "permit_leads" ? "Searching for current electrical permit activity..." : mode === "jobs" ? "Searching current local AI/engineering job listings..." : "Searching...";
-  while (container.firstChild) container.removeChild(container.firstChild);
+  const button = document.getElementById("smartSearchButton");
 
-  let data;
-  try {
-    const endpoint = mode === "permit_leads" ? "/api/permit-leads" : mode === "jobs" ? "/api/local-jobs" : "/api/universal-search";
-    data = await postSearchJson(endpoint, {mode: mode, query: query, location: location});
-  } catch (error) {
-    status.textContent = "Search request failed: " + (error && error.message ? error.message : "Unknown request error");
+  while (container.firstChild) container.removeChild(container.firstChild);
+  renderSearchMeta({});
+
+  if (!query) {
+    status.textContent = "Enter what you want to search for.";
+    document.getElementById("searchQuery").focus();
     return;
   }
 
+  status.textContent = "Searching and verifying the best source for this inquiry...";
+  button.disabled = true;
+  button.textContent = "Searching...";
+
+  let data;
+  try {
+    data = await postSearchJson("/api/smart-search", {query: query, location: location});
+  } catch (error) {
+    status.textContent = "Search request failed: " + (error && error.message ? error.message : "Unknown request error");
+    button.disabled = false;
+    button.textContent = "Search";
+    return;
+  }
+
+  button.disabled = false;
+  button.textContent = "Search";
+  renderSearchMeta(data);
+
   if (!data.configured) {
-    status.textContent = data.message || "This search source is not configured yet.";
+    status.textContent = data.message || "The required search source is not configured.";
     return;
   }
 
   let displayResults = Array.isArray(data.results) ? data.results : [];
-  if (mode === "businesses" && displayResults.length > 0) {
+
+  if (data.intent === "businesses" && displayResults.length > 0) {
     status.textContent = "Found " + displayResults.length + " businesses. Analyzing and staging qualified prospects...";
     try {
       const prospectData = await analyzeAndStageProspects(displayResults, query, location);
@@ -320,17 +354,30 @@ async function universalSearch() {
     } catch (_) {
       const fallback = document.createElement("div");
       fallback.className = "row";
-      fallback.textContent = (result && result.title) ? result.title : "Job result";
+      fallback.textContent = result && (result.title || result.name) ? (result.title || result.name) : "Search result";
       container.appendChild(fallback);
     }
   });
 
   if (displayResults.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "No accurate current results found for that exact search and location.";
+    empty.textContent = "No verified current results found for that inquiry and location.";
     container.appendChild(empty);
   }
 }
+
+document.addEventListener("DOMContentLoaded", function () {
+  const query = document.getElementById("searchQuery");
+  const location = document.getElementById("searchLocation");
+  [query, location].forEach(input => {
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        universalSearch();
+      }
+    });
+  });
+});
 </script>
 </body>
 </html>
