@@ -5,9 +5,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import requests
 from flask import jsonify, request
 
-from app import app
+from app import app, gmail_access_token, send_gmail
 from src.services import run_ai
 
 DB_PATH = Path(os.getenv("OUTREACH_DB_PATH", "/tmp/ai_ops_outreach.sqlite3"))
@@ -152,58 +153,76 @@ def _draft_email(lead: Dict[str, Any], follow_up_number: int = 0) -> Dict[str, A
 
 
 def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> Dict[str, Any]:
-    """Send via the existing Gmail workflow endpoint if configured by the app.
-
-    This module intentionally does not invent OAuth credentials or bypass the existing Gmail connector.
-    """
-    sender = app.view_functions.get("gmail_send") or app.view_functions.get("send_gmail")
-    if sender is None:
-        return {"ok": False, "error": "Existing Gmail send connector was not found in the running app."}
-
-    payload = {"to": to_email, "subject": subject, "body": body}
-    if thread_id:
-        payload["thread_id"] = thread_id
     try:
-        with app.test_request_context("/api/gmail/send", method="POST", json=payload):
-            response = sender()
-        status = 200
-        if isinstance(response, tuple):
-            response, status = response[0], response[1]
-        data = response.get_json() if hasattr(response, "get_json") else response
-        if status >= 400 or not isinstance(data, dict):
-            return {"ok": False, "error": f"Gmail send failed with HTTP {status}."}
-        if data.get("error"):
-            return {"ok": False, "error": _clean(data.get("error"), 1000)}
+        if thread_id:
+            token = gmail_access_token()
+            from email.message import EmailMessage
+            import base64
+
+            msg = EmailMessage()
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            from_email = os.environ.get("GMAIL_FROM_EMAIL", "")
+            if from_email:
+                msg["From"] = from_email
+            msg.set_content(body)
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+            response = requests.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"raw": raw, "threadId": thread_id},
+                timeout=30,
+            )
+            if not response.ok:
+                return {"ok": False, "error": f"Gmail error {response.status_code}: {response.text[:500]}"}
+            data = response.json()
+        else:
+            data = send_gmail(to_email, subject, body)
+
         return {
             "ok": True,
-            "message_id": data.get("message_id") or data.get("id"),
-            "thread_id": data.get("thread_id") or data.get("threadId") or thread_id,
+            "message_id": data.get("id"),
+            "thread_id": data.get("threadId") or thread_id,
             "raw": data,
         }
     except Exception as exc:
-        return {"ok": False, "error": f"Gmail send failed: {type(exc).__name__}."}
+        return {"ok": False, "error": _clean(exc, 1000)}
 
 
 def _gmail_thread_has_reply(thread_id: str) -> Dict[str, Any]:
-    checker = app.view_functions.get("gmail_thread") or app.view_functions.get("get_gmail_thread")
-    if checker is None:
-        return {"ok": False, "replied": False, "error": "Existing Gmail thread/reply connector was not found in the running app."}
     try:
-        with app.test_request_context(f"/api/gmail/thread/{thread_id}", method="GET"):
-            response = checker(thread_id) if checker.__code__.co_argcount else checker()
-        status = 200
-        if isinstance(response, tuple):
-            response, status = response[0], response[1]
-        data = response.get_json() if hasattr(response, "get_json") else response
-        if status >= 400 or not isinstance(data, dict):
-            return {"ok": False, "replied": False, "error": f"Gmail thread lookup failed with HTTP {status}."}
+        token = gmail_access_token()
+        response = requests.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"format": "metadata", "metadataHeaders": ["From", "To"]},
+            timeout=30,
+        )
+        if not response.ok:
+            return {"ok": False, "replied": False, "error": f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
+        data = response.json()
         messages = data.get("messages") or []
-        replied = bool(data.get("replied"))
-        if not replied and isinstance(messages, list) and len(messages) > 1:
-            replied = True
+        if len(messages) <= 1:
+            return {"ok": True, "replied": False, "raw": data}
+
+        sender = (os.environ.get("GMAIL_FROM_EMAIL") or "").lower().strip()
+        replied = False
+        for message in messages[1:]:
+            headers = {
+                str(h.get("name") or "").lower(): str(h.get("value") or "")
+                for h in ((message.get("payload") or {}).get("headers") or [])
+            }
+            from_value = headers.get("from", "").lower()
+            if sender:
+                if sender not in from_value:
+                    replied = True
+                    break
+            else:
+                replied = True
+                break
         return {"ok": True, "replied": replied, "raw": data}
     except Exception as exc:
-        return {"ok": False, "replied": False, "error": f"Gmail reply check failed: {type(exc).__name__}."}
+        return {"ok": False, "replied": False, "error": _clean(exc, 1000)}
 
 
 @app.route("/api/outreach/leads", methods=["POST"])
@@ -336,8 +355,7 @@ def process_followups():
         if not sent.get("ok"):
             conn.execute("UPDATE outreach_leads SET last_error=?, updated_at=? WHERE id=?", (sent.get("error"), _iso(now), lead_id))
             processed.append({"id": lead_id, "status": "error", "error": sent.get("error")}); continue
-        wait_days = SECOND_FOLLOWUP_DAYS if next_number == 1 else SECOND_FOLLOWUP_DAYS
-        due = now + timedelta(days=wait_days) if next_number < MAX_FOLLOWUPS else now + timedelta(days=wait_days)
+        due = now + timedelta(days=SECOND_FOLLOWUP_DAYS)
         conn.execute(
             """UPDATE outreach_leads SET subject=?, body=?, gmail_message_id=?, gmail_thread_id=?, follow_up_count=?, follow_up_due_at=?,
             status='followup_sent', last_error=NULL, updated_at=? WHERE id=?""",
