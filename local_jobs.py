@@ -159,6 +159,31 @@ def _looks_like_non_job(title, snippet):
     return any(signal in text for signal in NON_JOB_SIGNALS)
 
 
+def _is_job_aggregation_page(title, url):
+    """Reject search/category pages that describe collections of jobs, not an opening."""
+    text = _clean(title, 500).lower()
+    try:
+        parsed = urlparse(_clean(url, 1600))
+        path = (parsed.path or "").lower()
+        query = (parsed.query or "").lower()
+    except ValueError:
+        path, query = "", ""
+
+    if re.search(r"^\s*[\d,]+\s+.+\bjobs?\s+in\b", text):
+        return True
+    if re.search(r"\bjobs?\s+in\s+.+\(\d+\s+new\)", text):
+        return True
+
+    host = _host(url)
+    if host in {"linkedin.com", "www.linkedin.com"}:
+        return path.startswith("/jobs/") and not path.startswith("/jobs/view/")
+    if host in {"glassdoor.com", "www.glassdoor.com"}:
+        return path.startswith("/job/") and "/job-listing/" not in path
+    if host in {"indeed.com", "www.indeed.com"}:
+        return path.rstrip("/") in {"/jobs", "/q-jobs"} or (path.startswith("/jobs") and "jk=" not in query)
+    return False
+
+
 def _role_signals(title, snippet, query):
     text = f"{title} {snippet}".lower()
     variants = _role_variants(query)
@@ -237,6 +262,8 @@ def _evaluate(item, query, location, allow_remote=False):
 
     if not title or not url:
         return None, "missing_title_or_url"
+    if _is_job_aggregation_page(title, url):
+        return None, "job_search_or_category_page"
     if _looks_like_non_job(title, snippet):
         return None, "non_job_content"
     if not allow_remote and _is_remote(title, snippet):
@@ -255,10 +282,7 @@ def _evaluate(item, query, location, allow_remote=False):
     host = _host(url)
     trusted = host in TRUSTED_JOB_HOSTS or host.endswith(".myworkdayjobs.com")
     source_score = 20 if trusted else 14
-    quality_score = min(
-        100,
-        30 + _freshness_score(age_days) + source_score + 15 + 10,
-    )
+    quality_score = min(100, 30 + _freshness_score(age_days) + source_score + 15 + 10)
 
     return {
         "type": "job",
@@ -357,7 +381,7 @@ def local_jobs():
         "message": (
             f"Found {len(accepted)} source-backed local job result"
             + ("" if len(accepted) == 1 else "s")
-            + ". Remote-only, stale, unrelated, and duplicate results were filtered out."
+            + ". Search/category pages, remote-only, stale, unrelated, and duplicate results were filtered out."
         ),
         "results": accepted,
         "rejected_count": len(rejected),
