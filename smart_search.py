@@ -16,7 +16,6 @@ def _clean(value, limit=500):
 
 def _detect_intent(query):
     text = _clean(query, 1000).lower()
-
     if (
         any(term in text for term in ("permit lead", "permit leads", "permit-pulling lead", "permit pulling lead"))
         or (
@@ -25,10 +24,8 @@ def _detect_intent(query):
         )
     ):
         return "permit_leads", {"permit_leads": 10, "contractors": 0, "permits": 0, "jobs": 0, "businesses": 0}
-
     if any(term in text for term in ("master electrician", "qualifying agent", "electrical qualifier", "permit puller", "pull permits")):
         return "contractors", {"permit_leads": 0, "contractors": 10, "permits": 0, "jobs": 0, "businesses": 0}
-
     if any(term in text for term in ("machine learning engineer", "ai engineer", "automation engineer", "llm engineer")) and any(
         term in text for term in ("job", "jobs", "hiring", "career", "position", "opening", "employment")
     ):
@@ -38,7 +35,6 @@ def _detect_intent(query):
     contractor_terms = ("contractor", "electrician", "qualifier", "qualifying agent", "master electrician", "pull permits", "permit puller")
     job_terms = ("job", "jobs", "hiring", "career", "position", "opening", "engineer", "developer", "employment")
     business_terms = ("business", "businesses", "company", "companies", "shop", "shops", "provider", "providers")
-
     scores = {
         "permit_leads": 0,
         "contractors": sum(1 for term in contractor_terms if term in text),
@@ -46,14 +42,12 @@ def _detect_intent(query):
         "jobs": sum(1 for term in job_terms if term in text),
         "businesses": sum(1 for term in business_terms if term in text),
     }
-
     if "permit" in text and any(term in text for term in ("pulled", "issued", "record", "recent", "city", "county")):
         scores["permits"] += 3
     if any(term in text for term in ("machine learning engineer", "ai engineer", "automation engineer", "llm engineer")):
         scores["jobs"] += 3
     if any(term in text for term in ("find companies", "find businesses", "businesses near", "companies near")):
         scores["businesses"] += 3
-
     best = max(scores, key=scores.get)
     if scores[best] == 0:
         return "web", scores
@@ -65,11 +59,7 @@ def _job_payload(query, location):
         response = local_jobs.local_jobs()
     if isinstance(response, tuple):
         response = response[0]
-    return response.get_json() if hasattr(response, "get_json") else {
-        "configured": True,
-        "results": [],
-        "message": "Job search returned no readable response.",
-    }
+    return response.get_json() if hasattr(response, "get_json") else {"configured": True, "results": [], "message": "Job search returned no readable response."}
 
 
 def _permit_lead_payload(query, location):
@@ -77,11 +67,21 @@ def _permit_lead_payload(query, location):
         response = permit_leads.permit_leads()
     if isinstance(response, tuple):
         response = response[0]
-    return response.get_json() if hasattr(response, "get_json") else {
-        "configured": True,
-        "results": [],
-        "message": "Permit-lead search returned no readable response.",
-    }
+    return response.get_json() if hasattr(response, "get_json") else {"configured": True, "results": [], "message": "Permit-lead search returned no readable response."}
+
+
+def _permit_host_is_authoritative(url):
+    try:
+        host = (urlparse(_clean(url, 1600)).hostname or "").lower()
+    except ValueError:
+        return False
+    if host.endswith(".gov"):
+        return True
+    if any(token in host for token in ("accela.com", "energov", "tylerhost", "mygovernmentonline", "permittrax", "citygovapp")):
+        return True
+    if "cityof" in host or "countyof" in host:
+        return True
+    return False
 
 
 def _permit_record_payload(query, location):
@@ -105,7 +105,7 @@ def _permit_record_payload(query, location):
         "issued permit", "issued permits", "permit search", "permit records", "permit record",
         "permit portal", "permit report", "permit activity", "open data", "citizen access",
         "permit database", "permit lookup", "permit history", "recent permits", "active permits",
-        "accela", "energov",
+        "accela", "energov", "record details",
     )
 
     kept = []
@@ -114,6 +114,8 @@ def _permit_record_payload(query, location):
         subtitle = _clean(item.get("subtitle"), 1500)
         url = _clean(item.get("url"), 1600)
         haystack = f"{title} {subtitle} {url}".lower()
+        if not _permit_host_is_authoritative(url):
+            continue
         if any(signal in haystack for signal in reject_signals):
             continue
         if not any(signal in haystack for signal in record_signals):
@@ -124,16 +126,15 @@ def _permit_record_payload(query, location):
     result["results"] = kept
     result["count"] = len(kept)
     result["message"] = (
-        f"Found {len(kept)} record-oriented permit result"
+        f"Found {len(kept)} authoritative permit-record result"
         + ("." if len(kept) == 1 else "s.")
-        + " Procedural, application, fee, and how-to pages were filtered out."
+        + " Commercial contractor pages and procedural/application pages were filtered out."
     )
     return result
 
 
 def _smart_search(query, location):
     intent, intent_scores = _detect_intent(query)
-
     if intent == "permit_leads":
         payload = _permit_lead_payload(query, location)
     elif intent == "contractors":
@@ -163,9 +164,9 @@ def _smart_search(query, location):
         "search_details": {
             "permit_leads": "Strict evidence-backed Master Electrician permit-pulling lead search.",
             "contractors": "Google Places discovery plus independent Brave and Google evidence verification.",
-            "jobs": "Verified local job search with search/category pages, location, freshness, and quality filtering.",
+            "jobs": "Verified local job search with direct-posting, location, freshness, and quality filtering.",
             "businesses": "Google Places business discovery using the requested inquiry and location.",
-            "permits": "Record-oriented permit search with procedural/how-to pages suppressed when the inquiry asks for issued or recent records.",
+            "permits": "Authoritative permit-record search that suppresses commercial, procedural, fee, and how-to pages when the inquiry asks for issued or recent records.",
             "web_research": "General public web research using configured search providers.",
         }.get(intent, "Smart Search"),
     }
