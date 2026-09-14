@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import requests
 
 from app import db
-from gmail_outreach_state import already_contacted, send_tracked_email
+from gmail_outreach_state import already_contacted, gmail_ready, send_tracked_email
 from outreach_automation import OutreachLead, _draft_email
 
 EMAIL_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
@@ -125,6 +125,12 @@ def _verified_intent(result):
 def ingest_verified_results(search_payload):
     summary = {"enabled": AUTOSEND_ENABLED, "eligible": 0, "saved": 0, "sent": 0, "skipped": []}
     if not AUTOSEND_ENABLED:
+        return summary
+
+    gmail_status = gmail_ready()
+    if not gmail_status.get("ok"):
+        summary["enabled"] = False
+        summary["paused_reason"] = gmail_status.get("reason") or "gmail_not_ready"
         return summary
 
     intent = _clean(search_payload.get("intent"), 100)
