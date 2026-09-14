@@ -5,7 +5,8 @@ from urllib.parse import urlparse
 import requests
 
 from app import db
-from outreach_automation import OutreachLead, _draft_email, _gmail_send
+from gmail_outreach_state import already_contacted, send_tracked_email
+from outreach_automation import OutreachLead, _draft_email
 
 EMAIL_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
@@ -140,16 +141,21 @@ def ingest_verified_results(search_payload):
 
         summary["eligible"] += 1
         source_url = _clean(result.get("source_url") or result.get("website") or result.get("url"), 1800)
-        existing = OutreachLead.query.filter_by(company=company).filter(
-            OutreachLead.status.in_(["sent", "followup_sent", "responded", "completed_no_reply"])
-        ).first()
-        if existing:
-            summary["skipped"].append({"company": company, "reason": "already_contacted"})
-            continue
 
         email, email_source = _verified_public_email(result)
         if not email:
             summary["skipped"].append({"company": company, "reason": "no_verified_public_email"})
+            continue
+
+        if already_contacted(email):
+            summary["skipped"].append({"company": company, "reason": "already_contacted_gmail"})
+            continue
+
+        existing = OutreachLead.query.filter_by(company=company).filter(
+            OutreachLead.status.in_(["sent", "followup_sent", "responded", "completed_no_reply"])
+        ).first()
+        if existing:
+            summary["skipped"].append({"company": company, "reason": "already_contacted_local"})
             continue
 
         lead = OutreachLead(
@@ -175,7 +181,7 @@ def ingest_verified_results(search_payload):
 
         lead.subject = drafted["subject"]
         lead.body = drafted["body"]
-        sent = _gmail_send(email, lead.subject, lead.body)
+        sent = send_tracked_email(email, lead.subject, lead.body, company, step="initial")
         if not sent.get("ok"):
             lead.last_error = _clean(sent.get("error"), 2000)
             db.session.commit()
