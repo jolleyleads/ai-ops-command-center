@@ -28,6 +28,27 @@ def _auth_headers():
     return {"Authorization": f"Bearer {gmail_access_token()}"}
 
 
+def gmail_ready():
+    try:
+        headers = _auth_headers()
+        response = requests.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            headers=headers,
+            timeout=20,
+        )
+        if not response.ok:
+            return {"ok": False, "reason": f"gmail_profile_{response.status_code}"}
+        email = (response.json().get("emailAddress") or "").lower().strip()
+        if not email:
+            return {"ok": False, "reason": "gmail_profile_missing_email"}
+        return {"ok": True, "email": email}
+    except Exception as exc:
+        text = _clean(exc, 1000).lower()
+        if "invalid_grant" in text or "expired or revoked" in text:
+            return {"ok": False, "reason": "gmail_authorization_expired"}
+        return {"ok": False, "reason": f"gmail_auth_{type(exc).__name__}"}
+
+
 def _header_map(message):
     return {
         str(item.get("name") or "").lower(): str(item.get("value") or "")
@@ -52,17 +73,14 @@ def _account_email():
     configured = (os.getenv("GMAIL_FROM_EMAIL") or "").lower().strip()
     if configured:
         return configured
-    response = requests.get(
-        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-        headers=_auth_headers(),
-        timeout=30,
-    )
-    if not response.ok:
-        return ""
-    return (response.json().get("emailAddress") or "").lower().strip()
+    status = gmail_ready()
+    return status.get("email", "") if status.get("ok") else ""
 
 
 def send_tracked_email(to_email, subject, body, company, thread_id="", step="initial"):
+    status = gmail_ready()
+    if not status.get("ok"):
+        return {"ok": False, "error": status.get("reason") or "gmail_not_ready"}
     try:
         msg = EmailMessage()
         msg["To"] = _clean(to_email, 500)
@@ -116,6 +134,8 @@ def _get_message_metadata(message_id):
 def already_contacted(to_email):
     to_email = (to_email or "").lower().strip()
     if not to_email:
+        return False
+    if not gmail_ready().get("ok"):
         return False
     try:
         response = requests.get(
@@ -222,6 +242,10 @@ def _draft_followup(company, recipient, subject, original_snippet, followup_numb
 
 
 def process_durable_followups():
+    status = gmail_ready()
+    if not status.get("ok"):
+        return {"ok": False, "processed": [], "error": status.get("reason") or "gmail_not_ready"}
+
     now = datetime.now(timezone.utc)
     sender = _account_email()
     if not sender:
