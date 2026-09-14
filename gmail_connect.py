@@ -65,6 +65,12 @@ def _client_credentials():
     )
 
 
+def _client_hint(client_id):
+    if not client_id:
+        return "missing"
+    return client_id if len(client_id) <= 28 else f"{client_id[:10]}...{client_id[-18:]}"
+
+
 def _stored_refresh_token():
     try:
         row = GmailOAuthConnection.query.order_by(GmailOAuthConnection.id.desc()).first()
@@ -118,6 +124,13 @@ def gmail_access_token():
 # Patch the shared app helper before outreach modules import it.
 app_module.gmail_access_token = gmail_access_token
 
+client_id_for_log, _ = _client_credentials()
+app.logger.warning(
+    "GMAIL_OAUTH_CONFIG client=%s redirect=%s",
+    _client_hint(client_id_for_log),
+    _redirect_uri(),
+)
+
 
 @app.route("/gmail", methods=["GET"])
 def gmail_connect_page():
@@ -136,10 +149,11 @@ def gmail_connect_page():
     except Exception:
         pass
 
+    client_id, _ = _client_credentials()
     return f"""<!doctype html>
 <html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Connect Gmail</title>
-<style>body{{font-family:Arial,sans-serif;background:#0d1321;color:#fff;margin:0;padding:30px}}.card{{max-width:650px;margin:40px auto;background:#18233a;padding:28px;border-radius:16px}}a.btn{{display:inline-block;background:#fff;color:#111;padding:14px 20px;border-radius:10px;text-decoration:none;font-weight:700}}.status{{padding:12px 0 20px;color:#d7e3ff}}small{{color:#9fb2d0}}</style></head>
-<body><div class='card'><h1>Gmail Connection</h1><div class='status'>{status}</div><p>Click once, sign into Google, and press Allow. AI Ops will save the authorization automatically.</p><a class='btn' href='/connect/gmail'>Connect Gmail</a><p><small>Requested access: read message/thread metadata needed for reply checks and send outreach emails.</small></p><p><a href='/' style='color:#d7e3ff'>Back to AI Ops</a></p></div></body></html>"""
+<style>body{{font-family:Arial,sans-serif;background:#0d1321;color:#fff;margin:0;padding:30px}}.card{{max-width:650px;margin:40px auto;background:#18233a;padding:28px;border-radius:16px}}a.btn{{display:inline-block;background:#fff;color:#111;padding:14px 20px;border-radius:10px;text-decoration:none;font-weight:700}}.status{{padding:12px 0 20px;color:#d7e3ff}}small{{color:#9fb2d0;word-break:break-all}}</style></head>
+<body><div class='card'><h1>Gmail Connection</h1><div class='status'>{status}</div><p>Click once, sign into Google, and press Allow. AI Ops will save the authorization automatically.</p><a class='btn' href='/connect/gmail'>Connect Gmail</a><p><small>OAuth client in use: {_client_hint(client_id)}</small></p><p><small>Redirect URI: {_redirect_uri()}</small></p><p><a href='/' style='color:#d7e3ff'>Back to AI Ops</a></p></div></body></html>"""
 
 
 @app.route("/connect/gmail", methods=["GET"])
@@ -164,12 +178,15 @@ def connect_gmail():
 @app.route("/oauth/google/callback", methods=["GET"])
 def gmail_oauth_callback():
     if request.args.get("error"):
+        app.logger.warning("GMAIL_OAUTH_CALLBACK error=%s", request.args.get("error"))
         return redirect("/gmail?error=google_denied")
     if not _valid_state(request.args.get("state")):
+        app.logger.warning("GMAIL_OAUTH_CALLBACK invalid_state")
         return "Invalid or expired OAuth state. Start again from /gmail.", 400
 
     code = (request.args.get("code") or "").strip()
     if not code:
+        app.logger.warning("GMAIL_OAUTH_CALLBACK missing_code")
         return "Google did not return an authorization code.", 400
 
     client_id, client_secret = _client_credentials()
@@ -185,13 +202,14 @@ def gmail_oauth_callback():
         timeout=20,
     )
     if not response.ok:
-        app.logger.warning("GMAIL_OAUTH_EXCHANGE_FAILED status=%s", response.status_code)
+        app.logger.warning("GMAIL_OAUTH_EXCHANGE_FAILED status=%s body=%s", response.status_code, response.text[:300])
         return "Google authorization could not be completed. Start again from /gmail.", 502
 
     data = response.json()
     refresh_token = (data.get("refresh_token") or "").strip()
     access_token = (data.get("access_token") or "").strip()
     if not refresh_token:
+        app.logger.warning("GMAIL_OAUTH_EXCHANGE_FAILED missing_refresh_token")
         return "Google did not issue a refresh token. Start again and approve access.", 502
 
     email = ""
@@ -219,6 +237,12 @@ def gmail_oauth_callback():
 
 @app.route("/api/gmail/status", methods=["GET"])
 def gmail_status():
+    client_id, _ = _client_credentials()
+    base = {
+        "client_id": client_id,
+        "client_hint": _client_hint(client_id),
+        "redirect_uri": _redirect_uri(),
+    }
     try:
         token = gmail_access_token()
         profile = requests.get(
@@ -227,10 +251,10 @@ def gmail_status():
             timeout=20,
         )
         if not profile.ok:
-            return jsonify({"connected": False, "reason": f"gmail_profile_{profile.status_code}"}), 200
+            return jsonify({**base, "connected": False, "reason": f"gmail_profile_{profile.status_code}"}), 200
         email = (profile.json().get("emailAddress") or "").strip()
-        return jsonify({"connected": True, "email": email, "redirect_uri": _redirect_uri()}), 200
+        return jsonify({**base, "connected": True, "email": email}), 200
     except Exception as exc:
         text = str(exc).lower()
         reason = "authorization_expired" if ("invalid_grant" in text or "expired or revoked" in text) else "not_connected"
-        return jsonify({"connected": False, "reason": reason, "redirect_uri": _redirect_uri()}), 200
+        return jsonify({**base, "connected": False, "reason": reason}), 200
