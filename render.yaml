@@ -3,6 +3,8 @@ services:
     name: ai-ops-command-center
     env: python
     plan: free
+    region: oregon
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn brave_app:app --timeout 120 --workers 1
+    startCommand: gunicorn commercial_app:app
     autoDeploy: true
+    healthCheckPath: /api/health
