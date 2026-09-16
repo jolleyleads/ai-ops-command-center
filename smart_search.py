@@ -9,9 +9,36 @@ import permit_leads
 import search_overrides
 from universal_app import _search_public_records
 
+HAMPTON_ROADS_CITIES = (
+    "Virginia Beach, VA", "Norfolk, VA", "Chesapeake, VA", "Portsmouth, VA",
+    "Newport News, VA", "Hampton, VA", "Suffolk, VA",
+)
+
 
 def _clean(value, limit=500):
     return str(value or "").strip()[:limit]
+
+
+def _location_variants(location):
+    loc = _clean(location, 200)
+    normalized = loc.lower().replace("virginia", "va").replace("  ", " ").strip()
+    if "hampton roads" in normalized:
+        return list(HAMPTON_ROADS_CITIES)
+    return [loc]
+
+
+def _dedupe_results(results):
+    kept, seen = [], set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        key = (_clean(item.get("url"), 1600).lower() or
+               (_clean(item.get("title"), 500).lower() + "|" + _clean(item.get("subtitle"), 800).lower()))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        kept.append(item)
+    return kept
 
 
 def _detect_intent(query):
@@ -88,7 +115,6 @@ def _permit_record_payload(query, location):
     payload = _search_public_records(query, location)
     if not payload.get("configured"):
         return payload
-
     text = _clean(query, 800).lower()
     wants_records = any(term in text for term in (
         "issued", "recent", "record", "records", "pulled", "active", "permit search",
@@ -96,7 +122,6 @@ def _permit_record_payload(query, location):
     ))
     if not wants_records:
         return payload
-
     reject_signals = (
         "procedure", "procedures", "how to", "apply for", "application", "requirements",
         "fees", "forms", "faq", "handbook", "guide", "instructions", "code requirements",
@@ -107,7 +132,6 @@ def _permit_record_payload(query, location):
         "permit database", "permit lookup", "permit history", "recent permits", "active permits",
         "accela", "energov", "record details",
     )
-
     kept = []
     for item in payload.get("results") or []:
         title = _clean(item.get("title"), 500)
@@ -121,53 +145,76 @@ def _permit_record_payload(query, location):
         if not any(signal in haystack for signal in record_signals):
             continue
         kept.append(item)
-
     result = dict(payload)
     result["results"] = kept
     result["count"] = len(kept)
-    result["message"] = (
-        f"Found {len(kept)} authoritative permit-record result"
-        + ("." if len(kept) == 1 else "s.")
-        + " Commercial contractor pages and procedural/application pages were filtered out."
-    )
+    result["message"] = f"Found {len(kept)} authoritative permit-record result" + ("." if len(kept) == 1 else "s.") + " Commercial contractor pages and procedural/application pages were filtered out."
     return result
+
+
+def _run_intent(intent, query, location):
+    if intent == "permit_leads":
+        return _permit_lead_payload(query, location)
+    if intent == "contractors":
+        return contractor_intent._contractor_intent_search(query, location)
+    if intent == "jobs":
+        return _job_payload(query, location)
+    if intent == "businesses":
+        return search_overrides._search_google_places(query, location)
+    if intent == "permits":
+        return _permit_record_payload(query, location)
+    return _search_public_records(query, location)
 
 
 def _smart_search(query, location):
     intent, intent_scores = _detect_intent(query)
-    if intent == "permit_leads":
-        payload = _permit_lead_payload(query, location)
-    elif intent == "contractors":
-        payload = contractor_intent._contractor_intent_search(query, location)
-    elif intent == "jobs":
-        payload = _job_payload(query, location)
-    elif intent == "businesses":
-        payload = search_overrides._search_google_places(query, location)
-    elif intent == "permits":
-        payload = _permit_record_payload(query, location)
-    else:
-        payload = _search_public_records(query, location)
-        if intent == "web":
-            intent = "web_research"
+    locations = _location_variants(location)
+    payloads = []
+    for search_location in locations:
+        payload = _run_intent(intent, query, search_location)
+        payloads.append((search_location, payload))
 
-    results = payload.get("results") or []
+    results = _dedupe_results([item for _, payload in payloads for item in (payload.get("results") or [])])
+    configured = any(bool(payload.get("configured", True)) for _, payload in payloads)
+    sources = []
+    for _, payload in payloads:
+        source = _clean(payload.get("source"), 300)
+        if source and source not in sources:
+            sources.append(source)
+    if intent == "web":
+        intent = "web_research"
+    expanded = len(locations) > 1
+    if results:
+        message = f"Found {len(results)} verified result(s)."
+        if expanded:
+            message += f" Searched {len(locations)} Hampton Roads cities separately and deduplicated the results."
+    else:
+        message = "No verified results found."
+        if expanded:
+            message += f" Searched {len(locations)} Hampton Roads cities separately; candidates that did not satisfy the intent-specific verification rules were rejected."
+        provider_messages = [payload.get("message") for _, payload in payloads if payload.get("message")]
+        if provider_messages and not expanded:
+            message = provider_messages[0]
+
     return {
-        "configured": bool(payload.get("configured", True)),
+        "configured": configured,
         "intent": intent,
         "intent_scores": intent_scores,
         "query": query,
         "location": location,
-        "source": payload.get("source") or "Smart Search",
-        "message": payload.get("message") or (f"Found {len(results)} result(s)." if results else "No verified results found."),
+        "searched_locations": locations,
+        "expanded_location_search": expanded,
+        "source": " + ".join(sources) or "Smart Search",
+        "message": message,
         "count": len(results),
         "results": results,
         "search_details": {
-            "permit_leads": "Strict evidence-backed Master Electrician permit-pulling lead search.",
-            "contractors": "Google Places discovery plus independent Brave and Google evidence verification.",
-            "jobs": "Verified local job search with direct-posting, location, freshness, and quality filtering.",
-            "businesses": "Google Places business discovery using the requested inquiry and location.",
-            "permits": "Authoritative permit-record search that suppresses commercial, procedural, fee, and how-to pages when the inquiry asks for issued or recent records.",
-            "web_research": "General public web research using configured search providers.",
+            "permit_leads": "Strict evidence-backed Master Electrician permit-pulling lead search with metro expansion when a metro/region is requested.",
+            "contractors": "Google Places discovery plus independent Brave and Google evidence verification, expanded city-by-city for supported metro regions.",
+            "jobs": "Verified local job search with direct-posting, location, freshness, and quality filtering, expanded city-by-city for supported metro regions.",
+            "businesses": "Google Places business discovery using the requested inquiry and location, expanded city-by-city for supported metro regions.",
+            "permits": "Authoritative permit-record search that suppresses commercial, procedural, fee, and how-to pages, expanded city-by-city for supported metro regions.",
+            "web_research": "General public web research using configured search providers, expanded city-by-city for supported metro regions.",
         }.get(intent, "Smart Search"),
     }
 
