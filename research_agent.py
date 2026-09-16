@@ -11,47 +11,37 @@ def _json_object(text):
     return json.loads(text)
 
 
+def _client():
+    # Hard request bounds keep the synchronous web endpoint inside Gunicorn's 30s limit.
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=7.0, max_retries=0)
+
+
 def plan_research(query, location="", prior_evidence=None):
-    """Interpret arbitrary research intent and generate targeted discovery queries."""
     if not os.getenv("OPENAI_API_KEY"):
         return None
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    model = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
-    evidence = (prior_evidence or [])[-12:]
-    prompt = {
-        "query": query,
-        "location": location,
-        "prior_evidence": evidence,
-        "task": "Plan the next web-research pass. Do not assume a topic, industry, or geography not stated by the user.",
-    }
-    instructions = """You are the planning brain for a general-purpose research agent. Return ONLY valid JSON with keys: goal (string), intent (short free-form string), concepts (array of strings), queries (array of 1-4 targeted web search strings), verification_criteria (array of strings), sufficient (boolean), gaps (array of strings). Use semantic alternatives and source-type clues where useful. Preserve the user's location if supplied, but never hard-code any city or industry. If prior evidence already answers the goal with credible direct evidence, set sufficient true. Otherwise produce focused follow-up queries that address evidence gaps. Keep queries concise."""
-    response = client.responses.create(
-        model=model,
+    evidence = (prior_evidence or [])[-8:]
+    prompt = {"query": query, "location": location, "prior_evidence": evidence}
+    instructions = """Plan one fast web-research pass for an arbitrary user inquiry. Return ONLY valid JSON with keys: goal, intent, concepts, queries, verification_criteria, sufficient, gaps. queries must contain 1-3 concise targeted web searches. Do not hard-code an industry or location; preserve the supplied location when relevant. Use semantic alternatives. Never invent evidence."""
+    response = _client().responses.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
         instructions=instructions,
         input=json.dumps(prompt, ensure_ascii=False),
-        max_output_tokens=900,
+        max_output_tokens=500,
     )
     return _json_object(response.output_text)
 
 
 def evaluate_research(query, location, evidence):
-    """Rank evidence and decide whether another research pass is needed."""
     if not os.getenv("OPENAI_API_KEY"):
         return None
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    model = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
-    compact = []
-    for item in evidence[-20:]:
-        compact.append({
-            "title": str(item.get("title") or "")[:300],
-            "url": str(item.get("url") or "")[:1200],
-            "text": str(item.get("page_text") or item.get("subtitle") or "")[:2500],
-        })
-    instructions = """You evaluate web research evidence. Return ONLY valid JSON with keys: sufficient (boolean), answer_summary (string), gaps (array of strings), followup_queries (array of 0-3 strings), ranked_urls (array of URLs best supporting the answer). Be conservative: search snippets alone are weaker than inspected page text. Never invent evidence. If evidence is incomplete, make follow-up queries meaningfully different from searches already represented."""
-    response = client.responses.create(
-        model=model,
+    compact=[]
+    for item in evidence[:10]:
+        compact.append({"title":str(item.get("title") or "")[:250],"url":str(item.get("url") or "")[:800],"text":str(item.get("page_text") or item.get("subtitle") or "")[:1000]})
+    instructions = """Evaluate supplied research evidence quickly. Return ONLY valid JSON with keys: sufficient, answer_summary, gaps, followup_queries, ranked_urls. Never invent evidence. followup_queries may contain at most 2 concise searches. Direct page text is stronger than snippets."""
+    response = _client().responses.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
         instructions=instructions,
-        input=json.dumps({"query": query, "location": location, "evidence": compact}, ensure_ascii=False),
-        max_output_tokens=1000,
+        input=json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),
+        max_output_tokens=500,
     )
     return _json_object(response.output_text)
