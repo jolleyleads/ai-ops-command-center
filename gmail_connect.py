@@ -71,12 +71,17 @@ def _client_hint(client_id):
     return client_id if len(client_id) <= 28 else f"{client_id[:10]}...{client_id[-18:]}"
 
 
-def _stored_refresh_token():
+def _stored_connection():
     try:
-        row = GmailOAuthConnection.query.order_by(GmailOAuthConnection.id.desc()).first()
-        return (row.refresh_token or "").strip() if row else ""
+        return GmailOAuthConnection.query.order_by(GmailOAuthConnection.id.desc()).first()
     except Exception:
-        return ""
+        app.logger.exception("GMAIL_OAUTH_DB_READ_FAILED")
+        return None
+
+
+def _stored_refresh_token():
+    row = _stored_connection()
+    return (row.refresh_token or "").strip() if row else ""
 
 
 def _refresh_access_token(refresh_token):
@@ -95,7 +100,14 @@ def _refresh_access_token(refresh_token):
         timeout=20,
     )
     if not response.ok:
-        raise RuntimeError(f"Google token error {response.status_code}: {response.text[:500]}")
+        try:
+            payload = response.json()
+            code = str(payload.get("error") or f"http_{response.status_code}")
+            description = str(payload.get("error_description") or "")[:200]
+        except Exception:
+            code = f"http_{response.status_code}"
+            description = ""
+        raise RuntimeError(f"Google token error {code}: {description}")
     token = (response.json().get("access_token") or "").strip()
     if not token:
         raise RuntimeError("Google returned no access token.")
@@ -109,10 +121,10 @@ def gmail_access_token():
 
     stored = _stored_refresh_token()
     if stored:
-        try:
-            return _refresh_access_token(stored)
-        except Exception:
-            pass
+        # A database token is authoritative. Do not silently fall through to an
+        # old environment token if refreshing it fails; that masks persistence
+        # problems and can incorrectly report an expired legacy credential.
+        return _refresh_access_token(stored)
 
     legacy = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
     if legacy:
@@ -202,7 +214,7 @@ def gmail_oauth_callback():
         timeout=20,
     )
     if not response.ok:
-        app.logger.warning("GMAIL_OAUTH_EXCHANGE_FAILED status=%s body=%s", response.status_code, response.text[:300])
+        app.logger.warning("GMAIL_OAUTH_EXCHANGE_FAILED status=%s", response.status_code)
         return "Google authorization could not be completed. Start again from /gmail.", 502
 
     data = response.json()
@@ -226,22 +238,34 @@ def gmail_oauth_callback():
         GmailOAuthConnection.query.delete()
         db.session.add(GmailOAuthConnection(refresh_token=refresh_token, email=email))
         db.session.commit()
+        # Verify the exact row was durably committed before reporting success.
+        saved = _stored_connection()
+        if not saved or not (saved.refresh_token or "").strip():
+            raise RuntimeError("Committed Gmail OAuth row could not be read back.")
     except Exception:
         db.session.rollback()
         app.logger.exception("GMAIL_OAUTH_SAVE_FAILED")
         return "Gmail authorized, but AI Ops could not save the connection.", 500
 
-    app.logger.info("GMAIL_OAUTH_CONNECTED email=%s", email or "unknown")
+    app.logger.warning(
+        "GMAIL_OAUTH_CONNECTED email=%s persisted=True token_length=%s",
+        email or "unknown",
+        len(refresh_token),
+    )
     return redirect("/gmail?connected=1")
 
 
 @app.route("/api/gmail/status", methods=["GET"])
 def gmail_status():
     client_id, _ = _client_credentials()
+    row = _stored_connection()
+    stored = bool(row and (row.refresh_token or "").strip())
     base = {
         "client_id": client_id,
         "client_hint": _client_hint(client_id),
         "redirect_uri": _redirect_uri(),
+        "stored_refresh_token": stored,
+        "stored_email": (row.email or "") if row else "",
     }
     try:
         token = gmail_access_token()
@@ -257,4 +281,4 @@ def gmail_status():
     except Exception as exc:
         text = str(exc).lower()
         reason = "authorization_expired" if ("invalid_grant" in text or "expired or revoked" in text) else "not_connected"
-        return jsonify({**base, "connected": False, "reason": reason}), 200
+        return jsonify({**base, "connected": False, "reason": reason, "detail": str(exc)[:250]}), 200
