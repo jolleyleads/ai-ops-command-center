@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'chatgpt_search_request.json'
+      - 'chatgpt_search_request.txt'
 
 permissions:
   contents: read
@@ -22,31 +22,28 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import json
+          import os
           import urllib.parse
           import urllib.request
 
-          with open('chatgpt_search_request.json', 'r', encoding='utf-8') as fh:
-              request_data = json.load(fh)
+          with open('chatgpt_search_request.txt', 'r', encoding='utf-8') as fh:
+              lines = [line.strip() for line in fh.readlines()]
 
-          query = str(request_data.get('query') or '').strip()
-          location = str(request_data.get('location') or '').strip()
-          request_id = str(request_data.get('request_id') or '').strip()
+          query = lines[0] if lines else ''
+          location = lines[1] if len(lines) > 1 else ''
           if not query:
               raise SystemExit('Search request is missing query')
-          if len(query) > 500 or len(location) > 200 or len(request_id) > 100:
+          if len(query) > 500 or len(location) > 200:
               raise SystemExit('Search request exceeds allowed length')
 
           params = urllib.parse.urlencode({'query': query, 'location': location})
-          url = f"{__import__('os').environ['AI_OPS_ORIGIN']}/api/test-smart-search?{params}"
+          url = f"{os.environ['AI_OPS_ORIGIN']}/api/test-smart-search?{params}"
           req = urllib.request.Request(url, headers={'User-Agent': 'AI-Ops-ChatGPT-Bridge/1.0'})
           with urllib.request.urlopen(req, timeout=180) as response:
               body = response.read().decode('utf-8', errors='replace')
-              if response.status != 200:
-                  raise SystemExit(f'AI Ops returned HTTP {response.status}')
 
           payload = json.loads(body)
           safe_output = {
-              'request_id': request_id,
               'query': query,
               'location': location,
               'intent': payload.get('intent'),
