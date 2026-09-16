@@ -1,4 +1,5 @@
 from app import app
+import db_resilience  # noqa: F401
 import gmail_connect  # noqa: F401
 import brave_app  # noqa: F401
 import search_overrides  # noqa: F401
