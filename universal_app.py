@@ -29,6 +29,9 @@ def _normalize_custom_search_results(payload):
     return [{"type":"public_record","title":i.get("title") or "Search result","subtitle":i.get("snippet") or "","url":i.get("link") or "","source":i.get("displayLink") or "Google Programmable Search"} for i in payload.get("items",[])]
 def _normalize_web_search_results(payload):
     return [{"type":"public_record","title":i.get("title") or "Search result","subtitle":i.get("snippet") or "","url":i.get("displayUrl") or "","source":i.get("shortenedDisplayUrl") or "Google Web Search Service"} for i in payload.get("searchResults",[])]
+# Temporary import-compatibility shim only. Brave is no longer a configured search provider.
+def _normalize_brave_search_results(payload):
+    return []
 def _search_public_records(query,location=""):
     text_query=" ".join(part for part in [query,location] if part).strip()
     if not text_query:return {"configured":True,"source":"Google Search","message":"Enter a search.","results":[]}
