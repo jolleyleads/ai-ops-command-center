@@ -23,22 +23,22 @@ def _google(q,loc=""):
     try:
         r=requests.get("https://www.googleapis.com/customsearch/v1",params={"key":key,"cx":cx,"q":" ".join(x for x in (q,loc) if x),"num":10},timeout=6)
         rows=_normalize_custom_search_results(r.json()) if r.ok else []
-        app.logger.warning("SMART_SEARCH_GOOGLE status=%s results=%s",r.status_code,len(rows))
+        app.logger.warning("SMART_SEARCH_GOOGLE status=%s results=%s query=%r location=%r",r.status_code,len(rows),q,loc)
         return {"source":"Google Programmable Search","results":rows}
     except Exception:
         app.logger.exception("SMART_SEARCH_GOOGLE_ERROR");return {"source":"Google Programmable Search","results":[]}
+
 def _search(q,loc):
     results=[];sources=[]
-    for fn in (_search_public_records,contractor_intent._cross_checked_evidence_search):
-        try:
-            p=fn(q,loc)
-            if isinstance(p,dict):
-                results.extend(p.get("results") or []);s=_clean(p.get("source"),200)
-                if s and s not in sources:sources.append(s)
-        except Exception:app.logger.exception("RESEARCH_SEARCH_ERROR query=%r",q)
-    if not results:
-        p=_google(q,loc);results.extend(p["results"]);sources.append(p["source"])
+    try:
+        p=_search_public_records(q,loc)
+        if isinstance(p,dict):
+            results.extend(p.get("results") or []);s=_clean(p.get("source"),200)
+            if s:sources.append(s)
+    except Exception:app.logger.exception("RESEARCH_SEARCH_ERROR query=%r",q)
+    g=_google(q,loc);results.extend(g.get("results") or []);sources.append(g.get("source") or "Google Programmable Search")
     return {"source":" + ".join(dict.fromkeys(sources)) or "web","results":_dedupe(results)}
+
 def _batch(queries,loc):
     results=[];sources=[]
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(queries)))) as pool:
@@ -51,7 +51,7 @@ def _page(url):
     try:
         p=urlparse(_clean(url,1600));host=(p.hostname or "").lower()
         if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return ""
-        r=requests.get(url,timeout=3,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/5.3"},allow_redirects=True)
+        r=requests.get(url,timeout=3,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/5.4"},allow_redirects=True)
         if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return ""
         raw=r.text[:140000];raw=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",raw)
         return re.sub(r"\s+"," ",re.sub(r"(?s)<[^>]+>"," ",raw)).strip()[:12000]
@@ -68,41 +68,61 @@ def _inspect(items,limit=8):
 def _memory_items(q,loc):return [{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True} for x in retrieve_context(q,loc)]
 def _infer_location(q,loc,plan):
     if _clean(loc,200):return _clean(loc,200)
-    # Deterministic extraction wins over AI so a generic web_research plan cannot erase location.
+    # Match explicit city/state anywhere in a natural-language prompt. Do not require the city to follow "in".
+    m=re.search(r"\b([A-Za-z][A-Za-z .'-]{1,50}?)\s*,?\s+(Virginia|VA|North Carolina|NC|Maryland|MD|Washington DC|DC)\b",q,re.I)
+    if m:
+        city=re.sub(r"^(?:in|near|around|for|of)\s+","",m.group(1).strip(),flags=re.I)
+        # Long prompt fragments before a known city are stripped by taking the final plausible city words.
+        known=re.search(r"(Richmond|Norfolk|Portsmouth|Chesapeake|Suffolk|Virginia Beach|Hampton|Newport News)$",city,re.I)
+        if known:city=known.group(1)
+        elif len(city.split())>4:city=" ".join(city.split()[-3:])
+        return _clean(city+", "+m.group(2),200)
     cities="Richmond|Norfolk|Portsmouth|Chesapeake|Suffolk|Virginia Beach|Hampton|Newport News"
-    m=re.search(r"\b("+cities+r")\s*,?\s*(Virginia|VA)?\b",q,re.I)
-    if m:return _clean(m.group(1)+((', '+m.group(2)) if m.group(2) else ', Virginia'),200)
-    m=re.search(r"\b(?:in|near|around)\s+([A-Za-z .'-]+?,?\s*(?:VA|Virginia|NC|Maryland|MD|DC))\b",q,re.I)
-    if m:return _clean(m.group(1),200)
+    m=re.search(r"\b("+cities+r")\b",q,re.I)
+    if m:return _clean(m.group(1)+", Virginia",200)
     for key in ("location","place","region"):
         v=_clean(plan.get(key),200)
         if v:return v
     return ""
 def _is_contractor_query(q):return any(x in q.lower() for x in ("contractor","electrical","electrician","permit","qualifying agent","master electrician"))
+
+def _candidate_discovery_queries(q,loc):
+    if not _is_contractor_query(q):return []
+    place=loc or ""
+    return [
+        f'electrical contractors {place}',
+        f'electrician companies {place}',
+        f'licensed electrical contractor {place}',
+        f'electrical contractor directory {place}'
+    ]
+
 def _business_candidates(q,loc):
     if not _is_contractor_query(q):return []
-    term="electrical contractors" if any(x in q.lower() for x in ("electrical","electrician","permit")) else q
     rows=[];msg=""
     try:
-        p=_search_businesses(term,loc);rows=(p.get("results") or [])[:15];msg=p.get("message") or ""
+        p=_search_businesses("electrical contractors",loc);rows=(p.get("results") or [])[:15];msg=p.get("message") or ""
     except Exception:app.logger.exception("SMART_SEARCH_PLACES_ERROR")
-    # Places is currently returning 403 in production. Do not let that disable discovery.
+    # Places is optional. Discover candidates independently from multiple ordinary web queries when it is blocked.
     if not rows:
-        g=_google(term,loc);rows=(g.get("results") or [])[:15]
-        for x in rows:x["candidate_discovery_source"]="Google Programmable Search fallback"
+        discovered=[]
+        for query in _candidate_discovery_queries(q,loc):
+            p=_search(query,"");discovered.extend(p.get("results") or [])
+        rows=_dedupe(discovered)[:25]
+        for x in rows:x["candidate_discovery_source"]="multi-query web discovery"
     app.logger.warning("SMART_SEARCH_STAGE business_candidates=%s places_message=%r location=%r",len(rows),msg,loc)
     return rows
+
 def _candidate_names(items):
-    bad=("indeed","linkedin","ziprecruiter","glassdoor","permit","jobs","hiring","search results","city of","top 10","best ")
+    bad=("indeed","linkedin","ziprecruiter","glassdoor","permit","jobs","hiring","search results","city of","top 10","best ","directory","yellow pages","yelp","angi","homeadvisor")
     out=[]
     for x in items:
-        name=_clean(x.get("company") or x.get("business_name") or x.get("title"),160);name=re.sub(r"\s+[|–—-].*$","",name).strip()
+        name=_clean(x.get("company") or x.get("business_name") or x.get("title"),160);name=re.sub(r"\s+[|–—:].*$","",name).strip();name=re.sub(r"\s+-\s+.*$","",name).strip()
         if 2<len(name)<100 and not any(b in name.lower() for b in bad) and name.lower() not in {n.lower() for n in out}:out.append(name)
     return out[:10]
 def _candidate_verify(names,loc):
     queries=[]
-    for n in names[:8]:queries.extend([f'"{n}" permits',f'"{n}" "master electrician" OR "qualifying agent" OR "pull permits"'])
-    return _batch(queries[:16],loc) if queries else ([],[])
+    for n in names[:6]:queries.append(f'"{n}" {loc} ("master electrician" OR "qualifying agent" OR "pull permits" OR "permit pulling" OR hiring)')
+    return _batch(queries,"") if queries else ([],[])
 def _promote(evidence,evaluation,q):
     ranked=[_clean(x,1600) for x in (evaluation.get("ranked_urls") or []) if _clean(x,1600)];rank={u:i for i,u in enumerate(ranked)}
     annotate_evidence(evidence,q);evidence.sort(key=lambda x:(rank.get(_clean(x.get("url"),1600),999),-float(x.get("evidence_score") or 0)))
@@ -120,23 +140,24 @@ def _fallback(q,loc):
 def _smart_search(q,loc):
     started=time.monotonic();tried=[];sources=[];expanded=False
     try:
-        memory=_memory_items(q,loc);plan=plan_research(q,loc,prior_evidence=memory) or {};loc=_infer_location(q,loc,plan)
+        plan=plan_research(q,loc,prior_evidence=[]) or {};loc=_infer_location(q,loc,plan);memory=_memory_items(q,loc)
+        app.logger.warning("SMART_SEARCH_STAGE inferred_location=%r query=%r",loc,q)
         businesses=_business_candidates(q,loc);evidence=_dedupe(memory+businesses);names=_candidate_names(businesses);verified=[]
         if names:
             verified,src=_candidate_verify(names,loc);sources.extend(src);evidence=_dedupe(evidence+verified)
         app.logger.warning("SMART_SEARCH_STAGE location=%r businesses=%s names=%s verified_hits=%s",loc,len(businesses),len(names),len(verified))
-        queries=[_clean(x,500) for x in (plan.get("queries") or []) if _clean(x,500)][:2];direct=" ".join(x for x in (q,loc) if x).strip()
+        queries=[_clean(x,500) for x in (plan.get("queries") or []) if _clean(x,500)][:2];direct=q
         if direct and direct not in queries:queries.insert(0,direct)
         queries=queries[:3] or [q];live,src=_batch(queries,loc);tried.extend(queries);sources.extend(x for x in src if x not in sources);evidence=_dedupe(evidence+live)
         if len(evidence)<3:
             expansion=_expansion_queries(q,tried,loc);expanded=bool(expansion)
             if expansion:
-                more,src2=_batch(expansion,loc);tried.extend(expansion);sources.extend(x for x in src2 if x not in sources);evidence=_dedupe(evidence+more)
-        _inspect(evidence,10);evaluation=evaluate_research(q,loc,evidence) or {}
+                more,src2=_batch(expansion,"");tried.extend(expansion);sources.extend(x for x in src2 if x not in sources);evidence=_dedupe(evidence+more)
+        _inspect(verified+evidence,10);evaluation=evaluate_research(q,loc,evidence) or {}
         try:remember_evidence([x for x in evidence if x.get("page_text") or (x.get("subtitle") and not x.get("rag_retrieved"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_promote(evidence,evaluation,q);app.logger.warning("SMART_SEARCH_STAGE final_evidence=%s promoted=%s runtime_ms=%s",len(evidence),sum(1 for x in promoted if x.get("promotion_status")=="promoted"),int((time.monotonic()-started)*1000))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"multi_provider":True,"search_expanded":expanded,"candidate_verification":bool(verified),"framework":"deterministic-location-places-or-google-candidates-candidate-verification-web-evidence-crawl-rag-evaluate-promote","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"queries_tried":tried,"verification_criteria":plan.get("verification_criteria") or [],"source":" + ".join(dict.fromkeys(sources)) or ("Google Programmable Search" if businesses else "Research Agent + RAG"),"count":len(promoted),"promoted_count":sum(1 for x in promoted if x.get("promotion_status")=="promoted"),"business_candidate_count":len(businesses),"verification_hit_count":len(verified),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","search_exhausted":not bool(promoted),"stop_reason":"evidence returned" if promoted else "no evidence returned by configured sources","runtime_ms":int((time.monotonic()-started)*1000),"message":f"Agent returned {len(promoted)} evidence result(s) from {len(businesses)} discovered business candidate(s), with {len(verified)} candidate-specific verification hit(s)."}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"multi_provider":True,"search_expanded":expanded,"candidate_verification":bool(verified),"framework":"explicit-location-multi-query-candidate-discovery-candidate-verification-web-evidence-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"queries_tried":tried,"verification_criteria":plan.get("verification_criteria") or [],"source":" + ".join(dict.fromkeys(sources)) or "Web Search + RAG","count":len(promoted),"promoted_count":sum(1 for x in promoted if x.get("promotion_status")=="promoted"),"business_candidate_count":len(businesses),"verification_hit_count":len(verified),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","search_exhausted":not bool(promoted),"stop_reason":"evidence returned" if promoted else "no evidence returned by configured sources","runtime_ms":int((time.monotonic()-started)*1000),"message":f"Agent returned {len(promoted)} evidence result(s) from {len(businesses)} discovered business candidate(s), with {len(verified)} candidate-specific verification hit(s)."}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");p=_fallback(q,loc);p["agent_error"]=type(exc).__name__;p["runtime_ms"]=int((time.monotonic()-started)*1000);return p
 @app.route("/api/smart-search",methods=["GET","POST"])
