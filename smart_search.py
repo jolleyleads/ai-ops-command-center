@@ -68,8 +68,22 @@ def _inspect(items,limit=5):
             text=f.result()
             if text:fs[f]["page_text"]=text
 
+def _tokens(text):
+    stop={"find","show","give","currently","current","looking","look","with","that","this","from","into","their","there","each","result","results","evidence","source","sources","for","and","the","are","who","what","where","when","how","virginia","va","usa","united","states"}
+    return {w for w in re.findall(r"[a-z0-9]+",_clean(text,4000).lower()) if len(w)>2 and w not in stop}
+def _relevant(item,q,loc=""):
+    wanted=_tokens(q)
+    if not wanted:return True
+    text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text","company","business_name","url"))
+    have=_tokens(text); hits=len(wanted & have)
+    need=1 if len(wanted)<=2 else 2
+    return hits>=need
+def _filter_relevant(items,q,loc=""):
+    return [x for x in items if _relevant(x,q,loc)]
 def _memory_items(q,loc):
-    try:return [{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True} for x in retrieve_context(q,loc)]
+    try:
+        rows=[{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True} for x in retrieve_context(q,loc)]
+        return _filter_relevant(rows,q,loc)
     except Exception:return []
 def _infer_location(q,loc,plan):
     if _clean(loc,200):return _clean(loc,200)
@@ -99,10 +113,11 @@ def _smart_search(q,loc):
     started=time.monotonic(); deadline=started+24; sources=[]; messages=[]
     try:
         plan=plan_research(q,loc,prior_evidence=[]) or {}; loc=_infer_location(q,loc,plan); memory=_memory_items(q,loc)
-        live,src,msg=_batch(_discovery_queries(q,loc),"",deadline,2); sources+=src; messages+=msg; evidence=_dedupe(memory+live); names=_candidate_names(live); verified=[]
+        live,src,msg=_batch(_discovery_queries(q,loc),"",deadline,2); sources+=src; messages+=msg; live=_filter_relevant(live,q,loc); evidence=_dedupe(memory+live); names=_candidate_names(live); verified=[]
         if names and time.monotonic()<deadline-8:
-            verified,src2,msg2=_candidate_verify(names,loc,deadline); sources+=src2; messages+=msg2; evidence=_dedupe(evidence+verified)
+            verified,src2,msg2=_candidate_verify(names,loc,deadline); sources+=src2; messages+=msg2; verified=_filter_relevant(verified,q,loc); evidence=_dedupe(evidence+verified)
         if time.monotonic()<deadline-4:_inspect(verified+evidence,5)
+        evidence=_filter_relevant(evidence,q,loc)
         evaluation={}
         if time.monotonic()<deadline-7:
             try:evaluation=evaluate_research(q,loc,evidence) or {}
@@ -110,7 +125,7 @@ def _smart_search(q,loc):
         try:remember_evidence([x for x in evidence if x.get("page_text") or (x.get("subtitle") and not x.get("rag_retrieved"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_promote(evidence,evaluation,q); provider_message=" ".join(dict.fromkeys(messages)); runtime=int((time.monotonic()-started)*1000)
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"search_provider":"OpenAI Web Search","framework":"bounded-agentic-web-rag-verification","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":"OpenAI Web Search + RAG","count":len(promoted),"promoted_count":sum(1 for x in promoted if x.get("promotion_status")=="promoted"),"business_candidate_count":len(names),"verification_hit_count":len(verified),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} evidence result(s) without exceeding the request budget."}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"relevance_guard":True,"search_provider":"OpenAI Web Search","framework":"bounded-agentic-web-rag-verification","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":"OpenAI Web Search + RAG","count":len(promoted),"promoted_count":sum(1 for x in promoted if x.get("promotion_status")=="promoted"),"business_candidate_count":len(names),"verification_hit_count":len(verified),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} relevant evidence result(s) without exceeding the request budget."}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR"); return {"configured":True,"agent_mode":False,"query":q,"location":loc,"source":"OpenAI Web Search + RAG","count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
