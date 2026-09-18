@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os,re,time,requests
 from flask import jsonify,request
 from app import app
-from research_agent import plan_research,evaluate_research,extract_candidates
+from research_agent import plan_research,recover_tool_plan,evaluate_research,extract_candidates
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
 
@@ -124,7 +124,13 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=3):
 def _smart_search(q,loc):
     started=time.monotonic();deadline=started+25;messages=[];tools=[]
     try:
-        plan=plan_research(q,loc,[]) or {};calls=plan.get("tool_calls") or [{"tool":"web_search","query":q,"location":loc}]
+        plan=plan_research(q,loc,[]) or {}
+        if plan.get("planning_degraded") or not plan.get("tool_calls"):
+            plan=recover_tool_plan(q,loc) or plan
+        calls=plan.get("tool_calls") or []
+        if not calls:
+            runtime=int((time.monotonic()-started)*1000)
+            return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":True,"planning_error":plan.get("planning_error") or "semantic routing unavailable","query":q,"location":loc,"source":"none","tools_used":[],"count":0,"results":[],"runtime_ms":runtime,"message":"Semantic tool selection failed safely; no search was run with guessed routing."}
         live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used
         discovery=_dedupe(live+_memory(q,loc))
         if time.monotonic()<deadline-9:_inspect(discovery,6)
@@ -143,7 +149,7 @@ def _smart_search(q,loc):
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
