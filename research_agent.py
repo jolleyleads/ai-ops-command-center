@@ -35,7 +35,7 @@ def _fallback_evaluation(evidence,error=""):
     for x in evidence:
         u=str(x.get("url") or "").strip()
         if u and u not in urls:urls.append(u)
-    return {"sufficient":bool(evidence),"answer_summary":"","gaps":[],"followup_tool_calls":[],"ranked_urls":urls[:10],"relevant_urls":urls[:10],"evaluation_degraded":True,"evaluation_error":error}
+    return {"sufficient":False,"answer_summary":"","gaps":["semantic entity/evidence validation unavailable"],"followup_tool_calls":[],"ranked_urls":[],"relevant_urls":[],"verified_results":[],"evaluation_degraded":True,"evaluation_error":error}
 
 def plan_research(query,location="",prior_evidence=None):
     if not os.getenv("OPENAI_API_KEY"):return _fallback_plan(query,location,"OPENAI_API_KEY unavailable")
@@ -67,7 +67,7 @@ def evaluate_research(query,location,evidence):
     if not evidence:return _fallback_evaluation([])
     if not os.getenv("OPENAI_API_KEY"):return _fallback_evaluation(evidence,"OPENAI_API_KEY unavailable")
     compact=[]
-    for item in evidence[:12]:compact.append({"title":str(item.get("title") or "")[:220],"url":str(item.get("url") or "")[:600],"text":str(item.get("page_text") or item.get("subtitle") or "")[:900],"source":str(item.get("source") or "")[:100],"tool":str(item.get("research_tool") or "")[:50],"memory":bool(item.get("rag_retrieved"))})
+    for item in evidence[:12]:compact.append({"title":str(item.get("title") or "")[:220],"url":str(item.get("url") or "")[:600],"text":str(item.get("page_text") or item.get("subtitle") or "")[:900],"source":str(item.get("source") or "")[:100],"tool":str(item.get("research_tool") or "")[:50],"type":str(item.get("type") or "")[:50],"phone":str(item.get("phone") or "")[:80],"website":str(item.get("website") or "")[:600],"memory":bool(item.get("rag_retrieved"))})
     instructions="""Judge evidence for a general-purpose AI research engine. Keep only sources that semantically support the exact request. Reject stale/unrelated RAG memory. Also audit evidence coverage: if the request requires a specialized evidence type and current evidence does not contain it, mark insufficient and request the appropriate capability. Never invent evidence or URLs.
 
 Available follow-up capabilities: web_search, public_records, business_search, job_search.
