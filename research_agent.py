@@ -19,8 +19,29 @@ def _json_object(text):
 
 def _client():return OpenAI(api_key=os.environ["OPENAI_API_KEY"],timeout=8,max_retries=0)
 def _fallback_plan(query,location,error=""):
-    base=" ".join(x for x in (query.strip(),location.strip()) if x)
-    return {"goal":query,"intent":"web_research","queries":[base or query],"tool_calls":[{"tool":"web_search","query":base or query,"location":location}],"verification_criteria":["directly relevant source-backed evidence"],"sufficient":False,"gaps":[],"planning_degraded":True,"planning_error":error}
+    # Never silently pretend a degraded semantic planner selected the right evidence tools.
+    # The orchestrator must recover routing separately or fail explicitly.
+    return {"goal":query,"intent":"planning_unavailable","queries":[],"tool_calls":[],"verification_criteria":["directly relevant source-backed evidence"],"sufficient":False,"gaps":["tool selection unavailable"],"planning_degraded":True,"planning_error":error}
+
+def recover_tool_plan(query,location=""):
+    """Independent semantic routing retry used only when primary planning degraded."""
+    if not os.getenv("OPENAI_API_KEY"):return _fallback_plan(query,location,"OPENAI_API_KEY unavailable")
+    instructions="""Classify the EVIDENCE CAPABILITIES required to answer the user's request. This is a routing-only recovery pass; do not answer the question and do not invent facts.
+Available tools:
+web_search = broad current web evidence.
+public_records = permits, licenses, filings, inspections, government/public records.
+business_search = business identity/location/contact verification.
+job_search = current job listings.
+Select up to 3. Specialized evidence requirements must select the matching specialized tool; web_search may accompany it. Return ONLY JSON:
+{"intent":"...","tool_calls":[{"tool":"web_search|public_records|business_search|job_search","query":"retrieval query preserving user meaning","location":"user location"}]}
+No industry/city-specific rules."""
+    try:
+        response=_client().responses.create(model=os.getenv("OPENAI_MODEL","gpt-5.6-luna"),instructions=instructions,input=json.dumps({"query":query,"location":location},ensure_ascii=False),max_output_tokens=350)
+        plan=_normalize_plan(_json_object(response.output_text),query,location)
+        if plan.get("tool_calls"):
+            plan["planning_degraded"]=False;plan["planning_recovered"]=True;plan["planning_error"]=""
+        return plan
+    except Exception as exc:return _fallback_plan(query,location,"recovery:"+type(exc).__name__)
 def _normalize_plan(value,query,location):
     if not isinstance(value,dict):return _fallback_plan(query,location,"invalid planner payload")
     calls=[]
