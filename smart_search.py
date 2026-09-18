@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os,re,time,requests
 from flask import jsonify,request
 from app import app
-from research_agent import plan_research,evaluate_research
+from research_agent import plan_research,evaluate_research,extract_candidates
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
 
@@ -108,20 +108,42 @@ def _verified_results(evidence,evaluation,q):
     annotate_evidence(out,q)
     return out
 
+def _candidate_followups(q,loc,candidates,deadline,max_candidates=3):
+    evidence=[];messages=[];tools=[]
+    for cand in (candidates or [])[:max_candidates]:
+        if time.monotonic()>=deadline-6:break
+        name=_clean(cand.get("name"),300)
+        if not name:continue
+        calls=[{"tool":"web_search","query":f'"{name}" {q}',"location":loc},{"tool":"business_search","query":name,"location":loc}]
+        rows,msg,used=_run_calls(calls,deadline,2);messages+=msg;tools+=used
+        for x in rows:
+            x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
+        evidence.extend(rows)
+    return _dedupe(evidence),messages,tools
+
 def _smart_search(q,loc):
     started=time.monotonic();deadline=started+25;messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {};calls=plan.get("tool_calls") or [{"tool":"web_search","query":q,"location":loc}]
-        live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used;evidence=_dedupe(live+_memory(q,loc))
-        if time.monotonic()<deadline-5:_inspect(evidence,5)
-        evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {};evidence=_semantic_keep(evidence,evaluation)
+        live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used
+        discovery=_dedupe(live+_memory(q,loc))
+        if time.monotonic()<deadline-9:_inspect(discovery,6)
+        candidates=extract_candidates(q,loc,discovery) if discovery and time.monotonic()<deadline-9 else []
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,3) if candidates else ([],[],[])
+        messages+=msgc;tools+=usedc
+        evidence=_dedupe(discovery+joined)
+        if time.monotonic()<deadline-5:_inspect(evidence,8)
+        evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {}
         follow=evaluation.get("followup_tool_calls") or []
-        if not evaluation.get("sufficient") and follow and time.monotonic()<deadline-8:
-            extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3);combined=_dedupe(evidence+extra);evaluation=evaluate_research(q,loc,combined) if time.monotonic()<deadline-5 else evaluation;evidence=_semantic_keep(combined,evaluation)
+        if not evaluation.get("sufficient") and follow and time.monotonic()<deadline-7:
+            extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3)
+            evidence=_dedupe(evidence+extra)
+            evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-4 else evaluation
+        evidence=_semantic_keep(evidence,evaluation)
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"plan-select-tools-search-read-reason-verify-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
