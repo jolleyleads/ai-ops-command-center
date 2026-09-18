@@ -92,12 +92,20 @@ def _memory(q,loc):
     except Exception:return []
 def _semantic_keep(evidence,evaluation):
     relevant={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
-    if relevant:return [x for x in evidence if _clean(x.get("url"),1600) in relevant]
-    return [x for x in evidence if not x.get("rag_retrieved")]
-def _promote(evidence,evaluation,q):
-    ranked=[_clean(x,1600) for x in (evaluation.get("ranked_urls") or []) if _clean(x,1600)];rank={u:i for i,u in enumerate(ranked)};annotate_evidence(evidence,q);evidence.sort(key=lambda x:(rank.get(_clean(x.get("url"),1600),999),-float(x.get("evidence_score") or 0)));out=[]
-    for item in evidence:
-        x=dict(item);inspected=bool(x.pop("page_text",None));score=float(x.get("evidence_score") or 0);x["promotion_status"]="promoted" if inspected and score>=.40 else ("verified_page" if inspected else "discovered");x["evidence_basis"]="page content inspected" if inspected else ("semantically relevant RAG evidence" if x.get("rag_retrieved") else f"{x.get('research_tool') or 'live'} source");out.append(x)
+    return [x for x in evidence if _clean(x.get("url"),1600) in relevant] if relevant else []
+
+def _verified_results(evidence,evaluation,q):
+    by_url={_clean(x.get("url"),1600):x for x in evidence if _clean(x.get("url"),1600)}
+    out=[];seen=set()
+    for verdict in evaluation.get("verified_results") or []:
+        if not isinstance(verdict,dict):continue
+        url=_clean(verdict.get("url"),1600);item=by_url.get(url)
+        if not item or url in seen:continue
+        entity=_clean(verdict.get("entity_name"),300);claim=_clean(verdict.get("claim"),1200)
+        supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
+        if not entity or not claim or not supporting:continue
+        x=dict(item);x.pop("page_text",None);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="target entity and requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
+    annotate_evidence(out,q)
     return out
 
 def _smart_search(q,loc):
@@ -112,8 +120,8 @@ def _smart_search(q,loc):
             extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3);combined=_dedupe(evidence+extra);evaluation=evaluate_research(q,loc,combined) if time.monotonic()<deadline-5 else evaluation;evidence=_semantic_keep(combined,evaluation)
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
-        promoted=_promote(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"plan-select-tools-search-read-reason-verify-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"count":len(promoted),"promoted_count":sum(1 for x in promoted if x.get("promotion_status")=="promoted"),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} semantically relevant evidence result(s) using dynamically selected research tools."}
+        promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"plan-select-tools-search-read-reason-verify-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
