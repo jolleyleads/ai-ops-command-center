@@ -63,6 +63,28 @@ Return ONLY compact JSON:
         return _normalize_plan(_json_object(response.output_text),query,location)
     except Exception as exc:return _fallback_plan(query,location,type(exc).__name__)
 
+def extract_candidates(query,location,evidence):
+    """Extract target entities from discovery evidence without inventing candidates."""
+    if not evidence or not os.getenv("OPENAI_API_KEY"):return []
+    compact=[]
+    for item in evidence[:12]:
+        compact.append({"title":str(item.get("title") or "")[:260],"url":str(item.get("url") or "")[:700],"text":str(item.get("page_text") or item.get("subtitle") or "")[:1400],"source":str(item.get("source") or "")[:120],"tool":str(item.get("research_tool") or "")[:50]})
+    instructions="""Extract candidate TARGET ENTITIES from supplied discovery evidence for the user's request. A target entity is the person, business, organization, property, job, permit recipient, licensee, filer, or other subject the user actually asked to find. Agencies, record portals, directories, publishers and search-result hosts are evidence sources, not targets unless the user explicitly asked for them.
+
+Do not invent or infer a candidate that is not named in supplied evidence. Do not claim the requested fact is verified yet. Return ONLY compact JSON:
+{"candidates":[{"name":"exact supported name","discovery_urls":["SUPPLIED_URL"],"reason":"what supplied evidence suggests, without overstating"}]}
+Use at most 5 candidates. Every discovery URL must be one of the supplied URLs."""
+    try:
+        response=_client().responses.create(model=os.getenv("OPENAI_MODEL","gpt-5.6-luna"),instructions=instructions,input=json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),max_output_tokens=650)
+        parsed=_json_object(response.output_text);allowed={x["url"] for x in compact if x.get("url")};out=[]
+        for cand in parsed.get("candidates") or []:
+            if not isinstance(cand,dict):continue
+            name=str(cand.get("name") or "").strip()[:300]
+            urls=[str(u).strip()[:700] for u in (cand.get("discovery_urls") or []) if str(u).strip() in allowed]
+            if name and urls:out.append({"name":name,"discovery_urls":urls,"reason":str(cand.get("reason") or "").strip()[:700]})
+        return out[:5]
+    except Exception:return []
+
 def evaluate_research(query,location,evidence):
     if not evidence:return _fallback_evaluation([])
     if not os.getenv("OPENAI_API_KEY"):return _fallback_evaluation(evidence,"OPENAI_API_KEY unavailable")
