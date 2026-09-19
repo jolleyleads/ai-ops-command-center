@@ -160,9 +160,20 @@ def _smart_search(q,loc):
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q) if evaluation else []
-        visible=promoted if promoted else ([dict(x, promotion_status=x.get("promotion_status") or "candidate") for x in evidence[:10]] if not evaluation else [])
+        # Never discard grounded discovery just because semantic promotion found zero verified claims.
+        # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
+        if promoted:
+            visible=promoted
+        else:
+            visible=[]
+            for x in evidence[:10]:
+                y=dict(x)
+                y.pop("page_text",None)
+                y["promotion_status"]="candidate"
+                y["evidence_basis"]="source-backed candidate; requested claim not yet verified"
+                visible.append(y)
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":(f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence." if evaluation else f"Agent returned {len(visible)} source-backed candidates; semantic verification is temporarily unavailable.")}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":(f"Agent returned {len(promoted)} verified target entities." if promoted else f"Agent returned {len(visible)} source-backed candidates; the requested claim is not yet verified.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
