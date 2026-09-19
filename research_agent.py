@@ -18,7 +18,7 @@ def _json_object(text):
         return {}
 
 def _client():return OpenAI(api_key=os.environ["OPENAI_API_KEY"],timeout=12,max_retries=0)
-def _model():return os.getenv("OPENAI_PLANNER_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.6-luna"
+def _model():return os.getenv("OPENAI_PLANNER_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
 def _error(stage,exc):
     status=getattr(exc,"status_code",None)
     code=getattr(exc,"code",None)
