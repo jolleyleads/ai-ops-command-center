@@ -129,8 +129,13 @@ def _smart_search(q,loc):
             plan=recover_tool_plan(q,loc) or plan
         calls=plan.get("tool_calls") or []
         if not calls:
-            runtime=int((time.monotonic()-started)*1000)
-            return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":True,"planning_error":plan.get("planning_error") or "semantic routing unavailable","query":q,"location":loc,"source":"none","tools_used":[],"count":0,"results":[],"runtime_ms":runtime,"message":"Semantic tool selection failed safely; no search was run with guessed routing."}
+            # Grounded web discovery is the universal safe baseline when the semantic planner is unavailable.
+            # Evidence evaluation can still request specialized public-record/business/job follow-ups.
+            calls=[{"tool":"web_search","query":q,"location":loc}]
+            plan=dict(plan)
+            plan["planning_degraded"]=True
+            plan["planning_recovered"]=False
+            plan["fallback_route"]="grounded_web_discovery"
         live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used
         discovery=_dedupe(live+_memory(q,loc))
         if time.monotonic()<deadline-9:_inspect(discovery,6)
