@@ -39,9 +39,9 @@ def _extract_web_rows(payload):
 def _web_search(query,location=""):
     key=os.getenv("OPENAI_API_KEY") or ""
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
-    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-4.1-mini","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.6-luna","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
-        r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=8)
+        r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=15)
         if not r.ok:return {"results":[],"message":f"OpenAI Web Search returned HTTP {r.status_code}."}
         rows=_extract_web_rows(r.json());return {"results":rows,"message":"" if rows else "OpenAI Web Search exposed no usable source URLs."}
     except requests.RequestException as exc:return {"results":[],"message":f"OpenAI Web Search failed: {type(exc).__name__}."}
