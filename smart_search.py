@@ -116,6 +116,23 @@ def _verified_results(evidence,evaluation,q):
     annotate_evidence(out,q)
     return out
 
+def _verification_gate(items, promoted):
+    """Deterministic promotion gate: only evidence-complete verdicts are verified."""
+    verified_urls={_clean(x.get("url"),1600) for x in promoted if _clean(x.get("url"),1600)}
+    out=[]
+    for item in items:
+        x=dict(item);x.pop("page_text",None)
+        url=_clean(x.get("url"),1600)
+        if url in verified_urls:
+            match=next((v for v in promoted if _clean(v.get("url"),1600)==url),None)
+            if match: out.append(match)
+            continue
+        x["promotion_status"]="candidate"
+        x["verification_gate"]="not_verified"
+        x["evidence_basis"]="source-backed discovery only; requested claim requires direct supporting evidence"
+        out.append(x)
+    return out
+
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=3):
     evidence=[];messages=[];tools=[]
     for cand in (candidates or [])[:max_candidates]:
@@ -170,20 +187,15 @@ def _smart_search(q,loc):
         promoted=_verified_results(evidence,evaluation,q) if evaluation else []
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        if promoted:
-            visible=promoted
-        else:
-            visible=[]
-            for x in evidence[:10]:
-                y=dict(x)
-                y.pop("page_text",None)
-                y["promotion_status"]="candidate"
-                y["evidence_basis"]="source-backed candidate; requested claim not yet verified"
-                visible.append(y)
+        # Deterministic verification gate: semantic evaluation may nominate a lead, but
+        # promotion requires the evidence-complete contract enforced by _verified_results.
+        visible=_verification_gate(evidence[:10],promoted)
+        verified_count=sum(1 for x in visible if x.get("promotion_status")=="verified")
+        candidate_count_visible=sum(1 for x in visible if x.get("promotion_status")=="candidate")
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
         provider_message=" ".join(dict.fromkeys(messages))
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Agent returned {len(promoted)} verified target entities." if promoted else f"Agent returned {len(visible)} source-backed candidates; the requested claim is not yet verified.")}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} verified, {candidate_count_visible} candidates. Verified means the requested claim has direct supporting source evidence.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
