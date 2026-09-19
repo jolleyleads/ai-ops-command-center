@@ -39,7 +39,7 @@ def _extract_web_rows(payload):
 def _web_search(query,location=""):
     key=os.getenv("OPENAI_API_KEY") or ""
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
-    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "chat-latest","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-4.1-mini","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
         r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=8)
         if not r.ok:return {"results":[],"message":f"OpenAI Web Search returned HTTP {r.status_code}."}
@@ -131,7 +131,7 @@ def _smart_search(q,loc):
         if not calls:
             # Grounded web discovery is the universal safe baseline when the semantic planner is unavailable.
             # Evidence evaluation can still request specialized public-record/business/job follow-ups.
-            calls=[{"tool":"web_search","query":q,"location":loc}]
+            calls=[{"tool":"web_search","query":q,"location":loc},{"tool":"public_records","query":q,"location":loc},{"tool":"business_search","query":q,"location":loc}]
             plan=dict(plan)
             plan["planning_degraded"]=True
             plan["planning_recovered"]=False
@@ -150,7 +150,7 @@ def _smart_search(q,loc):
             extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3)
             evidence=_dedupe(evidence+extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-4 else evaluation
-        evidence=_semantic_keep(evidence,evaluation)
+        if evaluation:\n            evidence=_semantic_keep(evidence,evaluation)\n        else:\n            # Preserve source-backed discovery as candidates; never mislabel it verified.\n            for x in evidence:\n                x["promotion_status"]="candidate"\n                x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
