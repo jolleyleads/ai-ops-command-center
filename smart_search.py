@@ -150,7 +150,13 @@ def _smart_search(q,loc):
             extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3)
             evidence=_dedupe(evidence+extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-4 else evaluation
-        if evaluation:\n            evidence=_semantic_keep(evidence,evaluation)\n        else:\n            # Preserve source-backed discovery as candidates; never mislabel it verified.\n            for x in evidence:\n                x["promotion_status"]="candidate"\n                x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
+        if evaluation:
+            evidence=_semantic_keep(evidence,evaluation)
+        else:
+            # Preserve source-backed discovery as candidates; never mislabel it verified.
+            for x in evidence:
+                x["promotion_status"]="candidate"
+                x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
