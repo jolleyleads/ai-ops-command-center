@@ -4,3 +4,4 @@ requests
 gunicorn
 openai>=1.0.0
 psycopg2-binary
+pytest>=8.0.0
