@@ -39,7 +39,7 @@ def _extract_web_rows(payload):
 def _web_search(query,location=""):
     key=os.getenv("OPENAI_API_KEY") or ""
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
-    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "chat-latest","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-4.1-mini","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
         r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=8)
         if not r.ok:return {"results":[],"message":f"OpenAI Web Search returned HTTP {r.status_code}."}
@@ -131,7 +131,7 @@ def _smart_search(q,loc):
         if not calls:
             # Grounded web discovery is the universal safe baseline when the semantic planner is unavailable.
             # Evidence evaluation can still request specialized public-record/business/job follow-ups.
-            calls=[{"tool":"web_search","query":q,"location":loc}]
+            calls=[{"tool":"web_search","query":q,"location":loc},{"tool":"public_records","query":q,"location":loc},{"tool":"business_search","query":q,"location":loc}]
             plan=dict(plan)
             plan["planning_degraded"]=True
             plan["planning_recovered"]=False
@@ -150,11 +150,17 @@ def _smart_search(q,loc):
             extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3)
             evidence=_dedupe(evidence+extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-4 else evaluation
-        evidence=_semantic_keep(evidence,evaluation)
+        if evaluation:
+            evidence=_semantic_keep(evidence,evaluation)
+        else:
+            # Preserve source-backed discovery as candidates; never mislabel it verified.
+            for x in evidence:
+                x["promotion_status"]="candidate"
+                x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
-        promoted=_verified_results(evidence,evaluation,q);runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(promoted),"promoted_count":len(promoted),"results":promoted,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence."}
+        promoted=_verified_results(evidence,evaluation,q) if evaluation else []\n        visible=promoted if promoted else ([dict(x, promotion_status=x.get("promotion_status") or "candidate") for x in evidence[:10]] if not evaluation else [])\n        runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":" ".join(dict.fromkeys(messages)),"runtime_ms":runtime,"message":(f"Agent returned {len(promoted)} target entities with the requested claim verified from supplied evidence." if evaluation else f"Agent returned {len(visible)} source-backed candidates; semantic verification is temporarily unavailable.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
