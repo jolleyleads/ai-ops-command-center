@@ -32,5 +32,5 @@ jobs:
     - name: Run Tests
       run: |
         if [ -d tests ]; then
-          pytest
+          python -m pytest
         fi
