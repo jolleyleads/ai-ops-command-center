@@ -42,8 +42,16 @@ def _web_search(query,location=""):
     text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.6-luna","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
         r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=15)
-        if not r.ok:return {"results":[],"message":f"OpenAI Web Search returned HTTP {r.status_code}."}
-        rows=_extract_web_rows(r.json());return {"results":rows,"message":"" if rows else "OpenAI Web Search exposed no usable source URLs."}
+        if not r.ok:
+            try: detail=_clean((r.json().get("error") or {}).get("message"),700)
+            except Exception: detail=_clean(r.text,700)
+            return {"results":[],"message":f"OpenAI Web Search returned HTTP {r.status_code}: {detail}"}
+        payload=r.json();rows=_extract_web_rows(payload)
+        if rows:return {"results":rows,"message":""}
+        types=[_clean(x.get("type"),80) for x in (payload.get("output") or []) if isinstance(x,dict)]
+        err=payload.get("error") or {};incomplete=payload.get("incomplete_details") or {}
+        detail=_clean(err.get("message") or incomplete.get("reason"),500)
+        return {"results":[],"message":f"OpenAI Web Search returned no source URLs. status={_clean(payload.get('status'),40)} output_types={types} detail={detail}"}
     except requests.RequestException as exc:return {"results":[],"message":f"OpenAI Web Search failed: {type(exc).__name__}."}
 
 def _run_tool(call):
