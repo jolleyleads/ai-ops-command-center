@@ -23,3 +23,20 @@ def test_booking_requires_receipt():
 def test_crm_requires_receipt():
     v=validate_transition("booked","crm_synced",{"stage":"booked"})
     assert not v["allowed"] and "missing_crm_receipt" in v["reasons"]
+
+
+def test_candidate_identity_join_is_not_url_dependent():
+    from smart_search import _verification_gate
+    discovery=[{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}]
+    promoted=[{"candidate_name":"ACME Electric LLC","url":"https://jobs.example/acme-master","supporting_urls":["https://jobs.example/acme-master"],"verified_claim":"Hiring a master electrician."}]
+    result=_verification_gate(discovery,promoted,{})
+    assert result[0]["classification"]=="Verified Lead"
+    assert result[0]["url"]=="https://places.example/acme"
+    assert result[0]["supporting_urls"]==["https://jobs.example/acme-master"]
+
+def test_other_company_evidence_cannot_promote_candidate():
+    from smart_search import _verification_gate
+    discovery=[{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}]
+    promoted=[{"candidate_name":"Different Electric","url":"https://jobs.example/different","supporting_urls":["https://jobs.example/different"],"verified_claim":"Hiring a master electrician."}]
+    result=_verification_gate(discovery,promoted,{})
+    assert result[0]["classification"]=="Candidate"
