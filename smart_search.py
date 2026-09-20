@@ -105,7 +105,7 @@ def _semantic_keep(evidence,evaluation):
 def _deterministic_need_verification(evidence,q):
     """Fail-closed verifier for explicit hiring/permit-capability need claims in source text."""
     ql=_clean(q,1200).lower()
-    electrician_intent=("electric" in ql and ("master" in ql or "permit" in ql))
+    electrician_intent=("electric" in ql and (("master" in ql or "permit" in ql) or _needs_electrical_verification(q)))
     if not electrician_intent:return []
     need_patterns=[
         r"\b(?:seeking|hiring|looking for|need(?:s|ed)?|wanted)\b.{0,90}\bmaster electrician\b",
@@ -152,16 +152,25 @@ def _verification_gate(items, promoted, evaluation):
         x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires direct supporting source evidence";out.append(x)
     return out
 
+def _needs_electrical_verification(q):
+    ql=_clean(q,1200).lower()
+    return "electric" in ql and any(x in ql for x in ("contractor","company","companies","business","businesses"))
+
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=3):
     evidence=[];messages=[];tools=[]
+    electrical=_needs_electrical_verification(q)
     for cand in (candidates or [])[:max_candidates]:
         if time.monotonic()>=deadline-6:break
         name=_clean(cand.get("name"),300)
         if not name:continue
-        calls=[{"tool":"web_search","query":f'"{name}" {q}',"location":loc},{"tool":"business_search","query":name,"location":loc}]
+        verify_query=(f'"{name}" ("master electrician" OR "pull permits" OR "permit pulling" OR '
+                      f'"electrical permits") (hiring OR seeking OR needed OR required OR help)') if electrical else f'"{name}" {q}'
+        calls=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
         rows,msg,used=_run_calls(calls,deadline,2);messages+=msg;tools+=used
+        # Keep the discovery entity attached to every verification source so the gate
+        # can distinguish company discovery from evidence about the requested need.
         for x in rows:
-            x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
+            x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True
         evidence.extend(rows)
     return _dedupe(evidence),messages,tools
 
