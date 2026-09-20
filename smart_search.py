@@ -203,7 +203,10 @@ def _smart_search(q,loc):
                 x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
-        promoted=_verified_results(evidence,evaluation,q) if evaluation else []\n        deterministic_promoted=_deterministic_need_verification(evidence,q)\n        if deterministic_promoted:\n            promoted=_dedupe(promoted+deterministic_promoted)
+        promoted=_verified_results(evidence,evaluation,q) if evaluation else []
+        deterministic_promoted=_deterministic_need_verification(evidence,q)
+        if deterministic_promoted:
+            promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
         visible=_verification_gate(evidence[:10],promoted,evaluation)
