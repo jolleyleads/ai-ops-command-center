@@ -121,7 +121,7 @@ def _deterministic_need_verification(evidence,q):
         # research, never from the original Places discovery card.
         if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         if not url or url in seen or not any(re.search(p,text,re.I|re.S) for p in need_patterns):continue
-        x=dict(item);x.pop("page_text",None);x["title"]=_clean(item.get("candidate_name"),300);x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
+        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"];x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
         x["verified_claim"]="Source explicitly indicates a current need for a master electrician or permit-pulling capability."
         x["supporting_urls"]=[url];x["confidence"]="high";x["evidence_basis"]="deterministic explicit-need phrase matched in source evidence";out.append(x);seen.add(url)
     return out
@@ -140,19 +140,44 @@ def _verified_results(evidence,evaluation,q):
     annotate_evidence(out,q)
     return out
 
+def _candidate_key(name):
+    """Stable deterministic identity key for joining discovery and verification evidence."""
+    return re.sub(r"[^a-z0-9]+","",_clean(name,300).lower())
+
+def _promoted_by_candidate(promoted):
+    """Index verified evidence by the candidate identity established during discovery."""
+    out={}
+    for item in promoted or []:
+        name=_clean(item.get("candidate_name") or item.get("title"),300)
+        key=_candidate_key(name)
+        if not key:continue
+        out.setdefault(key,[]).append(item)
+    return out
+
 def _verification_gate(items, promoted, evaluation):
-    """Deterministic three-state gate: Verified Lead, Candidate, or Rejected."""
-    verified_by_url={_clean(x.get("url"),1600):x for x in promoted if _clean(x.get("url"),1600)}
+    """Deterministic three-state gate joined by candidate identity, never URL coincidence."""
+    promoted_candidates=_promoted_by_candidate(promoted)
     rejected_urls={_clean(x.get("url"),1600) for x in (evaluation.get("rejected_results") or []) if isinstance(x,dict) and _clean(x.get("url"),1600)}
     relevant_urls={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
     out=[]
     for item in items:
         x=dict(item);x.pop("page_text",None);url=_clean(x.get("url"),1600)
-        if url in verified_by_url:
-            y=dict(verified_by_url[url]);y["classification"]="Verified Lead";y["verification_gate"]="passed";out.append(y);continue
+        name=_clean(x.get("candidate_name") or x.get("title") or x.get("name"),300)
+        verified_sources=promoted_candidates.get(_candidate_key(name),[])
+        if verified_sources:
+            supporting=[]
+            claims=[]
+            for v in verified_sources:
+                supporting.extend(v.get("supporting_urls") or ([_clean(v.get("url"),1600)] if _clean(v.get("url"),1600) else []))
+                if _clean(v.get("verified_claim"),1200):claims.append(_clean(v.get("verified_claim"),1200))
+            x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
+            x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate."
+            x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u))
+            x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity"
+            out.append(x);continue
         if url in rejected_urls or (relevant_urls and url not in relevant_urls):
             x["classification"]="Rejected";x["promotion_status"]="rejected";x["verification_gate"]="failed";x["evidence_basis"]="rejected: evidence does not support the requested lead claim";out.append(x);continue
-        x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires direct supporting source evidence";out.append(x)
+        x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires candidate-specific supporting source evidence";out.append(x)
     return out
 
 def _needs_electrical_verification(q):
@@ -237,7 +262,8 @@ def _smart_search(q,loc):
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        visible=_verification_gate(evidence[:10],promoted,evaluation)
+        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
+        visible=_verification_gate(discovery_visible,promoted,evaluation)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
