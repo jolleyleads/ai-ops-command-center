@@ -117,8 +117,11 @@ def _deterministic_need_verification(evidence,q):
     for item in evidence:
         url=_clean(item.get("url"),1600)
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
+        # Electrical promotion must come from the candidate-specific second-stage
+        # research, never from the original Places discovery card.
+        if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         if not url or url in seen or not any(re.search(p,text,re.I|re.S) for p in need_patterns):continue
-        x=dict(item);x.pop("page_text",None);x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
+        x=dict(item);x.pop("page_text",None);x["title"]=_clean(item.get("candidate_name"),300);x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
         x["verified_claim"]="Source explicitly indicates a current need for a master electrician or permit-pulling capability."
         x["supporting_urls"]=[url];x["confidence"]="high";x["evidence_basis"]="deterministic explicit-need phrase matched in source evidence";out.append(x);seen.add(url)
     return out
@@ -156,7 +159,19 @@ def _needs_electrical_verification(q):
     ql=_clean(q,1200).lower()
     return "electric" in ql and any(x in ql for x in ("contractor","company","companies","business","businesses"))
 
-def _candidate_followups(q,loc,candidates,deadline,max_candidates=3):
+def _fallback_candidates(discovery,limit=10):
+    """Deterministically turn source-backed business discovery into verification candidates."""
+    out=[];seen=set()
+    for item in discovery or []:
+        if item.get("research_tool")!="business_search":continue
+        name=_clean(item.get("title") or item.get("name"),300);url=_clean(item.get("url"),1600)
+        key=name.lower()
+        if not name or not url or key in seen:continue
+        seen.add(key);out.append({"name":name,"discovery_urls":[url],"candidate_source":"deterministic_business_discovery"})
+        if len(out)>=limit:break
+    return out
+
+def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     evidence=[];messages=[];tools=[]
     electrical=_needs_electrical_verification(q)
     for cand in (candidates or [])[:max_candidates]:
@@ -193,7 +208,11 @@ def _smart_search(q,loc):
         discovery=_dedupe(live+_memory(q,loc))
         if time.monotonic()<deadline-9:_inspect(discovery,6)
         candidates=extract_candidates(q,loc,discovery) if discovery and time.monotonic()<deadline-9 else []
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,3) if candidates else ([],[],[])
+        # The LLM is optional at this handoff: grounded business results become
+        # candidates deterministically so verification still runs when planning/extraction is unavailable.
+        if not candidates and _needs_electrical_verification(q):
+            candidates=_fallback_candidates(discovery,10)
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,10) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
