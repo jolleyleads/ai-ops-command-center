@@ -262,7 +262,8 @@ def _smart_search(q,loc):
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]\n        visible=_verification_gate(discovery_visible,promoted,evaluation)
+        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
+        visible=_verification_gate(discovery_visible,promoted,evaluation)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
