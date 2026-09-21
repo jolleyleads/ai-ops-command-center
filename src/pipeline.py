@@ -10,7 +10,7 @@ def execute_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
     result = orchestrate(input_data)
     status = result.get("status")
     return {
-        "success": status in {"ready", "completed"},
+        "success": status in {"ready", "ready_for_execution", "completed"},
         "status": status,
         "input": input_data,
         "result": result,

@@ -125,3 +125,36 @@ def test_hvac_hiring_requires_candidate_specific_source_evidence():
     promoted=smart_search._deterministic_need_verification(evidence,q)
     assert len(promoted)==1
     assert promoted[0]["supporting_urls"]==["https://coastal.example/careers"]
+
+
+def test_failed_receipt_cannot_advance_workflow():
+    v=validate_transition("outreach_ready","contacted",{"stage":"outreach_ready","send_receipt":{"ok":False,"error":"send failed"}})
+    assert not v["allowed"] and "missing_send_receipt" in v["reasons"]
+
+def test_enrichment_requires_successful_validated_proof():
+    v=validate_transition("verified","enriched",{"stage":"verified","enrichment":{"validated":False,"fields":{}}})
+    assert not v["allowed"] and "missing_enrichment" in v["reasons"]
+
+def test_enrichment_omits_unsupported_contact_fields():
+    from src.enrichment import enrich_lead, validated_payload
+    lead={"company_name":"ACME HVAC","email":"madeup@acmehvac.com","phone":"757-555-1212"}
+    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/about","title":"About","page_text":"ACME HVAC serves Hampton Roads."}]
+    enriched=enrich_lead(lead,evidence)
+    payload=validated_payload(enriched)
+    assert "email" not in payload
+    assert "phone" not in payload
+
+def test_enrichment_accepts_source_bound_company_contact():
+    from src.enrichment import enrich_lead, validated_payload
+    lead={"company_name":"ACME HVAC"}
+    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/contact","title":"Contact","page_text":"Call (757) 555-1212 or email service@acmehvac.com"}]
+    payload=validated_payload(enrich_lead(lead,evidence))
+    assert payload["email"]=="service@acmehvac.com"
+    assert payload["phone"]=="(757) 555-1212"
+    assert payload["email_source_url"]=="https://acmehvac.com/contact"
+
+def test_enrichment_rejects_cross_company_evidence():
+    from src.enrichment import enrich_lead, validated_payload
+    lead={"company_name":"ACME HVAC"}
+    evidence=[{"candidate_name":"Different HVAC","url":"https://different.example/contact","page_text":"Owner Jane Smith jane@different.example 757-555-9999"}]
+    assert validated_payload(enrich_lead(lead,evidence))=={}

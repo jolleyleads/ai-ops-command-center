@@ -45,7 +45,10 @@ REQUIRED_PROOF = {
 def _present(value: Any) -> bool:
     if value is None or value is False: return False
     if isinstance(value, str): return bool(value.strip())
-    if isinstance(value, (list, tuple, set, dict)): return bool(value)
+    if isinstance(value, dict):
+        if value.get("ok") is False or value.get("validated") is False: return False
+        return bool(value)
+    if isinstance(value, (list, tuple, set)): return bool(value)
     return True
 
 

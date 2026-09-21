@@ -18,7 +18,7 @@ def orchestrate(input_data: Dict[str, Any]) -> Dict[str, Any]:
         trace.append({"step":"verify_lead","ok":verification["verified"],"reasons":verification["reasons"]})
         if not verification["verified"]:
             return {"status":"needs_verification","action":"stop","lead":verification["lead"],"state":state,"trace":trace}
-        state["evidence"] = lead.get("evidence") or lead.get("sources")
+        lead = verification["lead"]\n        state["evidence"] = lead.get("evidence") or lead.get("sources")
         moved = apply_transition(state, "verified")
         state = moved["state"]
         if not moved["ok"]:

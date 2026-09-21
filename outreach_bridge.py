@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 import requests
 from app import db
-from outreach_automation import OutreachLead, _draft_email
+from outreach_automation import OutreachLead, _draft_email\nfrom src.enrichment import enrich_lead, validated_payload
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
@@ -88,12 +88,11 @@ def ingest_verified_results(search_payload):
         score=_evidence_score(result)
         if not company or score<QUEUE_MIN_SCORE or not _verified(result):continue
         summary["eligible"]+=1
-        urls=_candidate_urls(result);source_url=urls[0] if urls else ""
-        email,email_source=_verified_public_email(result)
+        urls=_candidate_urls(result);source_url=urls[0] if urls else ""\n        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls}, result.get("evidence") or [result])\n        validated=validated_payload(enrichment)\n        email=_clean(validated.get("email"),500)\n        email_source=_clean(validated.get("email_source_url"),1800)\n        contact_name=_clean(validated.get("decision_maker"),300)
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         if existing:
             summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
-        lead=OutreachLead(company=company,contact_email=email,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(_evidence_for_storage(result)),score=score,verification=_clean(result.get("verification"),100) or "OPENAI_WEB_VERIFIED",status="review")
+        lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
         db.session.add(lead);db.session.commit();summary["saved"]+=1
         if email:
             drafted=_draft_email(lead)
