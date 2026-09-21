@@ -89,7 +89,12 @@ def ingest_verified_results(search_payload):
         score=_evidence_score(result)
         if not company or score<QUEUE_MIN_SCORE or not _verified(result):continue
         summary["eligible"]+=1
-        urls=_candidate_urls(result);source_url=urls[0] if urls else ""\n        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls}, result.get("evidence") or [result])\n        validated=validated_payload(enrichment)\n        email=_clean(validated.get("email"),500)\n        email_source=_clean(validated.get("email_source_url"),1800)\n        contact_name=_clean(validated.get("decision_maker"),300)
+        urls=_candidate_urls(result);source_url=urls[0] if urls else ""
+        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls}, result.get("evidence") or [result])
+        validated=validated_payload(enrichment)
+        email=_clean(validated.get("email"),500)
+        email_source=_clean(validated.get("email_source_url"),1800)
+        contact_name=_clean(validated.get("decision_maker"),300)
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         if existing:
             summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
