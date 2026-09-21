@@ -63,9 +63,7 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
         explicit=_url(row.get("website"))
         candidates=[explicit,u] if explicit else [u]
         for c in candidates:
-            h=_host(c)
-            if h and not any(b in h for b in blocked):
-                website=c;break
+            h=_host(c)\n            if h and not any(b in h for b in blocked):\n                website=f"{urlparse(c).scheme}://{h}";break
         if website:break
     if website:
         out["fields"]["website"]={"value":website,"source_url":website,"validated":True}
