@@ -4,7 +4,8 @@ import re
 from urllib.parse import urlparse
 import requests
 from app import db
-from outreach_automation import OutreachLead, _draft_email\nfrom src.enrichment import enrich_lead, validated_payload
+from outreach_automation import OutreachLead, _draft_email
+from src.enrichment import enrich_lead, validated_payload
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
