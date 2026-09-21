@@ -48,7 +48,8 @@ def test_exa_verification_evidence_promotes_matching_candidate(monkeypatch):
     rows,msg,used=smart_search._candidate_followups("find electrical contractors in Chesapeake","",[{"name":"ACME Electric LLC","discovery_urls":["https://places.example/acme"]}],10**12,1)
     promoted=smart_search._deterministic_need_verification(rows,"find electrical contractors in Chesapeake")
     gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
-    assert used and set(used)=={"exa_search"}\n    assert len(used)==len(smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True))
+    assert used and set(used)=={"exa_search"}
+    assert len(used)==len(smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True))
     assert rows[0]["candidate_name"]=="ACME Electric LLC"
     assert gated[0]["classification"]=="Verified Lead"
     assert gated[0]["supporting_urls"]==["https://jobs.example/acme"]
