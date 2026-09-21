@@ -54,10 +54,33 @@ def _web_search(query,location=""):
         return {"results":[],"message":f"OpenAI Web Search returned no source URLs. status={_clean(payload.get('status'),40)} output_types={types} detail={detail}"}
     except requests.RequestException as exc:return {"results":[],"message":f"OpenAI Web Search failed: {type(exc).__name__}."}
 
+def _exa_search(query,location=""):
+    """Deterministic verification retrieval using Exa Search + returned contents."""
+    key=os.getenv("EXA_API_KEY") or ""
+    if not key:return {"results":[],"message":"EXA_API_KEY is not configured.","source":"Exa"}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400]
+    body={"query":text,"numResults":5,"type":"auto","contents":{"text":{"maxCharacters":8000},"highlights":{"numSentences":5,"highlightsPerUrl":3},"livecrawl":"preferred"}}
+    try:
+        r=requests.post("https://api.exa.ai/search",headers={"x-api-key":key,"Content-Type":"application/json"},json=body,timeout=15)
+        if not r.ok:
+            try: detail=_clean(r.json().get("error"),700)
+            except Exception: detail=_clean(r.text,700)
+            return {"results":[],"message":f"Exa Search returned HTTP {r.status_code}: {detail}","source":"Exa"}
+        rows=[]
+        for item in r.json().get("results") or []:
+            if not isinstance(item,dict):continue
+            url=_clean(item.get("url"),1600)
+            if not url.startswith(("http://","https://")):continue
+            highlights=item.get("highlights") or []
+            rows.append({"title":_clean(item.get("title"),500) or urlparse(url).netloc,"url":url,"subtitle":_clean(" ".join(highlights),3000),"page_text":_clean(item.get("text"),8000),"source":"Exa","research_tool":"exa_search"})
+        return {"results":_dedupe(rows),"message":"","source":"Exa"}
+    except requests.RequestException as exc:return {"results":[],"message":f"Exa Search failed: {type(exc).__name__}.","source":"Exa"}
+
 def _run_tool(call):
     tool=_clean(call.get("tool"),50);q=_clean(call.get("query"),700);loc=_clean(call.get("location"),200)
     try:
-        if tool=="web_search":payload=_web_search(q,loc)
+        if tool=="exa_search":payload=_exa_search(q,loc)
+        elif tool=="web_search":payload=_web_search(q,loc)
         elif tool=="public_records":payload=_search_public_records(q,loc)
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
@@ -205,8 +228,14 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         if not name:continue
         verify_query=(f'"{name}" ("master electrician" OR "pull permits" OR "permit pulling" OR '
                       f'"electrical permits") (hiring OR seeking OR needed OR required OR help)') if electrical else f'"{name}" {q}'
-        calls=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
-        rows,msg,used=_run_calls(calls,deadline,2);messages+=msg;tools+=used
+        calls=[{"tool":"exa_search","query":verify_query,"location":loc}]
+        rows,msg,used=_run_calls(calls,deadline,1);messages+=msg;tools+=used
+        # Exa owns candidate-specific verification retrieval. Legacy search is
+        # fallback-only when Exa returns no evidence.
+        if not rows and time.monotonic()<deadline-4:
+            fallback=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
+            rows2,msg2,used2=_run_calls(fallback,deadline,2)
+            rows+=rows2;messages+=msg2;tools+=used2
         # Keep the discovery entity attached to every verification source so the gate
         # can distinguish company discovery from evidence about the requested need.
         for x in rows:

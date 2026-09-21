@@ -40,3 +40,24 @@ def test_other_company_evidence_cannot_promote_candidate():
     promoted=[{"candidate_name":"Different Electric","url":"https://jobs.example/different","supporting_urls":["https://jobs.example/different"],"verified_claim":"Hiring a master electrician."}]
     result=_verification_gate(discovery,promoted,{})
     assert result[0]["classification"]=="Candidate"
+
+
+def test_exa_verification_evidence_promotes_matching_candidate(monkeypatch):
+    import smart_search
+    monkeypatch.setattr(smart_search, "_exa_search", lambda q,loc="": {"results":[{"title":"ACME hiring","url":"https://jobs.example/acme","subtitle":"We are hiring a master electrician for permit work.","page_text":"ACME Electric LLC is hiring a master electrician required for electrical permits.","source":"Exa"}],"message":"","source":"Exa"})
+    rows,msg,used=smart_search._candidate_followups("find electrical contractors in Chesapeake","",[{"name":"ACME Electric LLC","discovery_urls":["https://places.example/acme"]}],10**12,1)
+    promoted=smart_search._deterministic_need_verification(rows,"find electrical contractors in Chesapeake")
+    gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
+    assert used==["exa_search"]
+    assert rows[0]["candidate_name"]=="ACME Electric LLC"
+    assert gated[0]["classification"]=="Verified Lead"
+    assert gated[0]["supporting_urls"]==["https://jobs.example/acme"]
+
+def test_exa_discovery_without_need_evidence_stays_candidate(monkeypatch):
+    import smart_search
+    monkeypatch.setattr(smart_search, "_exa_search", lambda q,loc="": {"results":[{"title":"ACME homepage","url":"https://acme.example","subtitle":"Electrical contractor serving Chesapeake.","page_text":"Residential and commercial electrical services.","source":"Exa"}],"message":"","source":"Exa"})
+    rows,msg,used=smart_search._candidate_followups("find electrical contractors in Chesapeake","",[{"name":"ACME Electric LLC","discovery_urls":["https://places.example/acme"]}],10**12,1)
+    promoted=smart_search._deterministic_need_verification(rows,"find electrical contractors in Chesapeake")
+    gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
+    assert promoted==[]
+    assert gated[0]["classification"]=="Candidate"
