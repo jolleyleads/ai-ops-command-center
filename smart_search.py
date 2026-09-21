@@ -54,10 +54,32 @@ def _web_search(query,location=""):
         return {"results":[],"message":f"OpenAI Web Search returned no source URLs. status={_clean(payload.get('status'),40)} output_types={types} detail={detail}"}
     except requests.RequestException as exc:return {"results":[],"message":f"OpenAI Web Search failed: {type(exc).__name__}."}
 
+def _exa_search(query,location=""):
+    """Deterministic verification retrieval using Exa Search + returned contents."""
+    key=os.getenv("EXA_API_KEY") or ""
+    if not key:return {"results":[],"message":"EXA_API_KEY is not configured.","source":"Exa"}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400]
+    body={"query":text,"numResults":5,"type":"auto","contents":{"text":{"maxCharacters":8000},"highlights":{"numSentences":5,"highlightsPerUrl":3},"livecrawl":"preferred"}}
+    try:
+        r=requests.post("https://api.exa.ai/search",headers={"x-api-key":key,"Content-Type":"application/json"},json=body,timeout=15)
+        if not r.ok:
+            try: detail=_clean(r.json().get("error"),700)
+            except Exception: detail=_clean(r.text,700)
+            return {"results":[],"message":f"Exa Search returned HTTP {r.status_code}: {detail}","source":"Exa"}
+        rows=[]
+        for item in r.json().get("results") or []:
+            if not isinstance(item,dict):continue
+            url=_clean(item.get("url"),1600)
+            if not url.startswith(("http://","https://")):continue
+            highlights=item.get("highlights") or []
+            rows.append({"title":_clean(item.get("title"),500) or urlparse(url).netloc,"url":url,"subtitle":_clean(" ".join(highlights),3000),"page_text":_clean(item.get("text"),8000),"source":"Exa","research_tool":"exa_search"})
+        return {"results":_dedupe(rows),"message":"","source":"Exa"}
+    except requests.RequestException as exc:return {"results":[],"message":f"Exa Search failed: {type(exc).__name__}.","source":"Exa"}
+
 def _run_tool(call):
     tool=_clean(call.get("tool"),50);q=_clean(call.get("query"),700);loc=_clean(call.get("location"),200)
     try:
-        if tool=="web_search":payload=_web_search(q,loc)
+        if tool=="exa_search":payload=_exa_search(q,loc)\n        elif tool=="web_search":payload=_web_search(q,loc)
         elif tool=="public_records":payload=_search_public_records(q,loc)
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
