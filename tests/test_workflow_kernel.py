@@ -158,3 +158,51 @@ def test_enrichment_rejects_cross_company_evidence():
     lead={"company_name":"ACME HVAC"}
     evidence=[{"candidate_name":"Different HVAC","url":"https://different.example/contact","page_text":"Owner Jane Smith jane@different.example 757-555-9999"}]
     assert validated_payload(enrich_lead(lead,evidence))=={}
+
+
+def _validated_qualified_fixture():
+    return {
+        "company_name":"ACME HVAC",
+        "website":"https://acmehvac.com",
+        "website_source_url":"https://acmehvac.com",
+        "email":"service@acmehvac.com",
+        "email_source_url":"https://acmehvac.com/contact",
+        "decision_maker":"Jane Smith",
+        "decision_maker_title":"owner",
+        "decision_maker_source_url":"https://acmehvac.com/about",
+        "evidence":[{"url":"https://acmehvac.com/jobs","title":"Careers"}],
+    }
+
+def test_qualification_accepts_only_source_validated_lead():
+    from src.qualification import qualify_lead, qualification_payload
+    validated=_validated_qualified_fixture()
+    q=qualify_lead(validated,verification_ok=True)
+    assert q["qualified"] and q["ok"]
+    downstream=qualification_payload(validated,q)
+    assert downstream["email"]=="service@acmehvac.com"
+    assert downstream["decision_maker"]=="Jane Smith"
+
+def test_qualification_fails_without_verified_lead():
+    from src.qualification import qualify_lead, qualification_payload
+    validated=_validated_qualified_fixture()
+    q=qualify_lead(validated,verification_ok=False)
+    assert not q["qualified"] and "lead_not_verified" in q["reasons"]
+    assert qualification_payload(validated,q)=={}
+
+def test_qualification_fails_without_source_backed_contact():
+    from src.qualification import qualify_lead
+    validated=_validated_qualified_fixture()
+    validated.pop("email_source_url")
+    q=qualify_lead(validated)
+    assert not q["qualified"] and "missing_validated_contact_channel" in q["reasons"]
+
+def test_qualification_fails_without_evidence_url():
+    from src.qualification import qualify_lead
+    validated=_validated_qualified_fixture()
+    validated["evidence"]=[{"title":"unsupported"}]
+    q=qualify_lead(validated)
+    assert not q["qualified"] and "missing_source_evidence" in q["reasons"]
+
+def test_failed_qualification_receipt_cannot_advance():
+    v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"ok":False,"qualified":False,"reasons":["missing_validated_contact_channel"]}})
+    assert not v["allowed"] and "missing_qualification" in v["reasons"]
