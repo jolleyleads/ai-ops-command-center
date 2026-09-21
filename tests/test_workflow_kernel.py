@@ -48,7 +48,8 @@ def test_exa_verification_evidence_promotes_matching_candidate(monkeypatch):
     rows,msg,used=smart_search._candidate_followups("find electrical contractors in Chesapeake","",[{"name":"ACME Electric LLC","discovery_urls":["https://places.example/acme"]}],10**12,1)
     promoted=smart_search._deterministic_need_verification(rows,"find electrical contractors in Chesapeake")
     gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
-    assert used==["exa_search"]
+    assert used and set(used)=={"exa_search"}
+    assert len(used)==len(smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True))
     assert rows[0]["candidate_name"]=="ACME Electric LLC"
     assert gated[0]["classification"]=="Verified Lead"
     assert gated[0]["supporting_urls"]==["https://jobs.example/acme"]
@@ -61,3 +62,33 @@ def test_exa_discovery_without_need_evidence_stays_candidate(monkeypatch):
     gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
     assert promoted==[]
     assert gated[0]["classification"]=="Candidate"
+
+
+def test_electrical_verification_queries_cover_multiple_evidence_channels():
+    import smart_search
+    queries=smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True)
+    joined=" ".join(queries).lower()
+    assert len(queries) >= 6
+    assert "master electrician" in joined
+    assert "jobs" in joined or "careers" in joined
+    assert "permit" in joined
+    assert "project" in joined
+    assert "license" in joined
+
+
+def test_candidate_followups_preserve_candidate_identity_across_exa_queries(monkeypatch):
+    import smart_search
+    calls=[]
+    def fake_exa(q,loc=""):
+        calls.append(q)
+        return {"results":[{"title":"source","url":f"https://evidence.example/{len(calls)}","subtitle":"public evidence","page_text":"public evidence","source":"Exa"}],"message":"","source":"Exa"}
+    monkeypatch.setattr(smart_search,"_exa_search",fake_exa)
+    rows,msg,used=smart_search._candidate_followups(
+        "find electrical contractors in Chesapeake","",
+        [{"name":"ACME Electric LLC","discovery_urls":["https://places.example/acme"]}],
+        10**12,1)
+    assert len(calls) >= 6
+    assert all(x["candidate_name"]=="ACME Electric LLC" for x in rows)
+    assert all(x["verification_research"] is True for x in rows)
+    assert all(x.get("verification_query") for x in rows)
+    assert all(x["candidate_discovery_urls"]==["https://places.example/acme"] for x in rows)
