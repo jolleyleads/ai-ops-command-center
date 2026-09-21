@@ -42,11 +42,7 @@ REQUIRED_PROOF = {
 }
 
 
-def _present(value: Any) -> bool:
-    if value is None or value is False: return False
-    if isinstance(value, str): return bool(value.strip())
-    if isinstance(value, (list, tuple, set, dict)): return bool(value)
-    return True
+def _present(value: Any) -> bool:\n    if value is None or value is False: return False\n    if isinstance(value, str): return bool(value.strip())\n    if isinstance(value, dict):\n        if value.get("ok") is False or value.get("validated") is False: return False\n        return bool(value)\n    if isinstance(value, (list, tuple, set)): return bool(value)\n    return True
 
 
 def validate_transition(current: str, target: str, state: Dict[str, Any]) -> Dict[str, Any]:
