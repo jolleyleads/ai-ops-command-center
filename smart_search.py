@@ -219,6 +219,19 @@ def _fallback_candidates(discovery,limit=10):
         if len(out)>=limit:break
     return out
 
+def _verification_queries(name, q, electrical):
+    """Deterministic research coverage plan; retrieval stays separate from judgment."""
+    if not electrical:
+        return [f'"{name}" {q}']
+    return [
+        f'"{name}" ("master electrician" OR "journeyman electrician") (hiring OR seeking OR needed OR required)',
+        f'"{name}" ("pull permits" OR "permit pulling" OR "electrical permits")',
+        f'"{name}" (jobs OR careers OR hiring) electrician',
+        f'"{name}" (permit OR permits OR inspection OR inspections) electrical',
+        f'"{name}" (project OR projects OR subcontractor OR bid OR awarded) electrical',
+        f'"{name}" (license OR licensing OR licensed) electrician',
+    ]
+
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     evidence=[];messages=[];tools=[]
     electrical=_needs_electrical_verification(q)
@@ -226,21 +239,29 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         if time.monotonic()>=deadline-6:break
         name=_clean(cand.get("name"),300)
         if not name:continue
-        verify_query=(f'"{name}" ("master electrician" OR "pull permits" OR "permit pulling" OR '
-                      f'"electrical permits") (hiring OR seeking OR needed OR required OR help)') if electrical else f'"{name}" {q}'
-        calls=[{"tool":"exa_search","query":verify_query,"location":loc}]
-        rows,msg,used=_run_calls(calls,deadline,1);messages+=msg;tools+=used
-        # Exa owns candidate-specific verification retrieval. Legacy search is
-        # fallback-only when Exa returns no evidence.
-        if not rows and time.monotonic()<deadline-4:
+        candidate_rows=[]
+        for verify_query in _verification_queries(name,q,electrical):
+            if time.monotonic()>=deadline-4:break
+            calls=[{"tool":"exa_search","query":verify_query,"location":loc}]
+            rows,msg,used=_run_calls(calls,deadline,1);messages+=msg;tools+=used
+            for x in rows:
+                x["candidate_name"]=name
+                x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
+                x["verification_research"]=True
+                x["verification_query"]=verify_query
+            candidate_rows.extend(rows)
+        # Legacy providers are fallback-only when Exa produced no candidate evidence.
+        if not candidate_rows and time.monotonic()<deadline-4:
+            verify_query=_verification_queries(name,q,electrical)[0]
             fallback=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
-            rows2,msg2,used2=_run_calls(fallback,deadline,2)
-            rows+=rows2;messages+=msg2;tools+=used2
-        # Keep the discovery entity attached to every verification source so the gate
-        # can distinguish company discovery from evidence about the requested need.
-        for x in rows:
-            x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True
-        evidence.extend(rows)
+            rows2,msg2,used2=_run_calls(fallback,deadline,2);messages+=msg2;tools+=used2
+            for x in rows2:
+                x["candidate_name"]=name
+                x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
+                x["verification_research"]=True
+                x["verification_query"]=verify_query
+            candidate_rows.extend(rows2)
+        evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
 def _smart_search(q,loc):
