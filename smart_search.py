@@ -228,8 +228,14 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         if not name:continue
         verify_query=(f'"{name}" ("master electrician" OR "pull permits" OR "permit pulling" OR '
                       f'"electrical permits") (hiring OR seeking OR needed OR required OR help)') if electrical else f'"{name}" {q}'
-        calls=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
-        rows,msg,used=_run_calls(calls,deadline,2);messages+=msg;tools+=used
+        calls=[{"tool":"exa_search","query":verify_query,"location":loc}]
+        rows,msg,used=_run_calls(calls,deadline,1);messages+=msg;tools+=used
+        # Exa owns candidate-specific verification retrieval. Legacy search is
+        # fallback-only when Exa returns no evidence.
+        if not rows and time.monotonic()<deadline-4:
+            fallback=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
+            rows2,msg2,used2=_run_calls(fallback,deadline,2)
+            rows+=rows2;messages+=msg2;tools+=used2
         # Keep the discovery entity attached to every verification source so the gate
         # can distinguish company discovery from evidence about the requested need.
         for x in rows:
