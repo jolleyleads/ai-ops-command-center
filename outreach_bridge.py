@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import requests
 from app import db
 from outreach_automation import OutreachLead, _draft_email
-from src.enrichment import enrich_lead, validated_payload
+from src.enrichment import enrich_lead, validated_payload\nfrom src.qualification import qualify_lead, qualification_payload
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
@@ -98,7 +98,7 @@ def ingest_verified_results(search_payload):
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         if existing:
             summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
-        lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
+        lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated,"qualification":qualification,"qualified":qualified}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
         db.session.add(lead);db.session.commit();summary["saved"]+=1
         if email:
             drafted=_draft_email(lead)
