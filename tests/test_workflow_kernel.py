@@ -49,7 +49,7 @@ def test_exa_verification_evidence_promotes_matching_candidate(monkeypatch):
     promoted=smart_search._deterministic_need_verification(rows,"find electrical contractors in Chesapeake")
     gated=smart_search._verification_gate([{"title":"ACME Electric LLC","url":"https://places.example/acme","research_tool":"business_search"}],promoted,{})
     assert used and set(used)=={"exa_search"}
-    assert len(used)==len(smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True))
+    assert len(used)==len(smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",smart_search._verification_intent("find electrical contractors in Chesapeake")))
     assert rows[0]["candidate_name"]=="ACME Electric LLC"
     assert gated[0]["classification"]=="Verified Lead"
     assert gated[0]["supporting_urls"]==["https://jobs.example/acme"]
@@ -66,7 +66,7 @@ def test_exa_discovery_without_need_evidence_stays_candidate(monkeypatch):
 
 def test_electrical_verification_queries_cover_multiple_evidence_channels():
     import smart_search
-    queries=smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",True)
+    queries=smart_search._verification_queries("ACME Electric LLC","find electrical contractors in Chesapeake",smart_search._verification_intent("find electrical contractors in Chesapeake"))
     joined=" ".join(queries).lower()
     assert len(queries) >= 6
     assert "master electrician" in joined
@@ -92,3 +92,36 @@ def test_candidate_followups_preserve_candidate_identity_across_exa_queries(monk
     assert all(x["verification_research"] is True for x in rows)
     assert all(x.get("verification_query") for x in rows)
     assert all(x["candidate_discovery_urls"]==["https://places.example/acme"] for x in rows)
+
+
+def test_hvac_hiring_gets_deterministic_verification_plan():
+    import smart_search
+    q="Find HVAC companies in Virginia Beach that are currently hiring technicians."
+    assert smart_search._needs_candidate_verification(q)
+    intents=smart_search._verification_intent(q)
+    assert "hiring" in intents
+    queries=smart_search._verification_queries("Coastal HVAC",q,intents)
+    joined=" ".join(queries).lower()
+    assert "hiring" in joined or "careers" in joined
+    assert "technician" in joined
+
+def test_active_projects_get_project_verification_plan():
+    import smart_search
+    q="Find commercial contractors in Norfolk with evidence of active projects or recent permits."
+    assert smart_search._needs_candidate_verification(q)
+    intents=smart_search._verification_intent(q)
+    assert "projects" in intents
+    assert "permit_license" in intents
+    joined=" ".join(smart_search._verification_queries("ACME Construction",q,intents)).lower()
+    assert "project" in joined
+    assert "permit" in joined
+
+def test_hvac_hiring_requires_candidate_specific_source_evidence():
+    import smart_search
+    q="Find HVAC companies in Virginia Beach that are currently hiring technicians."
+    discovery_only=[{"title":"Coastal HVAC","url":"https://places.example/coastal","subtitle":"HVAC services in Virginia Beach"}]
+    assert smart_search._deterministic_need_verification(discovery_only,q)==[]
+    evidence=[{"candidate_name":"Coastal HVAC","verification_research":True,"url":"https://coastal.example/careers","title":"Careers","subtitle":"We are hiring HVAC technicians now.","page_text":""}]
+    promoted=smart_search._deterministic_need_verification(evidence,q)
+    assert len(promoted)==1
+    assert promoted[0]["supporting_urls"]==["https://coastal.example/careers"]

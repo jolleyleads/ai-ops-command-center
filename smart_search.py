@@ -125,28 +125,86 @@ def _semantic_keep(evidence,evaluation):
     relevant={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
     return [x for x in evidence if _clean(x.get("url"),1600) in relevant] if relevant else evidence
 
-def _deterministic_need_verification(evidence,q):
-    """Fail-closed verifier for explicit hiring/permit-capability need claims in source text."""
+def _verification_intent(q):
+    """Deterministically classify verification needs without asking the LLM."""
     ql=_clean(q,1200).lower()
-    electrician_intent=("electric" in ql and (("master" in ql or "permit" in ql) or _needs_electrical_verification(q)))
-    if not electrician_intent:return []
-    need_patterns=[
-        r"\b(?:seeking|hiring|looking for|need(?:s|ed)?|wanted)\b.{0,90}\bmaster electrician\b",
-        r"\bmaster electrician\b.{0,90}\b(?:required|needed|wanted|opening|position|job)\b",
-        r"\b(?:need(?:s|ed)?|seeking|looking for)\b.{0,100}\b(?:pull|pulling|obtain)\b.{0,40}\bpermits?\b",
-        r"\bpermit[- ]pulling\b.{0,80}\b(?:needed|required|help|service)\b",
-    ]
+    intents=[]
+    if any(x in ql for x in ("hiring","hire ","jobs","job opening","open role","technician")):
+        intents.append("hiring")
+    if "electric" in ql and any(x in ql for x in ("contractor","contractors","company","companies","business","businesses")):
+        intents.extend(["hiring","permit_license","projects"])
+    if any(x in ql for x in ("permit","inspection","license","licensing","master electrician","pull permits","permit-pulling")):
+        intents.append("permit_license")
+    if any(x in ql for x in ("active project","recent project","projects","project notice","bid","awarded","subcontractor")):
+        intents.append("projects")
+    if not intents:
+        intents.append("claim")
+    return tuple(dict.fromkeys(intents))
+
+def _needs_candidate_verification(q):
+    ql=_clean(q,1200).lower()
+    discovery_terms=("contractor","contractors","company","companies","business","businesses","firm","firms")
+    claim_terms=("hiring","hire ","jobs","job opening","open role","technician","master electrician","permit","inspection","license","licensing","active project","recent project","projects","project notice","bid","awarded","subcontractor","current evidence","evidence of")
+    return any(x in ql for x in discovery_terms) and any(x in ql for x in claim_terms)
+
+def _verification_queries(name,q,intents=None):
+    """Deterministic candidate research plan covering the claim channels named by the inquiry."""
+    intents=tuple(intents or _verification_intent(q))
+    ql=_clean(q,1200).lower()
+    queries=[]
+    if "hiring" in intents:
+        role="technician" if "technician" in ql else ("master electrician" if "master electrician" in ql else "electrician" if "electric" in ql else "")
+        queries.extend([
+            f'"{name}" (jobs OR careers OR hiring OR opening) "{role}"' if role else f'"{name}" (jobs OR careers OR hiring OR opening)',
+            f'"{name}" (seeking OR hiring OR "looking for" OR needed OR required) "{role}"' if role else f'"{name}" (seeking OR hiring OR "looking for" OR needed OR required)',
+        ])
+    if "permit_license" in intents:
+        trade="electrical" if "electric" in ql else ""
+        queries.extend([
+            f'"{name}" (permit OR permits OR inspection OR inspections) {trade}'.strip(),
+            f'"{name}" (license OR licensing OR licensed OR "master electrician" OR "pull permits" OR "permit pulling") {trade}'.strip(),
+        ])
+    if "projects" in intents:
+        queries.extend([
+            f'"{name}" ("active project" OR "recent project" OR projects OR awarded)',
+            f'"{name}" ("project notice" OR bid OR subcontractor OR awarded)',
+        ])
+    if intents==("claim",) or not queries:
+        queries=[f'"{name}" {q}']
+    return list(dict.fromkeys(queries))
+
+def _deterministic_need_verification(evidence,q):
+    """Fail closed: promote only candidate-specific source text that explicitly supports the requested claim."""
+    intents=_verification_intent(q)
+    patterns=[]
+    if "hiring" in intents:
+        patterns.extend([
+            r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?)\b.{0,120}\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician|employee|employees|staff|worker|workers)\b",
+            r"\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician)\b.{0,120}\b(?:hiring|job|position|opening|needed|required)\b",
+        ])
+    if "permit_license" in intents:
+        patterns.extend([
+            r"\b(?:permit|permits|inspection|inspections|license|licensing|licensed)\b.{0,140}\b(?:electrical|electrician|project|contractor|required|approved|issued|active|current)\b",
+            r"\b(?:master electrician|pull permits|permit pulling)\b.{0,120}\b(?:required|needed|hiring|seeking|help|service|permit|permits)\b",
+        ])
+    if "projects" in intents:
+        patterns.extend([
+            r"\b(?:active|current|recent|awarded|ongoing|new)\b.{0,100}\b(?:project|projects|contract|contracts|bid|work)\b",
+            r"\b(?:project|projects|contract|contracts|bid|subcontractor)\b.{0,100}\b(?:active|current|recent|awarded|ongoing|notice|202[5-9])\b",
+        ])
+    if intents==("claim",):
+        return []
     out=[];seen=set()
     for item in evidence:
         url=_clean(item.get("url"),1600)
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
-        # Electrical promotion must come from the candidate-specific second-stage
-        # research, never from the original Places discovery card.
         if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
-        if not url or url in seen or not any(re.search(p,text,re.I|re.S) for p in need_patterns):continue
-        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"];x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
-        x["verified_claim"]="Source explicitly indicates a current need for a master electrician or permit-pulling capability."
-        x["supporting_urls"]=[url];x["confidence"]="high";x["evidence_basis"]="deterministic explicit-need phrase matched in source evidence";out.append(x);seen.add(url)
+        if not url or url in seen or not any(re.search(p,text,re.I|re.S) for p in patterns):continue
+        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
+        x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
+        x["verified_claim"]="Candidate-specific source evidence explicitly supports the requested current claim."
+        x["supporting_urls"]=[url];x["confidence"]="high";x["evidence_basis"]="deterministic requested-claim phrase matched in candidate-specific source evidence"
+        out.append(x);seen.add(url)
     return out
 
 def _verified_results(evidence,evaluation,q):
@@ -155,30 +213,25 @@ def _verified_results(evidence,evaluation,q):
     for verdict in evaluation.get("verified_results") or []:
         if not isinstance(verdict,dict):continue
         url=_clean(verdict.get("url"),1600);item=by_url.get(url)
-        if not item or url in seen:continue
+        if not item or url in seen or not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         entity=_clean(verdict.get("entity_name"),300);claim=_clean(verdict.get("claim"),1200)
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
         if not entity or not claim or not supporting:continue
-        x=dict(item);x.pop("page_text",None);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="target entity and requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
+        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
     annotate_evidence(out,q)
     return out
 
 def _candidate_key(name):
-    """Stable deterministic identity key for joining discovery and verification evidence."""
     return re.sub(r"[^a-z0-9]+","",_clean(name,300).lower())
 
 def _promoted_by_candidate(promoted):
-    """Index verified evidence by the candidate identity established during discovery."""
     out={}
     for item in promoted or []:
-        name=_clean(item.get("candidate_name") or item.get("title"),300)
-        key=_candidate_key(name)
-        if not key:continue
-        out.setdefault(key,[]).append(item)
+        name=_clean(item.get("candidate_name") or item.get("title"),300);key=_candidate_key(name)
+        if key:out.setdefault(key,[]).append(item)
     return out
 
-def _verification_gate(items, promoted, evaluation):
-    """Deterministic three-state gate joined by candidate identity, never URL coincidence."""
+def _verification_gate(items,promoted,evaluation):
     promoted_candidates=_promoted_by_candidate(promoted)
     rejected_urls={_clean(x.get("url"),1600) for x in (evaluation.get("rejected_results") or []) if isinstance(x,dict) and _clean(x.get("url"),1600)}
     relevant_urls={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
@@ -188,78 +241,45 @@ def _verification_gate(items, promoted, evaluation):
         name=_clean(x.get("candidate_name") or x.get("title") or x.get("name"),300)
         verified_sources=promoted_candidates.get(_candidate_key(name),[])
         if verified_sources:
-            supporting=[]
-            claims=[]
+            supporting=[];claims=[]
             for v in verified_sources:
                 supporting.extend(v.get("supporting_urls") or ([_clean(v.get("url"),1600)] if _clean(v.get("url"),1600) else []))
                 if _clean(v.get("verified_claim"),1200):claims.append(_clean(v.get("verified_claim"),1200))
-            x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
-            x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate."
-            x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u))
-            x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity"
-            out.append(x);continue
+            x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed";x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate.";x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u));x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity";out.append(x);continue
         if url in rejected_urls or (relevant_urls and url not in relevant_urls):
             x["classification"]="Rejected";x["promotion_status"]="rejected";x["verification_gate"]="failed";x["evidence_basis"]="rejected: evidence does not support the requested lead claim";out.append(x);continue
         x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires candidate-specific supporting source evidence";out.append(x)
     return out
 
-def _needs_electrical_verification(q):
-    ql=_clean(q,1200).lower()
-    return "electric" in ql and any(x in ql for x in ("contractor","company","companies","business","businesses"))
-
 def _fallback_candidates(discovery,limit=10):
-    """Deterministically turn source-backed business discovery into verification candidates."""
     out=[];seen=set()
     for item in discovery or []:
         if item.get("research_tool")!="business_search":continue
-        name=_clean(item.get("title") or item.get("name"),300);url=_clean(item.get("url"),1600)
-        key=name.lower()
+        name=_clean(item.get("title") or item.get("name"),300);url=_clean(item.get("url"),1600);key=_candidate_key(name)
         if not name or not url or key in seen:continue
         seen.add(key);out.append({"name":name,"discovery_urls":[url],"candidate_source":"deterministic_business_discovery"})
         if len(out)>=limit:break
     return out
 
-def _verification_queries(name, q, electrical):
-    """Deterministic research coverage plan; retrieval stays separate from judgment."""
-    if not electrical:
-        return [f'"{name}" {q}']
-    return [
-        f'"{name}" ("master electrician" OR "journeyman electrician") (hiring OR seeking OR needed OR required)',
-        f'"{name}" ("pull permits" OR "permit pulling" OR "electrical permits")',
-        f'"{name}" (jobs OR careers OR hiring) electrician',
-        f'"{name}" (permit OR permits OR inspection OR inspections) electrical',
-        f'"{name}" (project OR projects OR subcontractor OR bid OR awarded) electrical',
-        f'"{name}" (license OR licensing OR licensed) electrician',
-    ]
-
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
-    evidence=[];messages=[];tools=[]
-    electrical=_needs_electrical_verification(q)
+    evidence=[];messages=[];tools=[];intents=_verification_intent(q)
     for cand in (candidates or [])[:max_candidates]:
         if time.monotonic()>=deadline-6:break
         name=_clean(cand.get("name"),300)
         if not name:continue
         candidate_rows=[]
-        for verify_query in _verification_queries(name,q,electrical):
+        queries=_verification_queries(name,q,intents)
+        for verify_query in queries:
             if time.monotonic()>=deadline-4:break
-            calls=[{"tool":"exa_search","query":verify_query,"location":loc}]
-            rows,msg,used=_run_calls(calls,deadline,1);messages+=msg;tools+=used
+            rows,msg,used=_run_calls([{"tool":"exa_search","query":verify_query,"location":loc}],deadline,1);messages+=msg;tools+=used
             for x in rows:
-                x["candidate_name"]=name
-                x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
-                x["verification_research"]=True
-                x["verification_query"]=verify_query
+                x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows)
-        # Legacy providers are fallback-only when Exa produced no candidate evidence.
         if not candidate_rows and time.monotonic()<deadline-4:
-            verify_query=_verification_queries(name,q,electrical)[0]
-            fallback=[{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}]
-            rows2,msg2,used2=_run_calls(fallback,deadline,2);messages+=msg2;tools+=used2
+            verify_query=queries[0]
+            rows2,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}],deadline,2);messages+=msg2;tools+=used2
             for x in rows2:
-                x["candidate_name"]=name
-                x["candidate_discovery_urls"]=cand.get("discovery_urls") or []
-                x["verification_research"]=True
-                x["verification_query"]=verify_query
+                x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows2)
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
@@ -285,7 +305,7 @@ def _smart_search(q,loc):
         candidates=extract_candidates(q,loc,discovery) if discovery and time.monotonic()<deadline-9 else []
         # The LLM is optional at this handoff: grounded business results become
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
-        if not candidates and _needs_electrical_verification(q):
+        if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
         joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,10) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
