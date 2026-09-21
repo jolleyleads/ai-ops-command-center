@@ -79,7 +79,8 @@ def _exa_search(query,location=""):
 def _run_tool(call):
     tool=_clean(call.get("tool"),50);q=_clean(call.get("query"),700);loc=_clean(call.get("location"),200)
     try:
-        if tool=="exa_search":payload=_exa_search(q,loc)\n        elif tool=="web_search":payload=_web_search(q,loc)
+        if tool=="exa_search":payload=_exa_search(q,loc)
+        elif tool=="web_search":payload=_web_search(q,loc)
         elif tool=="public_records":payload=_search_public_records(q,loc)
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
