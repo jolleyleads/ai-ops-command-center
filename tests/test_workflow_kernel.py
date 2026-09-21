@@ -147,7 +147,7 @@ def test_enrichment_omits_unsupported_contact_fields():
 def test_enrichment_accepts_source_bound_company_contact():
     from src.enrichment import enrich_lead, validated_payload
     lead={"company_name":"ACME HVAC"}
-    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/contact","title":"Contact","page_text":"Call (757) 555-1212 or email service@acmehvac.com."}]
+    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/contact","title":"Contact","page_text":"Call (757) 555-1212 or email service@acmehvac.com"}]
     payload=validated_payload(enrich_lead(lead,evidence))
     assert payload["email"]=="service@acmehvac.com"
     assert payload["phone"]=="(757) 555-1212"
