@@ -129,8 +129,10 @@ def _verification_intent(q):
     """Deterministically classify verification needs without asking the LLM."""
     ql=_clean(q,1200).lower()
     intents=[]
-    if any(x in ql for x in ("hiring","hire ","jobs","job opening","open role","technician","electrician")):
+    if any(x in ql for x in ("hiring","hire ","jobs","job opening","open role","technician")):
         intents.append("hiring")
+    if "electric" in ql and any(x in ql for x in ("contractor","contractors","company","companies","business","businesses")):
+        intents.extend(["hiring","permit_license","projects"])
     if any(x in ql for x in ("permit","inspection","license","licensing","master electrician","pull permits","permit-pulling")):
         intents.append("permit_license")
     if any(x in ql for x in ("active project","recent project","projects","project notice","bid","awarded","subcontractor")):
@@ -177,8 +179,8 @@ def _deterministic_need_verification(evidence,q):
     patterns=[]
     if "hiring" in intents:
         patterns.extend([
-            r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?)\b.{0,120}\b(?:technician|electrician|master electrician|employee|staff|worker)\b",
-            r"\b(?:technician|electrician|master electrician)\b.{0,120}\b(?:hiring|job|position|opening|needed|required)\b",
+            r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?)\b.{0,120}\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician|employee|employees|staff|worker|workers)\b",
+            r"\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician)\b.{0,120}\b(?:hiring|job|position|opening|needed|required)\b",
         ])
     if "permit_license" in intents:
         patterns.extend([
