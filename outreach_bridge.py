@@ -93,14 +93,27 @@ def ingest_verified_results(search_payload):
         urls=_candidate_urls(result);source_url=urls[0] if urls else ""
         enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls}, result.get("evidence") or [result])
         validated=validated_payload(enrichment)
-        qualification=qualify_lead(validated,verification_ok=_verified(result))
+        existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
+        qctx={
+            "target_location":_clean(search_payload.get("location"),300),
+            "candidate_location":_clean(result.get("location"),300),
+            "business_type":_clean(search_payload.get("business_type") or search_payload.get("category"),300),
+            "candidate_type":_clean(result.get("category") or result.get("type"),300),
+            "query":_clean(search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent"),1000),
+            "intent_signal":_clean(search_payload.get("intent_signal") or search_payload.get("query") or search_payload.get("goal"),1000),
+            "evidence":result.get("evidence") or [],
+            "duplicate":bool(existing),
+            "excluded":bool(result.get("excluded")),
+            "exclusion_terms":search_payload.get("exclusion_terms") or [],
+            "max_evidence_age_days":search_payload.get("max_evidence_age_days") or 180,
+        }
+        qualification=qualify_lead(validated,verification_ok=_verified(result),context=qctx)
         qualified=qualification_payload(validated,qualification)
         if not qualified:
-            summary["skipped"].append({"company":company,"reason":"qualification_failed","qualification_reasons":qualification.get("reasons") or []});continue
+            summary["skipped"].append({"company":company,"reason":"qualification_failed","qualification_status":qualification.get("status"),"qualification_reason_codes":qualification.get("reason_codes") or []});continue
         email=_clean(qualified.get("email"),500)
         email_source=_clean(qualified.get("email_source_url"),1800)
         contact_name=_clean(qualified.get("decision_maker"),300)
-        existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         if existing:
             summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
         lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated,"qualification":qualification,"qualified":qualified}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
