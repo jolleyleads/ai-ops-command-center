@@ -340,3 +340,38 @@ def test_max_followups_blocks_another_send():
     from src.followup_control import followup_permission
     gate=followup_permission(reply_state={"ok":True,"stop":False},follow_up_count=2,max_followups=2,thread_id="t1",contact_email="x@example.com")
     assert gate["allowed"] is False and "MAX_FOLLOWUPS_REACHED" in gate["reasons"]
+
+
+def test_reply_opt_out_overrides_interested_proposal():
+    from src.reply_booking import validate_reply_classification
+    r=validate_reply_classification("Yes, but please remove me from your list.",{"classification":"interested"})
+    assert r["classification"]=="not_interested"
+    assert r["validated"] is False
+    assert "CLASSIFICATION_CONFLICTS_WITH_OPT_OUT" in r["reasons"]
+
+def test_reply_negative_overrides_interested_proposal():
+    from src.reply_booking import validate_reply_classification
+    r=validate_reply_classification("No thanks, we're not interested.",{"classification":"interested"})
+    assert r["classification"]=="not_interested" and r["validated"] is False
+
+def test_reply_question_classification():
+    from src.reply_booking import validate_reply_classification
+    r=validate_reply_classification("How much does the service cost?",{"classification":"question"})
+    assert r["validated"] is True and r["classification"]=="question"
+
+def test_interested_reply_can_become_booking_ready_with_complete_fields():
+    from src.reply_booking import validate_reply_classification,booking_readiness
+    c=validate_reply_classification("Yes, let's schedule a call tomorrow.",{"classification":"interested"})
+    b=booking_readiness(c,{"start":"2026-09-23T14:00:00","end":"2026-09-23T14:30:00","timezone":"America/New_York","attendee_email":"owner@example.com"})
+    assert c["validated"] is True and b["booking_ready"] is True
+
+def test_question_cannot_be_booking_ready():
+    from src.reply_booking import validate_reply_classification,booking_readiness
+    c=validate_reply_classification("What does this cost?",{"classification":"question"})
+    b=booking_readiness(c,{"start":"2026-09-23T14:00:00","end":"2026-09-23T14:30:00","timezone":"America/New_York","attendee_email":"owner@example.com"})
+    assert b["booking_ready"] is False and "NOT_INTERESTED_FOR_BOOKING" in b["reasons"]
+
+def test_booking_receipt_requires_provider_event_id():
+    from src.reply_booking import validate_booking_receipt
+    assert validate_booking_receipt({"ok":True})["validated"] is False
+    assert validate_booking_receipt({"ok":True,"event_id":"evt-1"})["validated"] is True
