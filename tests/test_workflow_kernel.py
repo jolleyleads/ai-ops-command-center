@@ -535,3 +535,33 @@ def test_exact_sender_comparison_does_not_use_substring_matching():
     from src.followup_control import classify_inbound
     r=classify_inbound([{"message_id":"m4","from":"Other <not-sales@example.com>","from_email":"not-sales@example.com","text":"hello"}],sender_email="sales@example.com")
     assert r["replied"] is True
+
+
+def test_auto_router_negative_beats_interest():
+    from src.automatic_reply_router import classify_reply
+    r=classify_reply("Yes, but no thanks, we're not interested.")
+    assert r["classification"]=="not_interested"
+
+def test_auto_router_question_routes_question_even_with_interest_word():
+    from src.automatic_reply_router import classify_reply
+    r=classify_reply("Yes, how much does it cost?")
+    assert r["classification"]=="question"
+
+def test_auto_router_clear_interest():
+    from src.automatic_reply_router import classify_reply
+    r=classify_reply("Sounds good, let's talk.")
+    assert r["classification"]=="interested"
+
+def test_auto_router_unclear_fails_to_review_without_llm():
+    from src.automatic_reply_router import classify_reply
+    r=classify_reply("Received.")
+    assert r["classification"]=="unclear"
+
+def test_booking_extraction_requires_explicit_iso_times_and_timezone():
+    from src.automatic_reply_router import extract_explicit_booking
+    vague=extract_explicit_booking("Tomorrow afternoon works.")
+    assert vague=={"start":"","end":"","timezone":""}
+    exact=extract_explicit_booking("2026-09-23T14:00:00-04:00 to 2026-09-23T14:30:00-04:00 America/New_York")
+    assert exact["start"]=="2026-09-23T14:00:00-04:00"
+    assert exact["end"]=="2026-09-23T14:30:00-04:00"
+    assert exact["timezone"]=="America/New_York"
