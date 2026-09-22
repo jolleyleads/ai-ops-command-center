@@ -302,3 +302,41 @@ def test_outreach_execution_blocks_opt_out_signal():
 def test_workflow_contacted_requires_explicit_successful_receipt():
     v=validate_transition("outreach_ready","contacted",{"stage":"outreach_ready","send_receipt":{"ok":True,"validated":False,"message_id":"m","thread_id":"t"}})
     assert not v["allowed"]
+
+
+def test_any_inbound_reply_is_hard_stop():
+    from src.followup_control import classify_inbound, followup_permission
+    state=classify_inbound([
+        {"from":"sales@us.example","snippet":"checking in"},
+        {"from":"owner@acmehvac.com","snippet":"Thanks, I got your email.","id":"r1"},
+    ],sender_email="sales@us.example")
+    assert state["replied"] is True and state["stop"] is True and state["opted_out"] is False
+    gate=followup_permission(reply_state=state,follow_up_count=0,max_followups=2,thread_id="t1",contact_email="owner@acmehvac.com")
+    assert gate["allowed"] is False and "HARD_STOP_INBOUND_REPLY" in gate["reasons"]
+
+def test_opt_out_is_terminal_hard_stop():
+    from src.followup_control import classify_inbound
+    state=classify_inbound([
+        {"from":"sales@us.example","snippet":"hello"},
+        {"from":"owner@acmehvac.com","snippet":"Please remove me from your list.","id":"r2"},
+    ],sender_email="sales@us.example")
+    assert state["stop"] is True and state["opted_out"] is True and state["reason"]=="OPT_OUT"
+
+def test_our_own_thread_messages_do_not_count_as_reply():
+    from src.followup_control import classify_inbound
+    state=classify_inbound([
+        {"from":"Sales <sales@us.example>","snippet":"first touch"},
+        {"from":"Sales <sales@us.example>","snippet":"follow up"},
+    ],sender_email="sales@us.example")
+    assert state["replied"] is False and state["stop"] is False
+
+def test_reply_check_failure_blocks_followup():
+    from src.followup_control import followup_permission
+    gate=followup_permission(reply_state={"ok":False,"stop":True,"reason":"REPLY_CHECK_FAILED"},follow_up_count=0,max_followups=2,thread_id="t1",contact_email="x@example.com")
+    assert gate["allowed"] is False
+    assert "REPLY_CHECK_FAILED" in gate["reasons"]
+
+def test_max_followups_blocks_another_send():
+    from src.followup_control import followup_permission
+    gate=followup_permission(reply_state={"ok":True,"stop":False},follow_up_count=2,max_followups=2,thread_id="t1",contact_email="x@example.com")
+    assert gate["allowed"] is False and "MAX_FOLLOWUPS_REACHED" in gate["reasons"]
