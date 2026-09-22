@@ -466,11 +466,13 @@ def test_smart_search_accepts_bounded_runtime_budget():
     assert "runtime_budget" in sig.parameters
     assert sig.parameters["runtime_budget"].default==25
 
-def test_followup_smoke_probe_is_noop_source_guard_present():
+def test_followup_endpoint_requires_real_cron_auth_even_for_probes():
     import inspect, outreach_automation
     src=inspect.getsource(outreach_automation.process_followups)
-    assert "AI-Ops-Smoke-Test/" in src
-    assert '"execution":"skipped"' in src
+    assert "AI-Ops-Smoke-Test/" not in src
+    assert "not cron_token" in src
+    assert "not supplied" in src
+    assert "compare_digest" in src
 
 
 def test_suppression_gate_blocks_opted_out_recipient():
