@@ -697,7 +697,9 @@ def operator_control_form(lead_id:int):
     status=response[1] if isinstance(response,tuple) else getattr(response,"status_code",200)
     if status>=400:
         payload=response[0].get_json() if isinstance(response,tuple) else response.get_json()
-        return Response(f'<html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:24px"><h3>Action blocked</h3><p>{h(payload.get("error") or "Request failed") if False else ""}</p><a href="/operator">Back to dashboard</a></body></html>',status=status,mimetype="text/html")
+        import html
+        error=html.escape(str((payload or {}).get("error") or "Request failed"))
+        return Response(f'<html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:24px"><h3>Action blocked</h3><p>{error}</p><a href="/operator">Back to dashboard</a></body></html>',status=status,mimetype="text/html")
     return redirect(url_for("operator_dashboard"),303)
 
 
