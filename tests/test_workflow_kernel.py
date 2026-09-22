@@ -504,3 +504,34 @@ def test_pending_or_uncertain_attempt_fails_closed():
 def test_failed_attempt_can_be_explicitly_retried():
     from src.outreach_safety import send_attempt_gate
     assert send_attempt_gate("failed")["allowed"] is True
+
+
+def _b64(s):
+    import base64
+    return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+
+def test_gmail_parser_prefers_full_plain_body_over_snippet():
+    from src.gmail_reply_parser import message_to_evidence
+    m={"id":"m1","threadId":"t1","snippet":"hello","payload":{"headers":[{"name":"From","value":"Owner <owner@example.com>"}],"mimeType":"multipart/alternative","parts":[{"mimeType":"text/plain","body":{"data":_b64("Please remove me from your list")}},{"mimeType":"text/html","body":{"data":_b64("<b>different</b>")}}]}}
+    r=message_to_evidence(m)
+    assert r["text"]=="Please remove me from your list"
+    assert r["body_source"]=="text/plain" and r["from_email"]=="owner@example.com"
+
+def test_gmail_parser_falls_back_to_html_text():
+    from src.gmail_reply_parser import message_to_evidence
+    m={"id":"m2","payload":{"headers":[],"mimeType":"text/html","body":{"data":_b64("<p>No more emails please</p>")}}}
+    r=message_to_evidence(m)
+    assert "No more emails please" in r["text"] and r["body_source"]=="text/html"
+
+def test_full_body_optout_is_detected_even_when_snippet_would_not_show_it():
+    from src.gmail_reply_parser import message_to_evidence
+    from src.followup_control import classify_inbound
+    m={"id":"m3","threadId":"t3","snippet":"Thanks for reaching out","payload":{"headers":[{"name":"From","value":"Owner <owner@example.com>"}],"mimeType":"text/plain","body":{"data":_b64("Thanks for reaching out. Please unsubscribe me.")}}}
+    e=message_to_evidence(m)
+    r=classify_inbound([e],sender_email="sales@example.com")
+    assert r["opted_out"] is True and r["reason"]=="OPT_OUT"
+
+def test_exact_sender_comparison_does_not_use_substring_matching():
+    from src.followup_control import classify_inbound
+    r=classify_inbound([{"message_id":"m4","from":"Other <not-sales@example.com>","from_email":"not-sales@example.com","text":"hello"}],sender_email="sales@example.com")
+    assert r["replied"] is True

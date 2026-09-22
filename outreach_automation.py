@@ -13,6 +13,7 @@ from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
 from src.google_calendar_provider import check_availability, create_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
+from src.gmail_reply_parser import message_to_evidence
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -71,6 +72,20 @@ class OutreachSendAttempt(db.Model):
     error = db.Column(db.Text, default="")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OutreachReplyEvidence(db.Model):
+    __tablename__ = "outreach_reply_evidence"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, index=True)
+    message_id = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    thread_id = db.Column(db.String(255), default="")
+    from_email = db.Column(db.String(500), default="", index=True)
+    body_text = db.Column(db.Text, default="")
+    body_source = db.Column(db.String(50), default="")
+    opted_out = db.Column(db.Boolean, nullable=False, default=False)
+    received_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 with app.app_context():
@@ -271,26 +286,40 @@ def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> 
         return {"ok": False, "error": _clean(exc, 1000)}
 
 
+def _persist_reply_evidence(lead: OutreachLead, reply: Dict[str, Any]) -> None:
+    for item in reply.get("reply_evidence") or []:
+        message_id=_clean(item.get("message_id"),255)
+        if not message_id:continue
+        row=OutreachReplyEvidence.query.filter_by(message_id=message_id).first()
+        if row is None:
+            received=None
+            try:
+                received=datetime.utcfromtimestamp(int(item.get("internal_date") or 0)/1000) if item.get("internal_date") else None
+            except Exception:
+                received=None
+            row=OutreachReplyEvidence(
+                lead_id=lead.id,message_id=message_id,thread_id=_clean(item.get("thread_id") or lead.gmail_thread_id,255),
+                from_email=normalize_email(item.get("from_email")),body_text=_clean(item.get("text"),20000),
+                body_source=_clean(item.get("body_source"),50),opted_out=bool(reply.get("opted_out")),received_at=received,
+            )
+            db.session.add(row)
+
+
 def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
-    """Read Gmail thread and deterministically detect inbound reply/opt-out."""
+    """Read full Gmail MIME bodies and deterministically detect inbound reply/opt-out."""
     try:
-        token = gmail_access_token()
-        response = requests.get(
+        token=gmail_access_token()
+        response=requests.get(
             f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"format": "full"},
-            timeout=30,
+            headers={"Authorization":f"Bearer {token}"},params={"format":"full"},timeout=30,
         )
         if not response.ok:
-            return {"ok": False, "replied": False, "opted_out": False, "stop": True, "reason": "REPLY_CHECK_FAILED", "error": f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
-        data=response.json()
-        rows=[]
-        for message in data.get("messages") or []:
-            headers={str(h.get("name") or "").lower():str(h.get("value") or "") for h in ((message.get("payload") or {}).get("headers") or [])}
-            rows.append({"message_id":message.get("id"),"from":headers.get("from",""),"snippet":message.get("snippet") or ""})
-        sender=(os.environ.get("GMAIL_FROM_EMAIL") or "").lower().strip()
+            return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
+        rows=[message_to_evidence(message) for message in (response.json().get("messages") or [])]
+        sender=normalize_email(os.environ.get("GMAIL_FROM_EMAIL"))
         if not sender:
             return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"SENDER_IDENTITY_UNCONFIGURED","error":"GMAIL_FROM_EMAIL is required for deterministic reply detection."}
+        # Exact parsed From address comparison happens in classify_inbound.
         return classify_inbound(rows,sender_email=sender)
     except Exception as exc:
         return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":_clean(exc,1000)}
@@ -420,6 +449,7 @@ def process_followups():
         }
         if reply.get("stop"):
             if reply.get("replied"):
+                _persist_reply_evidence(lead,reply)
                 lead.replied_at=now
                 lead.status="opted_out" if reply.get("opted_out") else "responded"
                 if reply.get("opted_out"):
@@ -457,6 +487,7 @@ def process_followups():
         final_reply=_gmail_thread_reply_state(lead.gmail_thread_id)
         if final_reply.get("stop"):
             if final_reply.get("replied"):
+                _persist_reply_evidence(lead,final_reply)
                 lead.replied_at=now
                 lead.status="opted_out" if final_reply.get("opted_out") else "responded"
                 if final_reply.get("opted_out"):
