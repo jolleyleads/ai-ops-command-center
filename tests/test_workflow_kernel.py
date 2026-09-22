@@ -610,3 +610,33 @@ def test_send_requires_qualification_receipt_not_score():
     assert "_qualification_gate(lead)" in src
     assert "evidence-validated qualification is required before send" in src
     assert "lead.score < AUTO_SEND_MIN_SCORE" not in src
+
+
+def test_operational_state_projects_pipeline_statuses():
+    from src.operational_state import project_stage
+    assert project_stage("qualified")=="qualified"
+    assert project_stage("drafted")=="outreach_ready"
+    assert project_stage("sent")=="contacted"
+    assert project_stage("followup_sent")=="followup"
+    assert project_stage("booked")=="booked"
+
+def test_uncertain_side_effects_go_to_attention():
+    from src.operational_state import state_snapshot
+    assert state_snapshot(status="sent",send_status="uncertain")["stage"]=="needs_attention"
+    assert state_snapshot(status="booking_ready",booking_status="pending")["attention_reason"]=="BOOKING_RECONCILIATION_REQUIRED"
+
+def test_unknown_status_fails_to_attention():
+    from src.operational_state import state_snapshot
+    r=state_snapshot(status="mystery")
+    assert r["needs_attention"] is True and r["attention_reason"]=="UNKNOWN_OPERATIONAL_STATE"
+
+def test_failed_send_requires_operator_review_before_retry():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._safe_send)
+    assert "FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW" in src
+    assert "CONCURRENT_SEND_ATTEMPT_EXISTS" in src
+
+def test_attention_endpoint_exists():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.outreach_needs_attention)
+    assert "_operational_snapshot" in src
