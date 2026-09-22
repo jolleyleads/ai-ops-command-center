@@ -253,3 +253,52 @@ def test_nonempty_fake_qualification_receipt_cannot_advance():
 def test_only_explicit_qualified_receipt_advances():
     v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"status":"Qualified","qualified":True,"ok":True,"reason_codes":[]}})
     assert v["allowed"]
+
+
+def _outreach_fixture():
+    return {"company":"ACME HVAC","contact_email":"owner@acmehvac.com","source_url":"https://acmehvac.com","evidence":{"qualified":{"email":"owner@acmehvac.com","email_source_url":"https://acmehvac.com/contact"},"verification":[{"url":"https://acmehvac.com/jobs"}]},"subject":"Quick question","body":"Would a quick call this week make sense?","status":"drafted","gmail_thread_id":""}
+
+def test_outreach_execution_blocks_invalid_recipient_before_send():
+    from src.outreach_execution import execute_outreach_send
+    lead=_outreach_fixture();lead["contact_email"]=""
+    calls=[]
+    result=execute_outreach_send(lead,lambda *args:calls.append(args))
+    assert result["ok"] is False
+    assert result["stage"]=="blocked"
+    assert "INVALID_OR_MISSING_RECIPIENT" in result["gate"]["reasons"]
+    assert calls==[]
+
+def test_outreach_execution_blocks_unsupported_generated_url():
+    from src.outreach_execution import validate_outreach_message
+    lead=_outreach_fixture()
+    body="See https://made-up.example/demo and let me know."
+    gate=validate_outreach_message(lead,"Quick question",body)
+    assert not gate["ok"] and "UNSUPPORTED_URL_IN_MESSAGE" in gate["reasons"]
+
+def test_outreach_execution_requires_durable_send_receipt():
+    from src.outreach_execution import execute_outreach_send
+    lead=_outreach_fixture()
+    result=execute_outreach_send(lead,lambda *args:{"ok":True})
+    assert result["ok"] is False and result["stage"]=="send_failed"
+    assert "MISSING_MESSAGE_ID" in result["send_receipt"]["reasons"]
+    assert "MISSING_THREAD_ID" in result["send_receipt"]["reasons"]
+
+def test_outreach_execution_success_has_validated_receipt():
+    from src.outreach_execution import execute_outreach_send
+    lead=_outreach_fixture()
+    result=execute_outreach_send(lead,lambda *args:{"ok":True,"message_id":"m-123","thread_id":"t-123"})
+    assert result["ok"] is True and result["stage"]=="contacted"
+    assert result["send_receipt"]["validated"] is True
+
+def test_outreach_execution_blocks_opt_out_signal():
+    from src.outreach_execution import execute_outreach_send
+    lead=_outreach_fixture();lead["last_reply"]="Please remove me from your list."
+    calls=[]
+    result=execute_outreach_send(lead,lambda *args:calls.append(args))
+    assert result["stage"]=="blocked"
+    assert "OPT_OUT_SIGNAL_PRESENT" in result["gate"]["reasons"]
+    assert calls==[]
+
+def test_workflow_contacted_requires_explicit_successful_receipt():
+    v=validate_transition("outreach_ready","contacted",{"stage":"outreach_ready","send_receipt":{"ok":True,"validated":False,"message_id":"m","thread_id":"t"}})
+    assert not v["allowed"]
