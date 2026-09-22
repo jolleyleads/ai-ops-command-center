@@ -11,10 +11,11 @@ from src.services import run_ai
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
-from src.google_calendar_provider import check_availability, create_event
+from src.google_calendar_provider import check_availability, create_event, get_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
 from src.automatic_reply_router import classify_reply, extract_explicit_booking
+from src.booking_safety import booking_key, google_event_id, attempt_gate
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -87,6 +88,24 @@ class OutreachReplyEvidence(db.Model):
     opted_out = db.Column(db.Boolean, nullable=False, default=False)
     received_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class OutreachBookingAttempt(db.Model):
+    __tablename__ = "outreach_booking_attempt"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, index=True)
+    reply_message_id = db.Column(db.String(255), nullable=False, index=True)
+    idempotency_key = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    event_id = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    start = db.Column(db.String(100), nullable=False)
+    end = db.Column(db.String(100), nullable=False)
+    timezone = db.Column(db.String(100), nullable=False)
+    attendee_email = db.Column(db.String(500), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending")
+    event_url = db.Column(db.Text, default="")
+    error = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 with app.app_context():
@@ -203,12 +222,47 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
         return {"ok":True,"stage":"interested","classification":classification,"booking_attempted":False}
 
+    reply_message_id=_clean(item.get("message_id"),255)
+    key=booking_key(lead_id=lead.id,reply_message_id=reply_message_id,start=booking["start"],end=booking["end"],attendee=lead.contact_email)
+    event_id=google_event_id(key)
+    attempt=OutreachBookingAttempt.query.filter_by(idempotency_key=key).first()
+    gate=attempt_gate(attempt.status if attempt else "")
+    if attempt is None:
+        attempt=OutreachBookingAttempt(
+            lead_id=lead.id,reply_message_id=reply_message_id,idempotency_key=key,event_id=event_id,
+            start=booking["start"],end=booking["end"],timezone=booking["timezone"],attendee_email=normalize_email(lead.contact_email),status="pending",
+        )
+        db.session.add(attempt);db.session.commit()
+    if gate.get("reconcile"):
+        existing=get_event(attempt.event_id)
+        if existing.get("ok") and existing.get("found") and existing.get("start")==attempt.start and existing.get("end")==attempt.end:
+            attempt.status="confirmed";attempt.event_url=_clean(existing.get("event_url"),1800);attempt.error="";attempt.updated_at=now
+            lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+            db.session.commit()
+            return {"ok":True,"stage":"booked","reconciled":True,"event_id":attempt.event_id,"classification":classification}
+        if existing.get("found") is False and attempt.status in {"pending","uncertain"}:
+            attempt.status="failed";attempt.error="RECONCILIATION_EVENT_NOT_FOUND";db.session.commit()
+        else:
+            attempt.status="uncertain";attempt.error=_clean(existing.get("error") or "RECONCILIATION_MISMATCH",2000);db.session.commit()
+            lead.status="interested";lead.last_error=attempt.error
+            return {"ok":False,"stage":"reconciliation_blocked","classification":classification}
+
     summary=f"Call with {_clean(lead.company,300)}"
     result=process_reply_to_booking(
         reply_text=text,proposed_classification={"classification":"interested"},proposed_booking=booking,
         availability_func=check_availability,
-        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated Gmail reply evidence.",idempotency_key=f"aocclead{lead.id}booking".lower()),
+        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated Gmail reply evidence.",idempotency_key=event_id),
     )
+    execution=result.get("booking_execution") or {}
+    receipt=execution.get("booking_receipt") or {}
+    if result.get("stage")=="booked":
+        attempt.status="confirmed";attempt.event_id=_clean(receipt.get("event_id"),255) or event_id;attempt.event_url=_clean(receipt.get("event_url"),1800);attempt.error=""
+    elif result.get("stage")=="create_failed":
+        # Provider failure is uncertain: reconcile by deterministic event ID next run.
+        attempt.status="uncertain";attempt.error=_clean(result,2000)
+    else:
+        attempt.status="failed";attempt.error=_clean(result,2000)
+    attempt.updated_at=now;db.session.commit()
     stage=result.get("stage")
     if stage=="booked":
         lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
