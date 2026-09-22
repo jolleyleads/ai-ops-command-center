@@ -1,5 +1,7 @@
 import json
 import os
+import hashlib
+import hmac
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
@@ -122,8 +124,43 @@ class OutreachQualificationReceipt(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
+class OperatorAuditEvent(db.Model):
+    __tablename__ = "operator_audit_event"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, index=True)
+    action = db.Column(db.String(50), nullable=False)
+    actor = db.Column(db.String(200), nullable=False, default="operator")
+    request_json = db.Column(db.Text, nullable=False, default="{}")
+    result_json = db.Column(db.Text, nullable=False, default="{}")
+    previous_hash = db.Column(db.String(64), nullable=False, default="")
+    event_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
 with app.app_context():
     db.create_all()
+
+
+def _operator_authorized() -> bool:
+    expected=os.environ.get("OPERATOR_CONTROL_TOKEN","")
+    supplied=request.headers.get("X-Operator-Token","")
+    return bool(expected and supplied and hmac.compare_digest(expected,supplied))
+
+def _audit(lead_id:int, action:str, payload:Dict[str,Any], result:Dict[str,Any]) -> None:
+    prev=OperatorAuditEvent.query.order_by(OperatorAuditEvent.id.desc()).first()
+    previous_hash=prev.event_hash if prev else ""
+    actor=_clean(request.headers.get("X-Operator-Actor") or "operator",200)
+    request_json=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
+    result_json=json.dumps(result,sort_keys=True,separators=(",",":"),default=str)
+    created=datetime.utcnow()
+    raw="|".join([previous_hash,str(lead_id),action,actor,request_json,result_json,created.isoformat()])
+    event_hash=hashlib.sha256(raw.encode()).hexdigest()
+    db.session.add(OperatorAuditEvent(lead_id=lead_id,action=action,actor=actor,request_json=request_json,result_json=result_json,previous_hash=previous_hash,event_hash=event_hash,created_at=created))
+    db.session.commit()
+
+def _control_response(lead:OutreachLead, action:str, payload:Dict[str,Any], result:Dict[str,Any], status:int=200):
+    _audit(lead.id,action,payload,result)
+    return jsonify(result),status
 
 
 def _clean(value: Any, limit: int = 4000) -> str:
@@ -518,13 +555,67 @@ def _dashboard_record(lead: OutreachLead) -> Dict[str, Any]:
     if q:
         try:qualification=json.loads(q.receipt_json or "{}")
         except Exception:qualification={"status":q.status,"ok":q.ok}
+    audits=OperatorAuditEvent.query.filter_by(lead_id=lead.id).order_by(OperatorAuditEvent.id.desc()).limit(20).all()
     return {
         "lead":_serialize(lead),
         "qualification":qualification,
         "send_receipt":{"status":send.status,"message_id":send.message_id,"thread_id":send.thread_id,"error":send.error} if send else None,
         "reply_evidence":{"message_id":reply.message_id,"from_email":reply.from_email,"body_text":reply.body_text,"body_source":reply.body_source,"opted_out":reply.opted_out} if reply else None,
         "booking_receipt":{"status":booking.status,"event_id":booking.event_id,"event_url":booking.event_url,"start":booking.start,"end":booking.end,"timezone":booking.timezone,"error":booking.error} if booking else None,
+        "audit":[{"action":a.action,"actor":a.actor,"result":json.loads(a.result_json or "{}"),"event_hash":a.event_hash,"previous_hash":a.previous_hash,"created_at":a.created_at.isoformat()} for a in audits],
     }
+
+
+@app.route("/api/operator/leads/<int:lead_id>/control", methods=["POST"])
+def operator_control(lead_id:int):
+    if not _operator_authorized():
+        return jsonify({"ok":False,"error":"operator authentication required"}),401
+    lead=OutreachLead.query.get_or_404(lead_id)
+    payload=request.get_json(silent=True) or {}
+    action=_clean(payload.get("action"),50).lower()
+    if action=="review":
+        result={"ok":True,"action":"review","record":_dashboard_record(lead)}
+        return _control_response(lead,action,payload,result)
+    if action=="approve":
+        gate=_qualification_gate(lead)
+        if not gate.get("ok"):
+            return _control_response(lead,action,payload,{"ok":False,"error":"qualification gate failed","qualification":gate},409)
+        lead.status="qualified";lead.last_error="";db.session.commit()
+        return _control_response(lead,action,payload,{"ok":True,"action":"approve","lead":_serialize(lead)})
+    if action=="reject":
+        lead.status="rejected";lead.follow_up_due_at=None;lead.last_error=_clean(payload.get("reason") or "OPERATOR_REJECTED",500);db.session.commit()
+        return _control_response(lead,action,payload,{"ok":True,"action":"reject","lead":_serialize(lead)})
+    if action=="suppress":
+        _suppress(lead.contact_email,"operator_suppressed",thread_id=lead.gmail_thread_id)
+        lead.status="opted_out";lead.follow_up_due_at=None;lead.last_error="";db.session.commit()
+        return _control_response(lead,action,payload,{"ok":True,"action":"suppress","lead":_serialize(lead)})
+    if action=="close":
+        lead.status="closed";lead.follow_up_due_at=None;lead.last_error="";db.session.commit()
+        return _control_response(lead,action,payload,{"ok":True,"action":"close","lead":_serialize(lead)})
+    if action=="reconcile":
+        attempt=OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachBookingAttempt.updated_at.desc()).first()
+        if not attempt:
+            return _control_response(lead,action,payload,{"ok":False,"error":"no booking attempt to reconcile"},409)
+        existing=get_event(attempt.event_id)
+        exact=bool(existing.get("ok") and existing.get("found") and existing.get("start")==attempt.start and existing.get("end")==attempt.end)
+        if exact:
+            attempt.status="confirmed";attempt.event_url=_clean(existing.get("event_url"),1800);attempt.error="";lead.status="booked";lead.last_error="";db.session.commit()
+            return _control_response(lead,action,payload,{"ok":True,"action":"reconcile","event_id":attempt.event_id,"lead":_serialize(lead)})
+        attempt.status="uncertain";attempt.error=_clean(existing.get("error") or "RECONCILIATION_MISMATCH",2000);lead.last_error=attempt.error;db.session.commit()
+        return _control_response(lead,action,payload,{"ok":False,"error":attempt.error},409)
+    if action=="retry":
+        attempt=OutreachSendAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachSendAttempt.updated_at.desc()).first()
+        if not attempt or attempt.status!="failed":
+            return _control_response(lead,action,payload,{"ok":False,"error":"only a deterministically failed send may be retried"},409)
+        gate=_qualification_gate(lead)
+        if not gate.get("ok") or _is_suppressed(lead.contact_email):
+            return _control_response(lead,action,payload,{"ok":False,"error":"retry safety gate failed"},409)
+        # Explicit operator retry gets a new sequence identity; uncertain/pending sends are never retried.
+        result=_safe_send(lead,kind="operator_retry",sequence=attempt.id,subject=lead.subject,body=lead.body)
+        if result.get("ok"):
+            receipt=result.get("send_receipt") or {};lead.status="sent";lead.gmail_message_id=_clean(receipt.get("message_id"),255);lead.gmail_thread_id=_clean(receipt.get("thread_id"),255);lead.sent_at=datetime.utcnow();lead.last_error="";db.session.commit()
+        return _control_response(lead,action,payload,{"ok":result.get("ok") is True,"action":"retry","execution":result,"lead":_serialize(lead)},200 if result.get("ok") else 409)
+    return _control_response(lead,action,payload,{"ok":False,"error":"unsupported operator action"},400)
 
 
 @app.route("/api/operator/dashboard", methods=["GET"])
@@ -545,14 +636,15 @@ def operator_dashboard():
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Ops Operator</title><style>
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}header{padding:22px 26px;border-bottom:1px solid #27304a;display:flex;justify-content:space-between;align-items:center}.wrap{padding:22px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.card,.row{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px}.n{font-size:26px;font-weight:800}.muted{color:#9aa7c2;font-size:12px}.tabs{margin:18px 0;display:flex;gap:8px;flex-wrap:wrap}button{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:8px 11px;cursor:pointer}.active{background:#fff;color:#101526}.row{margin:9px 0}.top{display:flex;justify-content:space-between;gap:12px}.badge{font-size:12px;border:1px solid #465372;border-radius:999px;padding:4px 8px}details{margin-top:10px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:260px;overflow:auto}.danger{color:#ffb4b4}a{color:#9ec5ff}</style></head>
-<body><header><div><b>AI Ops Command Center</b><div class="muted">Operator Dashboard · source-backed system state</div></div><button onclick="load()">Refresh</button></header>
+<body><header><div><b>AI Ops Command Center</b><div class="muted">Operator Dashboard · authenticated controls + source-backed state</div></div><div><input id="token" type="password" placeholder="Operator token" style="padding:8px;border-radius:8px;border:1px solid #394563;background:#0b1020;color:#fff"><button onclick="load()">Refresh</button></div></header>
 <div class="wrap"><div id="cards" class="cards"></div><div class="tabs"><button class="active" onclick="filter('all',this)">All</button><button onclick="filter('needs_attention',this)">Needs Attention</button><button onclick="filter('interested',this)">Interested</button><button onclick="filter('question',this)">Questions</button><button onclick="filter('booked',this)">Booked</button></div><div id="rows"></div></div>
 <script>
 let data=[],mode='all';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function load(){let r=await fetch('/api/operator/dashboard');let j=await r.json();data=j.records||[];let counts=j.counts||{};document.getElementById('cards').innerHTML='<div class="card"><div class="n">'+esc(data.length)+'</div><div class="muted">Total leads</div></div><div class="card"><div class="n">'+esc(j.attention_count||0)+'</div><div class="muted">Needs attention</div></div>'+Object.entries(counts).map(([k,v])=>'<div class="card"><div class="n">'+esc(v)+'</div><div class="muted">'+esc(k)+'</div></div>').join('');render()}
 function filter(m,b){mode=m;document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');render()}
-function render(){let rows=data.filter(x=>{let o=x.lead.operational||{};return mode==='all'||(mode==='needs_attention'?o.needs_attention:o.stage===mode)});document.getElementById('rows').innerHTML=rows.map(x=>{let l=x.lead,o=l.operational||{};return '<div class="row"><div class="top"><div><b>'+esc(l.company)+'</b><div class="muted">'+esc(l.contact_email)+' · '+esc(l.location)+'</div></div><span class="badge '+(o.needs_attention?'danger':'')+'">'+esc(o.stage)+'</span></div>'+(o.attention_reason?'<p class="danger">'+esc(o.attention_reason)+'</p>':'')+'<details><summary>Evidence & receipts</summary><pre>'+esc(JSON.stringify({qualification:x.qualification,send:x.send_receipt,reply:x.reply_evidence,booking:x.booking_receipt,evidence:l.evidence},null,2))+'</pre></details></div>'}).join('')||'<p class="muted">No records in this view.</p>'}
+async function act(id,action){let token=document.getElementById('token').value;if(!token){alert('Operator token required');return}let reason='';if(action==='reject')reason=prompt('Reason for rejection:')||'OPERATOR_REJECTED';if(!confirm(action+' lead #'+id+'?'))return;let r=await fetch('/api/operator/leads/'+id+'/control',{method:'POST',headers:{'Content-Type':'application/json','X-Operator-Token':token,'X-Operator-Actor':'dashboard'},body:JSON.stringify({action:action,reason:reason})});let j=await r.json();if(!r.ok)alert(j.error||'Action blocked');await load()}
+function render(){let rows=data.filter(x=>{let o=x.lead.operational||{};return mode==='all'||(mode==='needs_attention'?o.needs_attention:o.stage===mode)});document.getElementById('rows').innerHTML=rows.map(x=>{let l=x.lead,o=l.operational||{};return '<div class="row"><div class="top"><div><b>'+esc(l.company)+'</b><div class="muted">'+esc(l.contact_email)+' · '+esc(l.location)+'</div></div><span class="badge '+(o.needs_attention?'danger':'')+'">'+esc(o.stage)+'</span></div>'+(o.attention_reason?'<p class="danger">'+esc(o.attention_reason)+'</p>':'')+'<div class="tabs"><button onclick="act('+l.id+',\'review\')">Review</button><button onclick="act('+l.id+',\'approve\')">Approve</button><button onclick="act('+l.id+',\'reject\')">Reject</button><button onclick="act('+l.id+',\'retry\')">Retry</button><button onclick="act('+l.id+',\'reconcile\')">Reconcile</button><button onclick="act('+l.id+',\'suppress\')">Suppress</button><button onclick="act('+l.id+',\'close\')">Close</button></div><details><summary>Evidence, receipts & audit</summary><pre>'+esc(JSON.stringify({qualification:x.qualification,send:x.send_receipt,reply:x.reply_evidence,booking:x.booking_receipt,evidence:l.evidence,audit:x.audit},null,2))+'</pre></details></div>'}).join('')||'<p class="muted">No records in this view.</p>'}
 load();setInterval(load,30000);
 </script></body></html>""",mimetype="text/html")
 

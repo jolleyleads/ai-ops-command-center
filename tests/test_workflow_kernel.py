@@ -655,10 +655,34 @@ def test_operator_dashboard_ui_escapes_dynamic_values():
     src=inspect.getsource(outreach_automation.operator_dashboard)
     assert "const esc=" in src
     assert "/api/operator/dashboard" in src
-    assert "Evidence & receipts" in src
+    assert "Evidence, receipts & audit" in src
 
 def test_operator_dashboard_data_uses_operational_attention():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation.operator_dashboard_data)
     assert "needs_attention" in src
     assert "_dashboard_record" in src
+
+
+def test_operator_controls_fail_closed_without_configured_token():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._operator_authorized)
+    assert "OPERATOR_CONTROL_TOKEN" in src
+    assert "hmac.compare_digest" in src
+    assert "bool(expected and supplied" in src
+
+def test_operator_control_has_required_actions_and_safety_gates():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.operator_control)
+    for action in ['review','approve','reject','retry','reconcile','suppress','close']:
+        assert f'action=="{action}"' in src
+    assert "only a deterministically failed send may be retried" in src
+    assert "_qualification_gate(lead)" in src
+    assert "_is_suppressed(lead.contact_email)" in src
+
+def test_operator_audit_is_hash_chained_append_only_by_api():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._audit)
+    assert "previous_hash" in src and "hashlib.sha256" in src
+    control=inspect.getsource(outreach_automation.operator_control)
+    assert "_control_response" in control
