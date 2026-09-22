@@ -375,3 +375,48 @@ def test_booking_receipt_requires_provider_event_id():
     from src.reply_booking import validate_booking_receipt
     assert validate_booking_receipt({"ok":True})["validated"] is False
     assert validate_booking_receipt({"ok":True,"event_id":"evt-1"})["validated"] is True
+
+
+def _booking_ready():
+    return {"ok":True,"validated":True,"booking_ready":True,"start":"2026-09-23T14:00:00-04:00","end":"2026-09-23T14:30:00-04:00","timezone":"America/New_York","attendee_email":"owner@example.com"}
+
+def test_calendar_booking_checks_availability_before_create():
+    from src.calendar_booking import execute_booking
+    calls=[]
+    def availability(req):
+        calls.append("availability");return {"ok":True,"available":True,"checked_start":req["start"],"checked_end":req["end"]}
+    def create(req):
+        calls.append("create");return {"ok":True,"event_id":"evt1","event_url":"https://calendar.google.com/event?eid=x","start":req["start"],"end":req["end"]}
+    r=execute_booking(_booking_ready(),availability,create)
+    assert r["stage"]=="booked" and calls==["availability","create"]
+
+def test_calendar_booking_never_creates_when_busy():
+    from src.calendar_booking import execute_booking
+    calls=[]
+    def create(req):calls.append("create");return {}
+    r=execute_booking(_booking_ready(),lambda req:{"ok":True,"available":False,"checked_start":req["start"],"checked_end":req["end"]},create)
+    assert r["stage"]=="unavailable" and calls==[]
+
+def test_calendar_booking_fails_closed_on_availability_error():
+    from src.calendar_booking import execute_booking
+    calls=[]
+    r=execute_booking(_booking_ready(),lambda req:{"ok":False,"available":False},lambda req:calls.append("create"))
+    assert r["ok"] is False and calls==[]
+
+def test_calendar_event_receipt_must_match_requested_window():
+    from src.calendar_booking import execute_booking
+    r=execute_booking(_booking_ready(),lambda req:{"ok":True,"available":True,"checked_start":req["start"],"checked_end":req["end"]},lambda req:{"ok":True,"event_id":"evt1","start":"2026-09-23T15:00:00-04:00","end":req["end"]})
+    assert r["stage"]=="create_failed"
+    assert "START_RECEIPT_MISMATCH" in r["booking_receipt"]["reasons"]
+
+def test_calendar_event_requires_durable_event_id():
+    from src.calendar_booking import execute_booking
+    r=execute_booking(_booking_ready(),lambda req:{"ok":True,"available":True,"checked_start":req["start"],"checked_end":req["end"]},lambda req:{"ok":True,"start":req["start"],"end":req["end"]})
+    assert r["stage"]=="create_failed" and "MISSING_EVENT_ID" in r["booking_receipt"]["reasons"]
+
+def test_invalid_booking_ready_receipt_never_calls_provider():
+    from src.calendar_booking import execute_booking
+    calls=[]
+    req=_booking_ready();req["validated"]=False
+    r=execute_booking(req,lambda req:calls.append("availability"),lambda req:calls.append("create"))
+    assert r["stage"]=="blocked" and calls==[]
