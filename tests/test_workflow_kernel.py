@@ -640,3 +640,25 @@ def test_attention_endpoint_exists():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation.outreach_needs_attention)
     assert "_operational_snapshot" in src
+
+
+def test_operator_dashboard_exposes_source_backed_records():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._dashboard_record)
+    assert "OutreachQualificationReceipt" in src
+    assert "OutreachSendAttempt" in src
+    assert "OutreachReplyEvidence" in src
+    assert "OutreachBookingAttempt" in src
+
+def test_operator_dashboard_ui_escapes_dynamic_values():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.operator_dashboard)
+    assert "const esc=" in src
+    assert "/api/operator/dashboard" in src
+    assert "Evidence & receipts" in src
+
+def test_operator_dashboard_data_uses_operational_attention():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.operator_dashboard_data)
+    assert "needs_attention" in src
+    assert "_dashboard_record" in src
