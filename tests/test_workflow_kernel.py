@@ -565,3 +565,27 @@ def test_booking_extraction_requires_explicit_iso_times_and_timezone():
     assert exact["start"]=="2026-09-23T14:00:00-04:00"
     assert exact["end"]=="2026-09-23T14:30:00-04:00"
     assert exact["timezone"]=="America/New_York"
+
+
+def test_booking_key_is_reply_and_time_specific():
+    from src.booking_safety import booking_key
+    a=booking_key(lead_id=1,reply_message_id="m1",start="s1",end="e1",attendee="A@EXAMPLE.COM")
+    b=booking_key(lead_id=1,reply_message_id="m1",start="s1",end="e1",attendee="a@example.com")
+    c=booking_key(lead_id=1,reply_message_id="m2",start="s1",end="e1",attendee="a@example.com")
+    d=booking_key(lead_id=1,reply_message_id="m1",start="s2",end="e1",attendee="a@example.com")
+    assert a==b and a!=c and a!=d
+
+def test_google_event_id_is_deterministic_and_safe_subset():
+    from src.booking_safety import booking_key,google_event_id
+    k=booking_key(lead_id=1,reply_message_id="m1",start="s",end="e",attendee="a@example.com")
+    eid=google_event_id(k)
+    assert eid==google_event_id(k)
+    assert eid.startswith("aocc") and len(eid)<=64
+    assert all(ch in "0123456789abcdef" for ch in eid[4:])
+
+def test_pending_and_uncertain_booking_require_reconciliation():
+    from src.booking_safety import attempt_gate
+    assert attempt_gate("pending")["reconcile"] is True
+    assert attempt_gate("uncertain")["reconcile"] is True
+    assert attempt_gate("confirmed")["reconcile"] is True
+    assert attempt_gate("failed")["allowed"] is True
