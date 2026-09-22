@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 OPT_OUT=re.compile(r"(?i)\b(unsubscribe|opt[ -]?out|remove me|do not contact|don't contact|stop emailing|stop contacting|take me off)\b")
 NEGATIVE=re.compile(r"(?i)\b(not interested|no thanks|no thank you|not now|don't need|do not need|we're good|we are good)\b")
-QUESTION=re.compile(r"\?|(?i)\b(how much|price|pricing|cost|what do you|how does|can you|could you|do you|where|when|who)\b")
+QUESTION=re.compile(r"\?|\b(how much|price|pricing|cost|what do you|how does|can you|could you|do you|where|when|who)\b", re.I)
 INTEREST=re.compile(r"(?i)\b(interested|sounds good|let's talk|lets talk|call me|schedule|book|meeting|available|tell me more|yes|sure)\b")
 TIME_SIGNAL=re.compile(r"(?i)\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|am|pm|morning|afternoon|evening|noon|\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm))\b")
 
