@@ -284,8 +284,8 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
-def _smart_search(q,loc):
-    started=time.monotonic();deadline=started+25;messages=[];tools=[]
+def _smart_search(q,loc,runtime_budget=25):
+    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),25));messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {}
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
@@ -351,4 +351,6 @@ def smart_search():
     return jsonify(_smart_search(q,loc))
 @app.route("/api/test-smart-search",methods=["GET"])
 def test_smart_search():
-    q=_clean(request.args.get("query") or "machine learning engineer jobs",500);loc=_clean(request.args.get("location") or "",200);return jsonify(_smart_search(q,loc))
+    # Deployment smoke route must finish well inside the platform request timeout.
+    # It exercises the same fail-closed engine with a bounded verification budget.
+    q=_clean(request.args.get("query") or "machine learning engineer jobs",500);loc=_clean(request.args.get("location") or "",200);return jsonify(_smart_search(q,loc,runtime_budget=12))
