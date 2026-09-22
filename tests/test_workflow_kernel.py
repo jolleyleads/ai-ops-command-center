@@ -458,3 +458,16 @@ def test_reply_booking_handoff_incomplete_time_never_calls_calendar():
         proposed_booking={"timezone":"America/New_York","attendee_email":"owner@example.com"},
         availability_func=lambda req:calls.append("availability"),event_create_func=lambda req:calls.append("create"))
     assert result["stage"]=="interested" and result["booking_attempted"] is False and calls==[]
+
+
+def test_smart_search_accepts_bounded_runtime_budget():
+    import inspect, smart_search
+    sig=inspect.signature(smart_search._smart_search)
+    assert "runtime_budget" in sig.parameters
+    assert sig.parameters["runtime_budget"].default==25
+
+def test_followup_smoke_probe_is_noop_source_guard_present():
+    import inspect, outreach_automation
+    src=inspect.getsource(outreach_automation.process_followups)
+    assert "AI-Ops-Smoke-Test/" in src
+    assert '"execution":"skipped"' in src
