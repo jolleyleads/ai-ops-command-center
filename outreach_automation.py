@@ -12,6 +12,7 @@ from src.outreach_execution import validate_outreach_message, execute_outreach_s
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
 from src.google_calendar_provider import check_availability, create_event
+from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -42,6 +43,32 @@ class OutreachLead(db.Model):
     follow_up_count = db.Column(db.Integer, nullable=False, default=0)
     replied_at = db.Column(db.DateTime)
     last_error = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OutreachSuppression(db.Model):
+    __tablename__ = "outreach_suppression"
+    id = db.Column(db.Integer, primary_key=True)
+    normalized_email = db.Column(db.String(500), nullable=False, unique=True, index=True)
+    reason = db.Column(db.String(100), nullable=False, default="opt_out")
+    source_message_id = db.Column(db.String(255), default="")
+    source_thread_id = db.Column(db.String(255), default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class OutreachSendAttempt(db.Model):
+    __tablename__ = "outreach_send_attempt"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, index=True)
+    kind = db.Column(db.String(50), nullable=False)
+    sequence = db.Column(db.Integer, nullable=False, default=0)
+    recipient = db.Column(db.String(500), nullable=False)
+    idempotency_key = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default="pending")
+    message_id = db.Column(db.String(255), default="")
+    thread_id = db.Column(db.String(255), default="")
+    error = db.Column(db.Text, default="")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -83,6 +110,52 @@ def _serialize(lead: OutreachLead) -> Dict[str, Any]:
         "created_at": lead.created_at.isoformat() if lead.created_at else None,
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
     }
+
+
+def _is_suppressed(email: str) -> bool:
+    address=normalize_email(email)
+    return bool(address and OutreachSuppression.query.filter_by(normalized_email=address).first())
+
+
+def _suppress(email: str, reason: str="opt_out", message_id: str="", thread_id: str="") -> None:
+    address=normalize_email(email)
+    if not address:
+        return
+    row=OutreachSuppression.query.filter_by(normalized_email=address).first()
+    if row is None:
+        row=OutreachSuppression(normalized_email=address)
+        db.session.add(row)
+    row.reason=_clean(reason,100) or "opt_out"
+    row.source_message_id=_clean(message_id,255)
+    row.source_thread_id=_clean(thread_id,255)
+
+
+def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
+    address=normalize_email(lead.contact_email)
+    sg=suppression_gate(address,_is_suppressed(address))
+    if not sg.get("ok"):
+        return {"ok":False,"stage":"blocked","gate":sg}
+    key=send_key(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address)
+    attempt=OutreachSendAttempt.query.filter_by(idempotency_key=key).first()
+    ag=send_attempt_gate(attempt.status if attempt else "")
+    if not ag.get("allowed"):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
+    if attempt is None:
+        attempt=OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending")
+        db.session.add(attempt)
+        db.session.commit()
+    # Pending is committed before provider execution. If the process dies after Gmail
+    # accepts the message, the next run fails closed instead of duplicating the send.
+    payload={**_serialize(lead),"contact_email":address,"subject":subject,"body":body}
+    execution=execute_outreach_send(payload,_gmail_send)
+    if not execution.get("ok"):
+        attempt.status="uncertain" if execution.get("stage")=="send_failed" else "failed"
+        attempt.error=_clean(execution,2000);attempt.updated_at=datetime.utcnow();db.session.commit()
+        return execution
+    receipt=execution["send_receipt"]
+    attempt.status="sent";attempt.message_id=_clean(receipt.get("message_id"),255);attempt.thread_id=_clean(receipt.get("thread_id"),255);attempt.error="";attempt.updated_at=datetime.utcnow()
+    db.session.commit()
+    return execution
 
 
 def _rank_status(score: int) -> str:
@@ -300,7 +373,7 @@ def send_outreach(lead_id: int):
         lead.subject = drafted["subject"]
         lead.body = drafted["body"]
 
-    execution = execute_outreach_send(_serialize(lead), _gmail_send)
+    execution = _safe_send(lead, kind="initial", sequence=0, subject=lead.subject, body=lead.body)
     if not execution.get("ok"):
         reasons = ((execution.get("gate") or {}).get("reasons") or []) + ((execution.get("send_receipt") or {}).get("reasons") or [])
         lead.last_error = ", ".join(reasons) or "Outreach execution failed"
@@ -349,6 +422,8 @@ def process_followups():
             if reply.get("replied"):
                 lead.replied_at=now
                 lead.status="opted_out" if reply.get("opted_out") else "responded"
+                if reply.get("opted_out"):
+                    _suppress(lead.contact_email,"opt_out",thread_id=lead.gmail_thread_id)
                 lead.follow_up_due_at=None
                 lead.last_error=""
                 processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reason":reply.get("reason")})
@@ -384,6 +459,8 @@ def process_followups():
             if final_reply.get("replied"):
                 lead.replied_at=now
                 lead.status="opted_out" if final_reply.get("opted_out") else "responded"
+                if final_reply.get("opted_out"):
+                    _suppress(lead.contact_email,"opt_out",thread_id=lead.gmail_thread_id)
                 lead.follow_up_due_at=None
                 lead.last_error=""
             else:
@@ -393,7 +470,7 @@ def process_followups():
             continue
 
         send_lead={**_serialize(lead),"subject":drafted["subject"],"body":drafted["body"]}
-        execution=execute_outreach_send(send_lead,_gmail_send)
+        execution=_safe_send(lead,kind="followup",sequence=next_number,subject=drafted["subject"],body=drafted["body"])
         if not execution.get("ok"):
             reasons=((execution.get("gate") or {}).get("reasons") or [])+((execution.get("send_receipt") or {}).get("reasons") or [])
             lead.last_error=", ".join(reasons) or "Follow-up execution failed"
