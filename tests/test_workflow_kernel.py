@@ -175,8 +175,10 @@ def _validated_qualified_fixture():
 
 def test_qualification_accepts_only_source_validated_lead():
     from src.qualification import qualify_lead, qualification_payload
+    from datetime import datetime, timezone
     validated=_validated_qualified_fixture()
-    q=qualify_lead(validated,verification_ok=True)
+    validated["evidence"]=[{"url":"https://acmehvac.com/jobs","title":"HVAC technician hiring","published_at":"2026-09-01T12:00:00+00:00"}]
+    q=qualify_lead(validated,verification_ok=True,context={"intent_signal":"hiring technicians","evidence":validated["evidence"],"max_evidence_age_days":90},now=datetime(2026,9,21,tzinfo=timezone.utc))
     assert q["qualified"] and q["ok"]
     downstream=qualification_payload(validated,q)
     assert downstream["email"]=="service@acmehvac.com"
@@ -186,7 +188,7 @@ def test_qualification_fails_without_verified_lead():
     from src.qualification import qualify_lead, qualification_payload
     validated=_validated_qualified_fixture()
     q=qualify_lead(validated,verification_ok=False)
-    assert not q["qualified"] and "lead_not_verified" in q["reasons"]
+    assert not q["qualified"] and "IDENTITY_NOT_VERIFIED" in q["reason_codes"]
     assert qualification_payload(validated,q)=={}
 
 def test_qualification_fails_without_source_backed_contact():
@@ -194,15 +196,60 @@ def test_qualification_fails_without_source_backed_contact():
     validated=_validated_qualified_fixture()
     validated.pop("email_source_url")
     q=qualify_lead(validated)
-    assert not q["qualified"] and "missing_validated_contact_channel" in q["reasons"]
+    assert not q["qualified"] and "MISSING_VALIDATED_CONTACT" in q["reason_codes"]
 
 def test_qualification_fails_without_evidence_url():
     from src.qualification import qualify_lead
     validated=_validated_qualified_fixture()
     validated["evidence"]=[{"title":"unsupported"}]
     q=qualify_lead(validated)
-    assert not q["qualified"] and "missing_source_evidence" in q["reasons"]
+    assert not q["qualified"] and "MISSING_SOURCE_EVIDENCE" in q["reason_codes"]
 
 def test_failed_qualification_receipt_cannot_advance():
-    v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"ok":False,"qualified":False,"reasons":["missing_validated_contact_channel"]}})
-    assert not v["allowed"] and "missing_qualification" in v["reasons"]
+    v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"ok":False,"qualified":False,"status":"Needs More Evidence","reason_codes":["MISSING_VALIDATED_CONTACT"]}})
+    assert not v["allowed"] and "qualification_not_explicitly_successful" in v["reasons"]
+
+
+def test_qualification_three_state_full_fit_gate():
+    from datetime import datetime, timezone
+    from src.qualification import qualify_lead
+    validated=_validated_qualified_fixture()
+    validated["evidence"]=[{"url":"https://acmehvac.com/jobs","title":"HVAC technician careers Virginia Beach","snippet":"ACME HVAC is hiring HVAC technicians in Virginia Beach.","published_at":"2026-09-01T12:00:00+00:00"}]
+    ctx={"target_location":"Virginia Beach","candidate_location":"Virginia Beach, VA","business_type":"HVAC","candidate_type":"HVAC contractor","intent_signal":"hiring technicians","query":"HVAC hiring technicians","evidence":validated["evidence"],"max_evidence_age_days":90}
+    q=qualify_lead(validated,verification_ok=True,context=ctx,now=datetime(2026,9,21,tzinfo=timezone.utc))
+    assert q["status"]=="Qualified" and q["ok"] is True
+
+def test_geographic_mismatch_is_not_qualified():
+    from src.qualification import qualify_lead
+    q=qualify_lead(_validated_qualified_fixture(),context={"target_location":"Virginia Beach","candidate_location":"Richmond, VA"})
+    assert q["status"]=="Not Qualified" and "GEOGRAPHIC_MISMATCH" in q["reason_codes"]
+
+def test_missing_intent_or_recency_needs_more_evidence():
+    from src.qualification import qualify_lead
+    q=qualify_lead(_validated_qualified_fixture(),context={"intent_signal":"hiring technicians"})
+    assert q["status"]=="Needs More Evidence"
+    assert "INTENT_SIGNAL_UNPROVEN" in q["reason_codes"]
+    assert "EVIDENCE_RECENCY_UNPROVEN" in q["reason_codes"]
+
+def test_stale_evidence_is_not_qualified():
+    from datetime import datetime, timezone
+    from src.qualification import qualify_lead
+    v=_validated_qualified_fixture()
+    v["evidence"]=[{"url":"https://acmehvac.com/jobs","title":"Hiring technicians","published_at":"2025-01-01T00:00:00+00:00"}]
+    q=qualify_lead(v,context={"intent_signal":"hiring technicians","evidence":v["evidence"],"max_evidence_age_days":90},now=datetime(2026,9,21,tzinfo=timezone.utc))
+    assert q["status"]=="Not Qualified" and "EVIDENCE_STALE" in q["reason_codes"]
+
+def test_duplicate_and_exclusion_rules_fail_closed():
+    from src.qualification import qualify_lead
+    q=qualify_lead(_validated_qualified_fixture(),context={"duplicate":True})
+    assert q["status"]=="Not Qualified" and "DUPLICATE_LEAD" in q["reason_codes"]
+    q2=qualify_lead(_validated_qualified_fixture(),context={"excluded":True})
+    assert q2["status"]=="Not Qualified" and "EXCLUDED_LEAD" in q2["reason_codes"]
+
+def test_nonempty_fake_qualification_receipt_cannot_advance():
+    v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"status":"Qualified","reason_codes":[]}})
+    assert not v["allowed"] and "qualification_not_explicitly_successful" in v["reasons"]
+
+def test_only_explicit_qualified_receipt_advances():
+    v=validate_transition("enriched","qualified",{"stage":"enriched","qualification":{"status":"Qualified","qualified":True,"ok":True,"reason_codes":[]}})
+    assert v["allowed"]

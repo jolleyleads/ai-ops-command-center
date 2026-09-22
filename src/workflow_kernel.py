@@ -60,7 +60,11 @@ def validate_transition(current: str, target: str, state: Dict[str, Any]) -> Dic
     elif target not in ALLOWED_TRANSITIONS[current]:
         reasons.append("transition_not_allowed")
     for field in REQUIRED_PROOF.get(target, ()):
-        if not _present(state.get(field)):
+        value=state.get(field)
+        if target=="qualified" and field=="qualification":
+            if not (isinstance(value,dict) and value.get("status")=="Qualified" and value.get("qualified") is True and value.get("ok") is True):
+                reasons.append("qualification_not_explicitly_successful")
+        elif not _present(value):
             reasons.append(f"missing_{field}")
     return {"allowed": not reasons, "reasons": reasons, "from": current, "to": target}
 
