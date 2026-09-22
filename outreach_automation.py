@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import requests
-from flask import jsonify, request
+from flask import jsonify, request, Response
 from sqlalchemy.exc import IntegrityError
 
 from app import app, db, gmail_access_token, send_gmail
@@ -507,6 +507,54 @@ def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
         return classify_inbound(rows,sender_email=sender)
     except Exception as exc:
         return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":_clean(exc,1000)}
+
+
+def _dashboard_record(lead: OutreachLead) -> Dict[str, Any]:
+    q=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
+    send=OutreachSendAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachSendAttempt.updated_at.desc()).first()
+    reply=OutreachReplyEvidence.query.filter_by(lead_id=lead.id).order_by(OutreachReplyEvidence.created_at.desc()).first()
+    booking=OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachBookingAttempt.updated_at.desc()).first()
+    qualification={}
+    if q:
+        try:qualification=json.loads(q.receipt_json or "{}")
+        except Exception:qualification={"status":q.status,"ok":q.ok}
+    return {
+        "lead":_serialize(lead),
+        "qualification":qualification,
+        "send_receipt":{"status":send.status,"message_id":send.message_id,"thread_id":send.thread_id,"error":send.error} if send else None,
+        "reply_evidence":{"message_id":reply.message_id,"from_email":reply.from_email,"body_text":reply.body_text,"body_source":reply.body_source,"opted_out":reply.opted_out} if reply else None,
+        "booking_receipt":{"status":booking.status,"event_id":booking.event_id,"event_url":booking.event_url,"start":booking.start,"end":booking.end,"timezone":booking.timezone,"error":booking.error} if booking else None,
+    }
+
+
+@app.route("/api/operator/dashboard", methods=["GET"])
+def operator_dashboard_data():
+    rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
+    records=[_dashboard_record(x) for x in rows]
+    counts={}
+    for record in records:
+        stage=(record["lead"].get("operational") or {}).get("stage") or "unknown"
+        counts[stage]=counts.get(stage,0)+1
+    attention=[x for x in records if (x["lead"].get("operational") or {}).get("needs_attention")]
+    return jsonify({"ok":True,"counts":counts,"attention_count":len(attention),"records":records})
+
+
+@app.route("/operator", methods=["GET"])
+def operator_dashboard():
+    return Response("""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Ops Operator</title><style>
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}header{padding:22px 26px;border-bottom:1px solid #27304a;display:flex;justify-content:space-between;align-items:center}.wrap{padding:22px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.card,.row{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px}.n{font-size:26px;font-weight:800}.muted{color:#9aa7c2;font-size:12px}.tabs{margin:18px 0;display:flex;gap:8px;flex-wrap:wrap}button{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:8px 11px;cursor:pointer}.active{background:#fff;color:#101526}.row{margin:9px 0}.top{display:flex;justify-content:space-between;gap:12px}.badge{font-size:12px;border:1px solid #465372;border-radius:999px;padding:4px 8px}details{margin-top:10px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:260px;overflow:auto}.danger{color:#ffb4b4}a{color:#9ec5ff}</style></head>
+<body><header><div><b>AI Ops Command Center</b><div class="muted">Operator Dashboard · source-backed system state</div></div><button onclick="load()">Refresh</button></header>
+<div class="wrap"><div id="cards" class="cards"></div><div class="tabs"><button class="active" onclick="filter('all',this)">All</button><button onclick="filter('needs_attention',this)">Needs Attention</button><button onclick="filter('interested',this)">Interested</button><button onclick="filter('question',this)">Questions</button><button onclick="filter('booked',this)">Booked</button></div><div id="rows"></div></div>
+<script>
+let data=[],mode='all';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function load(){let r=await fetch('/api/operator/dashboard');let j=await r.json();data=j.records||[];let counts=j.counts||{};document.getElementById('cards').innerHTML='<div class="card"><div class="n">'+esc(data.length)+'</div><div class="muted">Total leads</div></div><div class="card"><div class="n">'+esc(j.attention_count||0)+'</div><div class="muted">Needs attention</div></div>'+Object.entries(counts).map(([k,v])=>'<div class="card"><div class="n">'+esc(v)+'</div><div class="muted">'+esc(k)+'</div></div>').join('');render()}
+function filter(m,b){mode=m;document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');render()}
+function render(){let rows=data.filter(x=>{let o=x.lead.operational||{};return mode==='all'||(mode==='needs_attention'?o.needs_attention:o.stage===mode)});document.getElementById('rows').innerHTML=rows.map(x=>{let l=x.lead,o=l.operational||{};return '<div class="row"><div class="top"><div><b>'+esc(l.company)+'</b><div class="muted">'+esc(l.contact_email)+' · '+esc(l.location)+'</div></div><span class="badge '+(o.needs_attention?'danger':'')+'">'+esc(o.stage)+'</span></div>'+(o.attention_reason?'<p class="danger">'+esc(o.attention_reason)+'</p>':'')+'<details><summary>Evidence & receipts</summary><pre>'+esc(JSON.stringify({qualification:x.qualification,send:x.send_receipt,reply:x.reply_evidence,booking:x.booking_receipt,evidence:l.evidence},null,2))+'</pre></details></div>'}).join('')||'<p class="muted">No records in this view.</p>'}
+load();setInterval(load,30000);
+</script></body></html>""",mimetype="text/html")
 
 
 @app.route("/api/outreach/needs-attention", methods=["GET"])
