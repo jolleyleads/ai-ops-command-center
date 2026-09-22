@@ -653,8 +653,9 @@ def test_operator_dashboard_exposes_source_backed_records():
 def test_operator_dashboard_ui_escapes_dynamic_values():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation.operator_dashboard)
-    assert "const esc=" in src
-    assert "/api/operator/dashboard" in src
+    assert "html.escape" in src
+    assert "<script>" not in src
+    assert "_operator_session_authorized" in src
     assert "Evidence, receipts & audit" in src
 
 def test_operator_dashboard_data_uses_operational_attention():

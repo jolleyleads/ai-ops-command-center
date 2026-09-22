@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import requests
-from flask import jsonify, request, Response
+from flask import jsonify, request, Response, session, redirect, url_for
 from sqlalchemy.exc import IntegrityError
 
 from app import app, db, gmail_access_token, send_gmail
@@ -618,8 +618,43 @@ def operator_control(lead_id:int):
     return _control_response(lead,action,payload,{"ok":False,"error":"unsupported operator action"},400)
 
 
+def _operator_session_authorized() -> bool:
+    expected=os.environ.get("OPERATOR_CONTROL_TOKEN","").strip()
+    supplied=str(session.get("operator_token") or "").strip()
+    return bool(expected and supplied and hmac.compare_digest(expected,supplied))
+
+
+def _operator_login_page(error: str = "") -> Response:
+    message=f'<p class="danger">{error}</p>' if error else ''
+    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Ops Operator Login</title><style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0b1020;color:#e8ecf5;margin:0;padding:28px}}.box{{max-width:420px;margin:10vh auto;background:#141b2d;border:1px solid #27304a;border-radius:14px;padding:22px}}input,button{{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px;border:1px solid #394563}}input{{background:#0b1020;color:#fff}}button{{background:#fff;color:#101526;font-weight:700}}.muted{{color:#9aa7c2}}.danger{{color:#ffb4b4}}</style></head>
+<body><div class="box"><h2>AI Ops Command Center</h2><p class="muted">Operator authentication</p>{message}<form method="post" action="/operator/login"><input name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Operator token" required><button type="submit">Sign in</button></form></div></body></html>""",mimetype="text/html")
+
+
+@app.route("/operator/login",methods=["GET","POST"])
+def operator_login():
+    if request.method=="GET":
+        return _operator_login_page()
+    expected=os.environ.get("OPERATOR_CONTROL_TOKEN","").strip()
+    supplied=_clean(request.form.get("token"),500)
+    if not expected or not supplied or not hmac.compare_digest(expected,supplied):
+        session.pop("operator_token",None)
+        return _operator_login_page("Invalid operator token."),401
+    session["operator_token"]=supplied
+    session.permanent=False
+    return redirect(url_for("operator_dashboard"),303)
+
+
+@app.route("/operator/logout",methods=["POST"])
+def operator_logout():
+    session.pop("operator_token",None)
+    return redirect(url_for("operator_login"),303)
+
+
 @app.route("/api/operator/dashboard", methods=["GET"])
 def operator_dashboard_data():
+    if not (_operator_session_authorized() or _operator_authorized()):
+        return jsonify({"ok":False,"error":"operator authentication required"}),401
     rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
     records=[_dashboard_record(x) for x in rows]
     counts={}
@@ -632,21 +667,40 @@ def operator_dashboard_data():
 
 @app.route("/operator", methods=["GET"])
 def operator_dashboard():
-    return Response("""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Ops Operator</title><style>
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}header{padding:22px 26px;border-bottom:1px solid #27304a;display:flex;justify-content:space-between;align-items:center}.wrap{padding:22px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.card,.row{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px}.n{font-size:26px;font-weight:800}.muted{color:#9aa7c2;font-size:12px}.tabs{margin:18px 0;display:flex;gap:8px;flex-wrap:wrap}button{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:8px 11px;cursor:pointer}.active{background:#fff;color:#101526}.row{margin:9px 0}.top{display:flex;justify-content:space-between;gap:12px}.badge{font-size:12px;border:1px solid #465372;border-radius:999px;padding:4px 8px}details{margin-top:10px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:260px;overflow:auto}.danger{color:#ffb4b4}a{color:#9ec5ff}</style></head>
-<body><header><div><b>AI Ops Command Center</b><div class="muted">Operator Dashboard · authenticated controls + source-backed state</div></div><div><input id="token" type="password" placeholder="Operator token" autocomplete="off" autocapitalize="none" spellcheck="false" style="padding:8px;border-radius:8px;border:1px solid #394563;background:#0b1020;color:#fff"><button id="refreshBtn" type="button">Refresh</button><div id="status" class="muted" role="status" aria-live="polite" style="margin-top:6px"></div></div></header>
-<div class="wrap"><div id="cards" class="cards"></div><div class="tabs"><button class="active" onclick="filter('all',this)">All</button><button onclick="filter('needs_attention',this)">Needs Attention</button><button onclick="filter('interested',this)">Interested</button><button onclick="filter('question',this)">Questions</button><button onclick="filter('booked',this)">Booked</button></div><div id="rows"></div></div>
-<script>
-let data=[],mode='all';
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function load(){let status=document.getElementById('status'),btn=document.getElementById('refreshBtn'),token=document.getElementById('token').value.trim();status.textContent='Loading…';btn.disabled=true;try{let headers={'Accept':'application/json'};if(token)headers['X-Operator-Token']=token;let r=await fetch('/api/operator/dashboard',{method:'GET',headers:headers,cache:'no-store'});let text=await r.text(),j={};try{j=text?JSON.parse(text):{}}catch(e){throw new Error('Dashboard returned an invalid response ('+r.status+')')}if(!r.ok)throw new Error(j.error||('Dashboard request failed ('+r.status+')'));data=j.records||[];let counts=j.counts||{};document.getElementById('cards').innerHTML='<div class="card"><div class="n">'+esc(data.length)+'</div><div class="muted">Total leads</div></div><div class="card"><div class="n">'+esc(j.attention_count||0)+'</div><div class="muted">Needs attention</div></div>'+Object.entries(counts).map(([k,v])=>'<div class="card"><div class="n">'+esc(v)+'</div><div class="muted">'+esc(k)+'</div></div>').join('');render();status.textContent='Loaded '+data.length+' lead'+(data.length===1?'':'s')+'.'}catch(e){status.textContent='Error: '+e.message;document.getElementById('rows').innerHTML='<p class="danger">'+esc(e.message)+'</p>'}finally{btn.disabled=false}}
-function filter(m,b){mode=m;document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');render()}
-async function act(id,action){let token=document.getElementById('token').value;if(!token){alert('Operator token required');return}let reason='';if(action==='reject')reason=prompt('Reason for rejection:')||'OPERATOR_REJECTED';if(!confirm(action+' lead #'+id+'?'))return;let r=await fetch('/api/operator/leads/'+id+'/control',{method:'POST',headers:{'Content-Type':'application/json','X-Operator-Token':token,'X-Operator-Actor':'dashboard'},body:JSON.stringify({action:action,reason:reason})});let j=await r.json();if(!r.ok)alert(j.error||'Action blocked');await load()}
-function render(){let rows=data.filter(x=>{let o=x.lead.operational||{};return mode==='all'||(mode==='needs_attention'?o.needs_attention:o.stage===mode)});document.getElementById('rows').innerHTML=rows.map(x=>{let l=x.lead,o=l.operational||{};return '<div class="row"><div class="top"><div><b>'+esc(l.company)+'</b><div class="muted">'+esc(l.contact_email)+' · '+esc(l.location)+'</div></div><span class="badge '+(o.needs_attention?'danger':'')+'">'+esc(o.stage)+'</span></div>'+(o.attention_reason?'<p class="danger">'+esc(o.attention_reason)+'</p>':'')+'<div class="tabs"><button onclick="act('+l.id+',\'review\')">Review</button><button onclick="act('+l.id+',\'approve\')">Approve</button><button onclick="act('+l.id+',\'reject\')">Reject</button><button onclick="act('+l.id+',\'retry\')">Retry</button><button onclick="act('+l.id+',\'reconcile\')">Reconcile</button><button onclick="act('+l.id+',\'suppress\')">Suppress</button><button onclick="act('+l.id+',\'close\')">Close</button></div><details><summary>Evidence, receipts & audit</summary><pre>'+esc(JSON.stringify({qualification:x.qualification,send:x.send_receipt,reply:x.reply_evidence,booking:x.booking_receipt,evidence:l.evidence,audit:x.audit},null,2))+'</pre></details></div>'}).join('')||'<p class="muted">No records in this view.</p>'}
-document.getElementById('refreshBtn').addEventListener('click',function(e){e.preventDefault();load()});document.getElementById('token').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();this.blur();load()}});load();setInterval(load,30000);
-</script></body></html>""",mimetype="text/html")
+    if not _operator_session_authorized():
+        return redirect(url_for("operator_login"),303)
+    rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
+    records=[_dashboard_record(x) for x in rows]
+    attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))
+    def h(v):
+        import html
+        return html.escape(str(v if v is not None else ""))
+    lead_html=[]
+    for x in records:
+        l=x["lead"];o=l.get("operational") or {}
+        details=h(json.dumps({"qualification":x["qualification"],"send":x["send_receipt"],"reply":x["reply_evidence"],"booking":x["booking_receipt"],"evidence":l.get("evidence"),"audit":x["audit"]},indent=2))
+        buttons="".join(f'<button name="action" value="{a}">{a.title()}</button>' for a in ("review","approve","reject","retry","reconcile","suppress","close"))
+        lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
+    body="".join(lead_html) or '<p class="muted">No lead records yet.</p>'
+    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div></div>{body}</main></body></html>""",mimetype="text/html")
+
+
+@app.route("/operator/leads/<int:lead_id>/control",methods=["POST"])
+def operator_control_form(lead_id:int):
+    if not _operator_session_authorized():
+        return redirect(url_for("operator_login"),303)
+    action=_clean(request.form.get("action"),50).lower()
+    lead=OutreachLead.query.get_or_404(lead_id)
+    # Reuse the same deterministic safety gates as the JSON control path without JavaScript.
+    with app.test_request_context(f"/api/operator/leads/{lead_id}/control",method="POST",json={"action":action},headers={"X-Operator-Token":session["operator_token"],"X-Operator-Actor":"dashboard-session"}):
+        response=operator_control(lead_id)
+    status=response[1] if isinstance(response,tuple) else getattr(response,"status_code",200)
+    if status>=400:
+        payload=response[0].get_json() if isinstance(response,tuple) else response.get_json()
+        import html
+        error=html.escape(str((payload or {}).get("error") or "Request failed"))
+        return Response(f'<html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:24px"><h3>Action blocked</h3><p>{error}</p><a href="/operator">Back to dashboard</a></body></html>',status=status,mimetype="text/html")
+    return redirect(url_for("operator_dashboard"),303)
 
 
 @app.route("/api/outreach/needs-attention", methods=["GET"])
