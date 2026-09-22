@@ -471,3 +471,36 @@ def test_followup_smoke_probe_is_noop_source_guard_present():
     src=inspect.getsource(outreach_automation.process_followups)
     assert "AI-Ops-Smoke-Test/" in src
     assert '"execution":"skipped"' in src
+
+
+def test_suppression_gate_blocks_opted_out_recipient():
+    from src.outreach_safety import suppression_gate
+    r=suppression_gate("Owner@Example.com ",True)
+    assert r["ok"] is False and r["recipient"]=="owner@example.com"
+    assert "RECIPIENT_SUPPRESSED" in r["reasons"]
+
+def test_suppression_gate_allows_valid_unsuppressed_recipient():
+    from src.outreach_safety import suppression_gate
+    r=suppression_gate("owner@example.com",False)
+    assert r["ok"] is True
+
+def test_send_key_is_deterministic_and_sequence_specific():
+    from src.outreach_safety import send_key
+    a=send_key(lead_id=7,kind="followup",sequence=1,recipient="Owner@Example.com")
+    b=send_key(lead_id=7,kind="followup",sequence=1,recipient="owner@example.com")
+    c=send_key(lead_id=7,kind="followup",sequence=2,recipient="owner@example.com")
+    assert a==b and a!=c
+
+def test_sent_attempt_blocks_duplicate():
+    from src.outreach_safety import send_attempt_gate
+    r=send_attempt_gate("sent")
+    assert r["allowed"] is False and r["reason"]=="DUPLICATE_ALREADY_SENT"
+
+def test_pending_or_uncertain_attempt_fails_closed():
+    from src.outreach_safety import send_attempt_gate
+    assert send_attempt_gate("pending")["allowed"] is False
+    assert send_attempt_gate("uncertain")["allowed"] is False
+
+def test_failed_attempt_can_be_explicitly_retried():
+    from src.outreach_safety import send_attempt_gate
+    assert send_attempt_gate("failed")["allowed"] is True
