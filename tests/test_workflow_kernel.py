@@ -589,3 +589,24 @@ def test_pending_and_uncertain_booking_require_reconciliation():
     assert attempt_gate("uncertain")["reconcile"] is True
     assert attempt_gate("confirmed")["reconcile"] is True
     assert attempt_gate("failed")["allowed"] is True
+
+
+def test_outreach_source_no_longer_score_qualifies_new_lead():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.create_outreach_lead)
+    assert 'status="needs_evidence"' in src
+    assert "_store_qualification(lead,data)" in src
+    assert "status=_rank_status(score)" not in src
+
+def test_draft_requires_qualification_receipt():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.draft_outreach)
+    assert "_qualification_gate(lead)" in src
+    assert "evidence-validated qualification is required before drafting" in src
+
+def test_send_requires_qualification_receipt_not_score():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.send_outreach)
+    assert "_qualification_gate(lead)" in src
+    assert "evidence-validated qualification is required before send" in src
+    assert "lead.score < AUTO_SEND_MIN_SCORE" not in src
