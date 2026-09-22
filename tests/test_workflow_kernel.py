@@ -687,3 +687,64 @@ def test_operator_audit_is_hash_chained_append_only_by_api():
     assert "previous_hash" in src and "hashlib.sha256" in src
     control=inspect.getsource(outreach_automation.operator_control)
     assert "_control_response" in control
+
+
+def test_safe_send_enforces_qualification_before_any_provider_path():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._safe_send)
+    assert "_qualification_gate(lead)" in src
+    assert "QUALIFICATION_REQUIRED" in src
+    assert src.index("_qualification_gate(lead)") < src.index("execute_outreach_send")
+
+
+def test_automatic_booking_enforces_qualification_before_booking():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation._route_persisted_reply)
+    assert "_qualification_gate(lead)" in src
+    assert "QUALIFICATION_REQUIRED_FOR_BOOKING" in src
+    assert src.index("_qualification_gate(lead)") < src.index("process_reply_to_booking")
+
+
+def test_explicit_booking_requires_auth_and_qualification():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.process_reply_booking)
+    assert "_operator_session_authorized" in src
+    assert "_operator_authorized" in src
+    assert "_qualification_gate(lead)" in src
+    assert "401" in src and "409" in src
+
+
+def test_followup_endpoint_fails_closed_without_cron_secret():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.process_followups)
+    assert "not cron_token" in src
+    assert "not supplied" in src
+    assert "compare_digest" in src
+    assert "AI-Ops-Smoke-Test" not in src
+
+
+def test_operator_audit_commits_with_control_response_and_serializes_postgres_writers():
+    import inspect,outreach_automation
+    audit=inspect.getsource(outreach_automation._audit)
+    control=inspect.getsource(outreach_automation._control_response)
+    assert "pg_advisory_xact_lock" in audit
+    assert "db.session.commit()" not in audit
+    assert "_audit(" in control
+    assert "db.session.commit()" in control
+    assert control.index("_audit(") < control.index("db.session.commit()")
+
+
+def test_operator_dashboard_and_controls_require_authentication():
+    import inspect,outreach_automation
+    dashboard=inspect.getsource(outreach_automation.operator_dashboard_data)
+    control=inspect.getsource(outreach_automation.operator_control)
+    assert "operator authentication required" in dashboard
+    assert "operator authentication required" in control
+
+
+def test_operator_retry_rejects_nonfailed_attempts_and_rechecks_safety():
+    import inspect,outreach_automation
+    src=inspect.getsource(outreach_automation.operator_control)
+    assert 'attempt.status!="failed"' in src
+    assert "_qualification_gate(lead)" in src
+    assert "_is_suppressed(lead.contact_email)" in src
