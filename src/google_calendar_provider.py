@@ -41,3 +41,18 @@ def create_event(req:Dict[str,Any],*,summary:str,description:str="",idempotency_
         return {"ok":True,"event_id":data.get("id") or "","event_url":data.get("htmlLink") or "","start":((data.get("start") or {}).get("dateTime") or ""),"end":((data.get("end") or {}).get("dateTime") or "")}
     except Exception as exc:
         return {"ok":False,"error":str(exc)[:500]}
+
+
+def get_event(event_id:str)->Dict[str,Any]:
+    calendar_id=os.environ.get("GOOGLE_CALENDAR_ID","primary").strip() or "primary"
+    try:
+        r=requests.get(
+            f"{BASE}/calendars/{requests.utils.quote(calendar_id,safe='')}/events/{requests.utils.quote(str(event_id),safe='')}",
+            headers=_headers(),timeout=30,
+        )
+        if r.status_code==404:return {"ok":False,"found":False,"event_id":str(event_id)}
+        if not r.ok:return {"ok":False,"found":False,"error":f"Google Calendar get {r.status_code}: {r.text[:500]}"}
+        data=r.json()
+        return {"ok":True,"found":True,"event_id":data.get("id") or "","event_url":data.get("htmlLink") or "","start":((data.get("start") or {}).get("dateTime") or ""),"end":((data.get("end") or {}).get("dateTime") or "")}
+    except Exception as exc:
+        return {"ok":False,"found":False,"error":str(exc)[:500]}
