@@ -655,7 +655,7 @@ def test_operator_dashboard_ui_escapes_dynamic_values():
     src=inspect.getsource(outreach_automation.operator_dashboard)
     assert "const esc=" in src
     assert "/api/operator/dashboard" in src
-    assert "Evidence & receipts" in src
+    assert "Evidence, receipts & audit" in src
 
 def test_operator_dashboard_data_uses_operational_attention():
     import inspect,outreach_automation
