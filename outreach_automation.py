@@ -14,6 +14,7 @@ from src.reply_booking_handoff import process_reply_to_booking
 from src.google_calendar_provider import check_availability, create_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
+from src.automatic_reply_router import classify_reply, extract_explicit_booking
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -171,6 +172,55 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     attempt.status="sent";attempt.message_id=_clean(receipt.get("message_id"),255);attempt.thread_id=_clean(receipt.get("thread_id"),255);attempt.error="";attempt.updated_at=datetime.utcnow()
     db.session.commit()
     return execution
+
+
+def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    """Route newest persisted inbound evidence. No invented scheduling fields."""
+    evidence=(reply.get("reply_evidence") or [])
+    if not evidence:
+        return {"ok":False,"stage":"no_reply_evidence"}
+    item=evidence[-1]
+    text=_clean(item.get("text"),20000)
+    classification=classify_reply(text)
+    label=classification.get("classification")
+    if label=="not_interested":
+        lead.status="opted_out" if classification.get("signals",{}).get("opt_out") else "not_interested"
+        lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        if classification.get("signals",{}).get("opt_out"):
+            _suppress(lead.contact_email,"opt_out",message_id=_clean(item.get("message_id"),255),thread_id=lead.gmail_thread_id)
+        return {"ok":True,"stage":lead.status,"classification":classification}
+    if label=="question":
+        lead.status="question";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        return {"ok":True,"stage":"question","classification":classification}
+    if label!="interested":
+        lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="REPLY_REQUIRES_REVIEW"
+        return {"ok":True,"stage":"unclear","classification":classification}
+
+    booking=extract_explicit_booking(text)
+    booking["attendee_email"]=lead.contact_email
+    # Missing explicit ISO start/end/timezone means interested, not booking-ready.
+    if not booking.get("start") or not booking.get("end") or not booking.get("timezone"):
+        lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        return {"ok":True,"stage":"interested","classification":classification,"booking_attempted":False}
+
+    summary=f"Call with {_clean(lead.company,300)}"
+    result=process_reply_to_booking(
+        reply_text=text,proposed_classification={"classification":"interested"},proposed_booking=booking,
+        availability_func=check_availability,
+        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated Gmail reply evidence.",idempotency_key=f"aocclead{lead.id}booking".lower()),
+    )
+    stage=result.get("stage")
+    if stage=="booked":
+        lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        try:stored=json.loads(lead.evidence_json or "[]")
+        except Exception:stored=[]
+        if not isinstance(stored,dict):stored={"evidence":stored}
+        stored["booking"]=result.get("booking_execution") or {};lead.evidence_json=json.dumps(stored)
+    elif stage=="unavailable":
+        lead.status="booking_ready";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="TIME_NOT_AVAILABLE"
+    else:
+        lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=_clean(result,2000)
+    return {"ok":result.get("ok") is True,"stage":stage,"classification":classification,"booking_result":result}
 
 
 def _rank_status(score: int) -> str:
@@ -451,12 +501,8 @@ def process_followups():
             if reply.get("replied"):
                 _persist_reply_evidence(lead,reply)
                 lead.replied_at=now
-                lead.status="opted_out" if reply.get("opted_out") else "responded"
-                if reply.get("opted_out"):
-                    _suppress(lead.contact_email,"opt_out",thread_id=lead.gmail_thread_id)
-                lead.follow_up_due_at=None
-                lead.last_error=""
-                processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reason":reply.get("reason")})
+                routed=_route_persisted_reply(lead,reply,now)
+                processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reason":reply.get("reason"),"routing_stage":routed.get("stage")})
             else:
                 lead.last_error=reply.get("error") or reply.get("reason") or "reply check failed"
                 lead.updated_at=now
@@ -489,11 +535,7 @@ def process_followups():
             if final_reply.get("replied"):
                 _persist_reply_evidence(lead,final_reply)
                 lead.replied_at=now
-                lead.status="opted_out" if final_reply.get("opted_out") else "responded"
-                if final_reply.get("opted_out"):
-                    _suppress(lead.contact_email,"opt_out",thread_id=lead.gmail_thread_id)
-                lead.follow_up_due_at=None
-                lead.last_error=""
+                routed=_route_persisted_reply(lead,final_reply,now)
             else:
                 lead.last_error=final_reply.get("error") or final_reply.get("reason") or "final reply check failed"
             lead.updated_at=now

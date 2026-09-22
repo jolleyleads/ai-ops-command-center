@@ -39,7 +39,7 @@ def validate_reply_classification(reply_text:Any, proposed:Dict[str,Any])->Dict[
         final="not_interested"
     elif signals["negative"]:
         final="not_interested"
-    elif signals["question"] and not signals["interest"]:
+    elif signals["question"]:
         final="question"
     elif signals["interest"]:
         final="interested"
