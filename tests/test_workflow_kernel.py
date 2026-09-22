@@ -420,3 +420,41 @@ def test_invalid_booking_ready_receipt_never_calls_provider():
     req=_booking_ready();req["validated"]=False
     r=execute_booking(req,lambda req:calls.append("availability"),lambda req:calls.append("create"))
     assert r["stage"]=="blocked" and calls==[]
+
+
+def test_reply_booking_handoff_books_only_after_availability_and_receipt():
+    from src.reply_booking_handoff import process_reply_to_booking
+    calls=[]
+    result=process_reply_to_booking(
+        reply_text="Yes, let's schedule a call.",
+        proposed_classification={"classification":"interested"},
+        proposed_booking={"start":"2026-09-23T14:00:00-04:00","end":"2026-09-23T14:30:00-04:00","timezone":"America/New_York","attendee_email":"owner@example.com"},
+        availability_func=lambda req:(calls.append("availability") or {"ok":True,"available":True,"checked_start":req["start"],"checked_end":req["end"]}),
+        event_create_func=lambda req:(calls.append("create") or {"ok":True,"event_id":"fake-event","start":req["start"],"end":req["end"]}),
+    )
+    assert result["stage"]=="booked" and calls==["availability","create"]
+
+def test_reply_booking_handoff_question_never_calls_calendar():
+    from src.reply_booking_handoff import process_reply_to_booking
+    calls=[]
+    result=process_reply_to_booking(
+        reply_text="How much does this cost?",proposed_classification={"classification":"question"},proposed_booking={},
+        availability_func=lambda req:calls.append("availability"),event_create_func=lambda req:calls.append("create"))
+    assert result["stage"]=="question" and calls==[]
+
+def test_reply_booking_handoff_not_interested_never_calls_calendar():
+    from src.reply_booking_handoff import process_reply_to_booking
+    calls=[]
+    result=process_reply_to_booking(
+        reply_text="No thanks, not interested.",proposed_classification={"classification":"not_interested"},proposed_booking={},
+        availability_func=lambda req:calls.append("availability"),event_create_func=lambda req:calls.append("create"))
+    assert result["stage"]=="not_interested" and calls==[]
+
+def test_reply_booking_handoff_incomplete_time_never_calls_calendar():
+    from src.reply_booking_handoff import process_reply_to_booking
+    calls=[]
+    result=process_reply_to_booking(
+        reply_text="Yes, let's talk.",proposed_classification={"classification":"interested"},
+        proposed_booking={"timezone":"America/New_York","attendee_email":"owner@example.com"},
+        availability_func=lambda req:calls.append("availability"),event_create_func=lambda req:calls.append("create"))
+    assert result["stage"]=="interested" and result["booking_attempted"] is False and calls==[]

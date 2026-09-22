@@ -10,6 +10,8 @@ from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
 from src.followup_control import classify_inbound, followup_permission
+from src.reply_booking_handoff import process_reply_to_booking
+from src.google_calendar_provider import check_availability, create_event
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -405,6 +407,55 @@ def process_followups():
 
     db.session.commit()
     return jsonify({"ok":True,"processed_count":len(processed),"processed":processed})
+
+
+@app.route("/api/outreach/leads/<int:lead_id>/process-reply-booking", methods=["POST"])
+def process_reply_booking(lead_id: int):
+    """Explicit production handoff. No booking occurs unless validated interested + booking-ready."""
+    lead=OutreachLead.query.get_or_404(lead_id)
+    data=request.get_json(silent=True) or {}
+    reply_text=_clean(data.get("reply_text"),8000)
+    proposed_classification=data.get("classification") if isinstance(data.get("classification"),dict) else {"classification":data.get("classification")}
+    proposed_booking=data.get("booking") if isinstance(data.get("booking"),dict) else {}
+    # Bind attendee to the source-validated outreach contact; callers cannot redirect invites.
+    proposed_booking={**proposed_booking,"attendee_email":lead.contact_email}
+    summary=f"Call with {_clean(lead.company,300)}"
+    idempotency_key=f"aocclead{lead.id}booking".lower()
+    result=process_reply_to_booking(
+        reply_text=reply_text,
+        proposed_classification=proposed_classification,
+        proposed_booking=proposed_booking,
+        availability_func=check_availability,
+        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated outreach reply.",idempotency_key=idempotency_key),
+    )
+
+    now=datetime.utcnow()
+    stage=result.get("stage")
+    if stage=="booked":
+        lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        try:
+            evidence=json.loads(lead.evidence_json or "[]")
+        except Exception:
+            evidence=[]
+        if not isinstance(evidence,dict):evidence={"evidence":evidence}
+        evidence["booking"]=result.get("booking_execution") or {}
+        lead.evidence_json=json.dumps(evidence)
+    elif stage=="not_interested":
+        lead.status="not_interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+    elif stage=="question":
+        lead.status="question";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+    elif stage in {"interested","unavailable"}:
+        lead.status="booking_ready" if stage=="unavailable" else "interested"
+        lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now
+        lead.last_error=", ".join(((result.get("booking_execution") or {}).get("availability") or {}).get("reasons") or [])
+    elif stage=="unclear":
+        lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now
+    else:
+        lead.last_error=str(result)[:2000]
+    lead.updated_at=now
+    db.session.commit()
+    code=200 if result.get("ok") else (409 if stage in {"classification_blocked","unavailable","create_failed","blocked"} else 502)
+    return jsonify({"ok":result.get("ok",False),"stage":stage,"lead":_serialize(lead),"result":result}),code
 
 
 @app.route("/api/outreach/leads", methods=["GET"])
