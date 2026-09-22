@@ -8,6 +8,7 @@ from flask import jsonify, request
 
 from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
+from src.outreach_execution import validate_outreach_message, execute_outreach_send
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -274,6 +275,13 @@ def draft_outreach(lead_id: int):
         db.session.commit()
         return jsonify(drafted), 502
 
+    message_gate = validate_outreach_message({**_serialize(lead), "subject": drafted["subject"], "body": drafted["body"]}, drafted["subject"], drafted["body"])
+    if not message_gate.get("ok"):
+        lead.last_error = ", ".join(message_gate.get("reasons") or []) or "Draft validation failed"
+        lead.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"ok": False, "gate": message_gate}), 409
+
     lead.subject = drafted["subject"]
     lead.body = drafted["body"]
     lead.status = "drafted"
@@ -300,16 +308,18 @@ def send_outreach(lead_id: int):
         lead.subject = drafted["subject"]
         lead.body = drafted["body"]
 
-    sent = _gmail_send(lead.contact_email, lead.subject, lead.body)
-    if not sent.get("ok"):
-        lead.last_error = sent.get("error") or "Gmail send failed"
+    execution = execute_outreach_send(_serialize(lead), _gmail_send)
+    if not execution.get("ok"):
+        reasons = ((execution.get("gate") or {}).get("reasons") or []) + ((execution.get("send_receipt") or {}).get("reasons") or [])
+        lead.last_error = ", ".join(reasons) or "Outreach execution failed"
         lead.updated_at = datetime.utcnow()
         db.session.commit()
-        return jsonify(sent), 502
+        return jsonify(execution), 409 if execution.get("stage") == "blocked" else 502
 
+    receipt = execution["send_receipt"]
     sent_at = datetime.utcnow()
-    lead.gmail_message_id = _clean(sent.get("message_id"), 255)
-    lead.gmail_thread_id = _clean(sent.get("thread_id"), 255)
+    lead.gmail_message_id = _clean(receipt.get("message_id"), 255)
+    lead.gmail_thread_id = _clean(receipt.get("thread_id"), 255)
     lead.sent_at = sent_at
     lead.follow_up_due_at = sent_at + timedelta(days=FIRST_FOLLOWUP_DAYS)
     lead.status = "sent"
