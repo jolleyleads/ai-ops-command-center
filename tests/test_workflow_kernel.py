@@ -175,8 +175,10 @@ def _validated_qualified_fixture():
 
 def test_qualification_accepts_only_source_validated_lead():
     from src.qualification import qualify_lead, qualification_payload
+    from datetime import datetime, timezone
     validated=_validated_qualified_fixture()
-    q=qualify_lead(validated,verification_ok=True)
+    validated["evidence"]=[{"url":"https://acmehvac.com/jobs","title":"HVAC technician hiring","published_at":"2026-09-01T12:00:00+00:00"}]
+    q=qualify_lead(validated,verification_ok=True,context={"intent_signal":"hiring technicians","evidence":validated["evidence"],"max_evidence_age_days":90},now=datetime(2026,9,21,tzinfo=timezone.utc))
     assert q["qualified"] and q["ok"]
     downstream=qualification_payload(validated,q)
     assert downstream["email"]=="service@acmehvac.com"
