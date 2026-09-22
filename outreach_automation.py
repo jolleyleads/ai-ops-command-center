@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 import requests
 from flask import jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
@@ -17,6 +18,7 @@ from src.gmail_reply_parser import message_to_evidence
 from src.automatic_reply_router import classify_reply, extract_explicit_booking
 from src.booking_safety import booking_key, google_event_id, attempt_gate
 from src.qualification import qualify_lead, QUALIFIED
+from src.operational_state import state_snapshot
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -156,7 +158,28 @@ def _serialize(lead: OutreachLead) -> Dict[str, Any]:
         "last_error": lead.last_error,
         "created_at": lead.created_at.isoformat() if lead.created_at else None,
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+        "operational": _operational_snapshot(lead),
     }
+
+
+def _latest_attempt_status(model, lead_id: int) -> str:
+    row=model.query.filter_by(lead_id=lead_id).order_by(model.updated_at.desc()).first()
+    return row.status if row else ""
+
+def _operational_snapshot(lead: OutreachLead) -> Dict[str, Any]:
+    return state_snapshot(
+        status=lead.status,last_error=lead.last_error,
+        send_status=_latest_attempt_status(OutreachSendAttempt,lead.id),
+        booking_status=_latest_attempt_status(OutreachBookingAttempt,lead.id),
+    )
+
+def _commit_unique_or_existing(model, lookup: Dict[str, Any]):
+    try:
+        db.session.commit()
+        return None
+    except IntegrityError:
+        db.session.rollback()
+        return model.query.filter_by(**lookup).first()
 
 
 def _qualification_gate(lead: OutreachLead) -> Dict[str, Any]:
@@ -208,6 +231,8 @@ def _suppress(email: str, reason: str="opt_out", message_id: str="", thread_id: 
     if row is None:
         row=OutreachSuppression(normalized_email=address)
         db.session.add(row)
+        existing=_commit_unique_or_existing(OutreachSuppression,{"normalized_email":address})
+        if existing is not None:row=existing
     row.reason=_clean(reason,100) or "opt_out"
     row.source_message_id=_clean(message_id,255)
     row.source_thread_id=_clean(thread_id,255)
@@ -221,12 +246,16 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     key=send_key(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address)
     attempt=OutreachSendAttempt.query.filter_by(idempotency_key=key).first()
     ag=send_attempt_gate(attempt.status if attempt else "")
+    if attempt is not None and attempt.status=="failed":
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW"]},"attempt_status":"failed"}
     if not ag.get("allowed"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
     if attempt is None:
         attempt=OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending")
         db.session.add(attempt)
-        db.session.commit()
+        existing=_commit_unique_or_existing(OutreachSendAttempt,{"idempotency_key":key})
+        if existing is not None:
+            return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["CONCURRENT_SEND_ATTEMPT_EXISTS"]},"attempt_status":existing.status}
     # Pending is committed before provider execution. If the process dies after Gmail
     # accepts the message, the next run fails closed instead of duplicating the send.
     payload={**_serialize(lead),"contact_email":address,"subject":subject,"body":body}
@@ -280,7 +309,10 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
             lead_id=lead.id,reply_message_id=reply_message_id,idempotency_key=key,event_id=event_id,
             start=booking["start"],end=booking["end"],timezone=booking["timezone"],attendee_email=normalize_email(lead.contact_email),status="pending",
         )
-        db.session.add(attempt);db.session.commit()
+        db.session.add(attempt)
+        existing=_commit_unique_or_existing(OutreachBookingAttempt,{"idempotency_key":key})
+        if existing is not None:
+            attempt=existing;gate=attempt_gate(attempt.status)
     if gate.get("reconcile"):
         existing=get_event(attempt.event_id)
         if existing.get("ok") and existing.get("found") and existing.get("start")==attempt.start and existing.get("end")==attempt.end:
@@ -475,6 +507,17 @@ def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
         return classify_inbound(rows,sender_email=sender)
     except Exception as exc:
         return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":_clean(exc,1000)}
+
+
+@app.route("/api/outreach/needs-attention", methods=["GET"])
+def outreach_needs_attention():
+    rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
+    items=[]
+    for lead in rows:
+        snap=_operational_snapshot(lead)
+        if snap.get("needs_attention"):
+            items.append({"lead":_serialize(lead),"reason":snap.get("attention_reason")})
+    return jsonify({"ok":True,"count":len(items),"items":items})
 
 
 @app.route("/api/outreach/leads", methods=["POST"])
