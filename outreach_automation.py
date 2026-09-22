@@ -147,6 +147,9 @@ def _operator_authorized() -> bool:
     return bool(expected and supplied and hmac.compare_digest(expected,supplied))
 
 def _audit(lead_id:int, action:str, payload:Dict[str,Any], result:Dict[str,Any]) -> None:
+    # Serialize audit writers in PostgreSQL so two operator actions cannot fork the chain.
+    if db.engine.dialect.name=="postgresql":
+        db.session.execute(db.text("SELECT pg_advisory_xact_lock(:key)"),{"key":90421001})
     prev=OperatorAuditEvent.query.order_by(OperatorAuditEvent.id.desc()).first()
     previous_hash=prev.event_hash if prev else ""
     actor=_clean(request.headers.get("X-Operator-Actor") or "operator",200)
@@ -156,10 +159,11 @@ def _audit(lead_id:int, action:str, payload:Dict[str,Any], result:Dict[str,Any])
     raw="|".join([previous_hash,str(lead_id),action,actor,request_json,result_json,created.isoformat()])
     event_hash=hashlib.sha256(raw.encode()).hexdigest()
     db.session.add(OperatorAuditEvent(lead_id=lead_id,action=action,actor=actor,request_json=request_json,result_json=result_json,previous_hash=previous_hash,event_hash=event_hash,created_at=created))
-    db.session.commit()
 
 def _control_response(lead:OutreachLead, action:str, payload:Dict[str,Any], result:Dict[str,Any], status:int=200):
+    # Business mutation and audit append commit together for database-only actions.
     _audit(lead.id,action,payload,result)
+    db.session.commit()
     return jsonify(result),status
 
 
@@ -276,6 +280,9 @@ def _suppress(email: str, reason: str="opt_out", message_id: str="", thread_id: 
 
 
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
+    qualification=_qualification_gate(lead)
+    if not qualification.get("ok"):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
     address=normalize_email(lead.contact_email)
     sg=suppression_gate(address,_is_suppressed(address))
     if not sg.get("ok"):
@@ -329,6 +336,10 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="REPLY_REQUIRES_REVIEW"
         return {"ok":True,"stage":"unclear","classification":classification}
 
+    qualification=_qualification_gate(lead)
+    if not qualification.get("ok"):
+        lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="QUALIFICATION_REQUIRED_FOR_BOOKING"
+        return {"ok":False,"stage":"booking_blocked","classification":classification,"qualification":qualification}
     booking=extract_explicit_booking(text)
     booking["attendee_email"]=lead.contact_email
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
@@ -580,17 +591,17 @@ def operator_control(lead_id:int):
         gate=_qualification_gate(lead)
         if not gate.get("ok"):
             return _control_response(lead,action,payload,{"ok":False,"error":"qualification gate failed","qualification":gate},409)
-        lead.status="qualified";lead.last_error="";db.session.commit()
+        lead.status="qualified";lead.last_error=""
         return _control_response(lead,action,payload,{"ok":True,"action":"approve","lead":_serialize(lead)})
     if action=="reject":
-        lead.status="rejected";lead.follow_up_due_at=None;lead.last_error=_clean(payload.get("reason") or "OPERATOR_REJECTED",500);db.session.commit()
+        lead.status="rejected";lead.follow_up_due_at=None;lead.last_error=_clean(payload.get("reason") or "OPERATOR_REJECTED",500)
         return _control_response(lead,action,payload,{"ok":True,"action":"reject","lead":_serialize(lead)})
     if action=="suppress":
         _suppress(lead.contact_email,"operator_suppressed",thread_id=lead.gmail_thread_id)
-        lead.status="opted_out";lead.follow_up_due_at=None;lead.last_error="";db.session.commit()
+        lead.status="opted_out";lead.follow_up_due_at=None;lead.last_error=""
         return _control_response(lead,action,payload,{"ok":True,"action":"suppress","lead":_serialize(lead)})
     if action=="close":
-        lead.status="closed";lead.follow_up_due_at=None;lead.last_error="";db.session.commit()
+        lead.status="closed";lead.follow_up_due_at=None;lead.last_error=""
         return _control_response(lead,action,payload,{"ok":True,"action":"close","lead":_serialize(lead)})
     if action=="reconcile":
         attempt=OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachBookingAttempt.updated_at.desc()).first()
@@ -599,9 +610,9 @@ def operator_control(lead_id:int):
         existing=get_event(attempt.event_id)
         exact=bool(existing.get("ok") and existing.get("found") and existing.get("start")==attempt.start and existing.get("end")==attempt.end)
         if exact:
-            attempt.status="confirmed";attempt.event_url=_clean(existing.get("event_url"),1800);attempt.error="";lead.status="booked";lead.last_error="";db.session.commit()
+            attempt.status="confirmed";attempt.event_url=_clean(existing.get("event_url"),1800);attempt.error="";lead.status="booked";lead.last_error="";db.session.flush()
             return _control_response(lead,action,payload,{"ok":True,"action":"reconcile","event_id":attempt.event_id,"lead":_serialize(lead)})
-        attempt.status="uncertain";attempt.error=_clean(existing.get("error") or "RECONCILIATION_MISMATCH",2000);lead.last_error=attempt.error;db.session.commit()
+        attempt.status="uncertain";attempt.error=_clean(existing.get("error") or "RECONCILIATION_MISMATCH",2000);lead.last_error=attempt.error;db.session.flush()
         return _control_response(lead,action,payload,{"ok":False,"error":attempt.error},409)
     if action=="retry":
         attempt=OutreachSendAttempt.query.filter_by(lead_id=lead.id).order_by(OutreachSendAttempt.updated_at.desc()).first()
@@ -613,7 +624,7 @@ def operator_control(lead_id:int):
         # Explicit operator retry gets a new sequence identity; uncertain/pending sends are never retried.
         result=_safe_send(lead,kind="operator_retry",sequence=attempt.id,subject=lead.subject,body=lead.body)
         if result.get("ok"):
-            receipt=result.get("send_receipt") or {};lead.status="sent";lead.gmail_message_id=_clean(receipt.get("message_id"),255);lead.gmail_thread_id=_clean(receipt.get("thread_id"),255);lead.sent_at=datetime.utcnow();lead.last_error="";db.session.commit()
+            receipt=result.get("send_receipt") or {};lead.status="sent";lead.gmail_message_id=_clean(receipt.get("message_id"),255);lead.gmail_thread_id=_clean(receipt.get("thread_id"),255);lead.sent_at=datetime.utcnow();lead.last_error="";db.session.flush()
         return _control_response(lead,action,payload,{"ok":result.get("ok") is True,"action":"retry","execution":result,"lead":_serialize(lead)},200 if result.get("ok") else 409)
     return _control_response(lead,action,payload,{"ok":False,"error":"unsupported operator action"},400)
 
@@ -819,11 +830,7 @@ def send_outreach(lead_id: int):
 def process_followups():
     cron_token=os.environ.get("OUTREACH_CRON_TOKEN","").strip()
     supplied=request.headers.get("X-Outreach-Cron-Token","")
-    if cron_token and supplied != cron_token:
-        # Health/deploy probes must never execute sends. Return a safe no-op receipt
-        # for the explicit smoke-test user agent instead of polluting production with 401s.
-        if request.headers.get("User-Agent","").startswith("AI-Ops-Smoke-Test/"):
-            return jsonify({"ok":True,"smoke_test":True,"execution":"skipped","processed_count":0,"processed":[]}),200
+    if not cron_token or not supplied or not hmac.compare_digest(cron_token,supplied):
         return jsonify({"ok":False,"error":"unauthorized"}),401
 
     now = datetime.utcnow()
@@ -908,8 +915,13 @@ def process_followups():
 
 @app.route("/api/outreach/leads/<int:lead_id>/process-reply-booking", methods=["POST"])
 def process_reply_booking(lead_id: int):
-    """Explicit production handoff. No booking occurs unless validated interested + booking-ready."""
+    """Explicit production handoff. Authenticated and qualification-gated."""
+    if not (_operator_session_authorized() or _operator_authorized()):
+        return jsonify({"ok":False,"error":"operator authentication required"}),401
     lead=OutreachLead.query.get_or_404(lead_id)
+    qualification=_qualification_gate(lead)
+    if not qualification.get("ok"):
+        return jsonify({"ok":False,"stage":"blocked","error":"qualification required for booking","qualification":qualification}),409
     data=request.get_json(silent=True) or {}
     reply_text=_clean(data.get("reply_text"),8000)
     proposed_classification=data.get("classification") if isinstance(data.get("classification"),dict) else {"classification":data.get("classification")}
