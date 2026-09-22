@@ -9,6 +9,7 @@ from flask import jsonify, request
 from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
+from src.followup_control import classify_inbound, followup_permission
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -195,40 +196,29 @@ def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> 
         return {"ok": False, "error": _clean(exc, 1000)}
 
 
-def _gmail_thread_has_reply(thread_id: str) -> Dict[str, Any]:
+def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
+    """Read Gmail thread and deterministically detect inbound reply/opt-out."""
     try:
         token = gmail_access_token()
         response = requests.get(
             f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",
             headers={"Authorization": f"Bearer {token}"},
-            params={"format": "metadata", "metadataHeaders": ["From", "To"]},
+            params={"format": "full"},
             timeout=30,
         )
         if not response.ok:
-            return {"ok": False, "replied": False, "error": f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
-        data = response.json()
-        messages = data.get("messages") or []
-        if len(messages) <= 1:
-            return {"ok": True, "replied": False, "raw": data}
-
-        sender = (os.environ.get("GMAIL_FROM_EMAIL") or "").lower().strip()
-        replied = False
-        for message in messages[1:]:
-            headers = {
-                str(h.get("name") or "").lower(): str(h.get("value") or "")
-                for h in ((message.get("payload") or {}).get("headers") or [])
-            }
-            from_value = headers.get("from", "").lower()
-            if sender:
-                if sender not in from_value:
-                    replied = True
-                    break
-            else:
-                replied = True
-                break
-        return {"ok": True, "replied": replied, "raw": data}
+            return {"ok": False, "replied": False, "opted_out": False, "stop": True, "reason": "REPLY_CHECK_FAILED", "error": f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
+        data=response.json()
+        rows=[]
+        for message in data.get("messages") or []:
+            headers={str(h.get("name") or "").lower():str(h.get("value") or "") for h in ((message.get("payload") or {}).get("headers") or [])}
+            rows.append({"message_id":message.get("id"),"from":headers.get("from",""),"snippet":message.get("snippet") or ""})
+        sender=(os.environ.get("GMAIL_FROM_EMAIL") or "").lower().strip()
+        if not sender:
+            return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"SENDER_IDENTITY_UNCONFIGURED","error":"GMAIL_FROM_EMAIL is required for deterministic reply detection."}
+        return classify_inbound(rows,sender_email=sender)
     except Exception as exc:
-        return {"ok": False, "replied": False, "error": _clean(exc, 1000)}
+        return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":_clean(exc,1000)}
 
 
 @app.route("/api/outreach/leads", methods=["POST"])
@@ -331,6 +321,10 @@ def send_outreach(lead_id: int):
 
 @app.route("/api/outreach/process-followups", methods=["POST"])
 def process_followups():
+    cron_token=os.environ.get("OUTREACH_CRON_TOKEN","").strip()
+    if cron_token and request.headers.get("X-Outreach-Cron-Token","") != cron_token:
+        return jsonify({"ok":False,"error":"unauthorized"}),401
+
     now = datetime.utcnow()
     leads = OutreachLead.query.filter(
         OutreachLead.status.in_(["sent", "followup_sent"]),
@@ -339,63 +333,78 @@ def process_followups():
         OutreachLead.replied_at.is_(None),
     ).all()
 
-    processed = []
+    processed=[]
     for lead in leads:
-        if not lead.gmail_thread_id:
-            processed.append({"id": lead.id, "status": "skipped", "reason": "missing Gmail thread id"})
+        reply=_gmail_thread_reply_state(lead.gmail_thread_id) if lead.gmail_thread_id else {
+            "ok":False,"stop":True,"reason":"MISSING_THREAD_ID","error":"missing Gmail thread id"
+        }
+        if reply.get("stop"):
+            if reply.get("replied"):
+                lead.replied_at=now
+                lead.status="opted_out" if reply.get("opted_out") else "responded"
+                lead.follow_up_due_at=None
+                lead.last_error=""
+                processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reason":reply.get("reason")})
+            else:
+                lead.last_error=reply.get("error") or reply.get("reason") or "reply check failed"
+                lead.updated_at=now
+                processed.append({"id":lead.id,"status":"error","hard_stop":True,"reason":reply.get("reason")})
             continue
 
-        reply = _gmail_thread_has_reply(lead.gmail_thread_id)
-        if not reply.get("ok"):
-            lead.last_error = reply.get("error") or "Gmail reply check failed"
-            lead.updated_at = now
-            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+        permission=followup_permission(
+            reply_state=reply,follow_up_count=lead.follow_up_count,max_followups=MAX_FOLLOWUPS,
+            thread_id=lead.gmail_thread_id,contact_email=lead.contact_email,
+        )
+        if not permission.get("allowed"):
+            if "MAX_FOLLOWUPS_REACHED" in permission.get("reasons",[]):
+                lead.status="completed_no_reply";lead.follow_up_due_at=None;lead.last_error=""
+            else:
+                lead.last_error=", ".join(permission.get("reasons") or [])
+            lead.updated_at=now
+            processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reasons":permission.get("reasons")})
             continue
 
-        if reply.get("replied"):
-            lead.status = "responded"
-            lead.replied_at = now
-            lead.follow_up_due_at = None
-            lead.last_error = ""
-            lead.updated_at = now
-            processed.append({"id": lead.id, "status": "responded"})
-            continue
-
-        if lead.follow_up_count >= MAX_FOLLOWUPS:
-            lead.status = "completed_no_reply"
-            lead.follow_up_due_at = None
-            lead.updated_at = now
-            processed.append({"id": lead.id, "status": "completed_no_reply"})
-            continue
-
-        next_number = lead.follow_up_count + 1
-        drafted = _draft_email(lead, follow_up_number=next_number)
+        next_number=lead.follow_up_count+1
+        drafted=_draft_email(lead,follow_up_number=next_number)
         if not drafted.get("ok"):
-            lead.last_error = drafted.get("error") or "OpenAI follow-up drafting failed"
-            lead.updated_at = now
-            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+            lead.last_error=drafted.get("error") or "OpenAI follow-up drafting failed"
+            lead.updated_at=now
+            processed.append({"id":lead.id,"status":"error","error":lead.last_error})
             continue
 
-        sent = _gmail_send(lead.contact_email, drafted["subject"], drafted["body"], lead.gmail_thread_id)
-        if not sent.get("ok"):
-            lead.last_error = sent.get("error") or "Gmail follow-up send failed"
-            lead.updated_at = now
-            processed.append({"id": lead.id, "status": "error", "error": lead.last_error})
+        final_reply=_gmail_thread_reply_state(lead.gmail_thread_id)
+        if final_reply.get("stop"):
+            if final_reply.get("replied"):
+                lead.replied_at=now
+                lead.status="opted_out" if final_reply.get("opted_out") else "responded"
+                lead.follow_up_due_at=None
+                lead.last_error=""
+            else:
+                lead.last_error=final_reply.get("error") or final_reply.get("reason") or "final reply check failed"
+            lead.updated_at=now
+            processed.append({"id":lead.id,"status":lead.status,"hard_stop":True,"reason":final_reply.get("reason")})
             continue
 
-        lead.subject = drafted["subject"]
-        lead.body = drafted["body"]
-        lead.gmail_message_id = _clean(sent.get("message_id"), 255)
-        lead.gmail_thread_id = _clean(sent.get("thread_id") or lead.gmail_thread_id, 255)
-        lead.follow_up_count = next_number
-        lead.follow_up_due_at = now + timedelta(days=SECOND_FOLLOWUP_DAYS)
-        lead.status = "followup_sent"
-        lead.last_error = ""
-        lead.updated_at = now
-        processed.append({"id": lead.id, "status": "followup_sent", "follow_up_count": next_number})
+        send_lead={**_serialize(lead),"subject":drafted["subject"],"body":drafted["body"]}
+        execution=execute_outreach_send(send_lead,_gmail_send)
+        if not execution.get("ok"):
+            reasons=((execution.get("gate") or {}).get("reasons") or [])+((execution.get("send_receipt") or {}).get("reasons") or [])
+            lead.last_error=", ".join(reasons) or "Follow-up execution failed"
+            lead.updated_at=now
+            processed.append({"id":lead.id,"status":"error","error":lead.last_error})
+            continue
+
+        receipt=execution["send_receipt"]
+        lead.subject=drafted["subject"];lead.body=drafted["body"]
+        lead.gmail_message_id=_clean(receipt.get("message_id"),255)
+        lead.gmail_thread_id=_clean(receipt.get("thread_id") or lead.gmail_thread_id,255)
+        lead.follow_up_count=next_number
+        lead.follow_up_due_at=now+timedelta(days=SECOND_FOLLOWUP_DAYS)
+        lead.status="followup_sent";lead.last_error="";lead.updated_at=now
+        processed.append({"id":lead.id,"status":"followup_sent","follow_up_count":next_number})
 
     db.session.commit()
-    return jsonify({"ok": True, "processed_count": len(processed), "processed": processed})
+    return jsonify({"ok":True,"processed_count":len(processed),"processed":processed})
 
 
 @app.route("/api/outreach/leads", methods=["GET"])
