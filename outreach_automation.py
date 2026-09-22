@@ -16,6 +16,7 @@ from src.outreach_safety import normalize_email, send_key, suppression_gate, sen
 from src.gmail_reply_parser import message_to_evidence
 from src.automatic_reply_router import classify_reply, extract_explicit_booking
 from src.booking_safety import booking_key, google_event_id, attempt_gate
+from src.qualification import qualify_lead, QUALIFIED
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -108,6 +109,17 @@ class OutreachBookingAttempt(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class OutreachQualificationReceipt(db.Model):
+    __tablename__ = "outreach_qualification_receipt"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, unique=True, index=True)
+    status = db.Column(db.String(50), nullable=False)
+    qualified = db.Column(db.Boolean, nullable=False, default=False)
+    ok = db.Column(db.Boolean, nullable=False, default=False)
+    receipt_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
 with app.app_context():
     db.create_all()
 
@@ -145,6 +157,42 @@ def _serialize(lead: OutreachLead) -> Dict[str, Any]:
         "created_at": lead.created_at.isoformat() if lead.created_at else None,
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
     }
+
+
+def _qualification_gate(lead: OutreachLead) -> Dict[str, Any]:
+    row=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
+    if row is None:
+        return {"ok":False,"qualified":False,"status":"Needs More Evidence","reason_codes":["MISSING_QUALIFICATION_RECEIPT"]}
+    try:receipt=json.loads(row.receipt_json or "{}")
+    except Exception:receipt={}
+    valid=bool(row.ok is True and row.qualified is True and row.status==QUALIFIED and receipt.get("ok") is True and receipt.get("qualified") is True and receipt.get("status")==QUALIFIED)
+    if not valid:
+        return {"ok":False,"qualified":False,"status":row.status,"reason_codes":receipt.get("reason_codes") or ["QUALIFICATION_NOT_VALIDATED"]}
+    return {"ok":True,"qualified":True,"status":QUALIFIED,"receipt":receipt}
+
+
+def _store_qualification(lead: OutreachLead, data: Dict[str, Any]) -> Dict[str, Any]:
+    validated=data.get("validated") if isinstance(data.get("validated"),dict) else {}
+    context=data.get("qualification_context") if isinstance(data.get("qualification_context"),dict) else {}
+    # Bind critical identity/contact fields to the actual lead; caller cannot qualify one
+    # identity then send to a different address.
+    validated={**validated,
+        "company_name":lead.company,
+        "email":normalize_email(lead.contact_email),
+        "email_source_url":_clean(validated.get("email_source_url"),1800),
+        "evidence":data.get("evidence") if isinstance(data.get("evidence"),list) else validated.get("evidence",[]),
+    }
+    receipt=qualify_lead(validated,verification_ok=bool(data.get("verification_ok") is True),context=context)
+    row=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
+    if row is None:
+        row=OutreachQualificationReceipt(lead_id=lead.id,status=receipt["status"],qualified=receipt["qualified"],ok=receipt["ok"],receipt_json=json.dumps(receipt))
+        db.session.add(row)
+    else:
+        row.status=receipt["status"];row.qualified=receipt["qualified"];row.ok=receipt["ok"];row.receipt_json=json.dumps(receipt)
+    lead.status="qualified" if receipt.get("ok") else ("rejected" if receipt.get("status")=="Not Qualified" else "needs_evidence")
+    lead.last_error="" if receipt.get("ok") else ", ".join(receipt.get("reason_codes") or [])
+    db.session.commit()
+    return receipt
 
 
 def _is_suppressed(email: str) -> bool:
@@ -453,18 +501,20 @@ def create_outreach_lead():
         evidence_json=json.dumps(evidence),
         score=score,
         verification=_clean(data.get("verification"), 100),
-        status=_rank_status(score),
+        status="needs_evidence",
     )
     db.session.add(lead)
     db.session.commit()
-    return jsonify({"lead": _serialize(lead), "auto_send_eligible": lead.status == "qualified"}), 201
+    receipt=_store_qualification(lead,data)
+    return jsonify({"lead": _serialize(lead), "qualification":receipt, "auto_send_eligible": receipt.get("ok") is True}), 201
 
 
 @app.route("/api/outreach/leads/<int:lead_id>/draft", methods=["POST"])
 def draft_outreach(lead_id: int):
     lead = OutreachLead.query.get_or_404(lead_id)
-    if lead.status == "rejected":
-        return jsonify({"error": "lead is below the review threshold and cannot be auto-drafted"}), 409
+    qualification=_qualification_gate(lead)
+    if not qualification.get("ok"):
+        return jsonify({"error":"evidence-validated qualification is required before drafting","qualification":qualification}),409
 
     drafted = _draft_email(lead)
     if not drafted.get("ok"):
@@ -492,8 +542,9 @@ def draft_outreach(lead_id: int):
 @app.route("/api/outreach/leads/<int:lead_id>/send", methods=["POST"])
 def send_outreach(lead_id: int):
     lead = OutreachLead.query.get_or_404(lead_id)
-    if lead.score < AUTO_SEND_MIN_SCORE:
-        return jsonify({"error": f"lead score must be at least {AUTO_SEND_MIN_SCORE} for automatic send"}), 409
+    qualification=_qualification_gate(lead)
+    if not qualification.get("ok"):
+        return jsonify({"error":"evidence-validated qualification is required before send","qualification":qualification}),409
     if not lead.contact_email:
         return jsonify({"error": "verified contact_email is required before send"}), 409
 
