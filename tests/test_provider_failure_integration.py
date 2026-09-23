@@ -41,7 +41,7 @@ def test_gmail_provider_failure_becomes_uncertain_and_blocks_duplicate(env,monke
 
 def test_two_workers_same_send_identity_do_not_create_two_attempt_rows(env,monkeypatch):
     x=lead()
-    monkeypatch.setattr(oa,"_gmail_send",lambda payload:{"ok":False,"error":"injected"})
+    monkeypatch.setattr(oa,"_gmail_send",lambda *args:{"ok":False,"error":"injected"})
     oa._safe_send(x,kind="initial",sequence=0,subject="s",body="b")
     oa._safe_send(x,kind="initial",sequence=0,subject="s",body="b")
     assert oa.OutreachSendAttempt.query.count()==1
@@ -51,8 +51,7 @@ def test_calendar_create_failure_is_persisted_uncertain_for_reconciliation(env,m
     x=lead()
     text="Interested. Book 2026-10-01T14:00:00 to 2026-10-01T14:30:00 America/New_York"
     monkeypatch.setattr(oa,"extract_explicit_booking",lambda _:{"start":"2026-10-01T14:00:00","end":"2026-10-01T14:30:00","timezone":"America/New_York"})
-    monkeypatch.setattr(oa,"check_availability",lambda req:{"ok":True,"available":True,"start":req.get("start"),"end":req.get("end")})
-    monkeypatch.setattr(oa,"create_event",lambda *a,**k:{"ok":False,"error":"injected lost calendar response"})
+    monkeypatch.setattr(oa,"process_reply_to_booking",lambda **kwargs:{"ok":False,"stage":"create_failed","booking_execution":{"booking_receipt":{},"error":"injected lost calendar response"}})
     result=oa._route_persisted_reply(x,{"reply_evidence":[{"text":text,"message_id":"reply-1"}]},datetime.utcnow())
     attempt=oa.OutreachBookingAttempt.query.one()
     assert result["ok"] is False
@@ -64,8 +63,7 @@ def test_pending_or_uncertain_booking_reconciles_before_any_recreate(env,monkeyp
     text="Interested. Book it"
     monkeypatch.setattr(oa,"extract_explicit_booking",lambda _:{"start":"2026-10-01T14:00:00","end":"2026-10-01T14:30:00","timezone":"America/New_York"})
     # First execution makes the durable attempt uncertain.
-    monkeypatch.setattr(oa,"check_availability",lambda req:{"ok":True,"available":True,"start":req.get("start"),"end":req.get("end")})
-    monkeypatch.setattr(oa,"create_event",lambda *a,**k:{"ok":False,"error":"lost response"})
+    monkeypatch.setattr(oa,"process_reply_to_booking",lambda **kwargs:{"ok":False,"stage":"create_failed","booking_execution":{"booking_receipt":{},"error":"lost response"}})
     reply={"reply_evidence":[{"text":text,"message_id":"reply-1"}]}
     oa._route_persisted_reply(x,reply,datetime.utcnow())
     attempt=oa.OutreachBookingAttempt.query.one()
