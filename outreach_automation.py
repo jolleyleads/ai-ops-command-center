@@ -896,7 +896,8 @@ def operator_dashboard():
         return redirect(url_for("operator_login"),303)
     rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
     records=[_dashboard_record(x) for x in rows]
-    attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))\n    recovery=_recovery_queue();recovery_count=len(recovery)
+    attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))
+    recovery=_recovery_queue();recovery_count=len(recovery)
     def h(v):
         import html
         return html.escape(str(v if v is not None else ""))
