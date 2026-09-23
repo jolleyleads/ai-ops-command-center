@@ -437,9 +437,22 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     # Pending is committed before provider execution. If the process dies after Gmail
     # accepts the message, the next run fails closed instead of duplicating the send.
     payload={**_serialize(lead),"contact_email":address,"subject":subject,"body":body}
-    execution=execute_outreach_send(payload,_gmail_send)
-    if not execution.get("ok"):
-        attempt.status="uncertain" if execution.get("stage")=="send_failed" else "failed"
+    command_payload={"recipient":address,"kind":kind,"sequence":sequence,"subject":subject,"body":body,"send_key":key}
+    cmd=_enqueue_external_command(lead,"gmail_send",command_payload)
+    if cmd.status!="pending":
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["EXTERNAL_COMMAND_NOT_PENDING"]},"command_status":cmd.status}
+    token=_claim_external_command(cmd)
+    if not token:
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["EXTERNAL_COMMAND_ALREADY_CLAIMED"]}}
+    try:
+        execution=execute_outreach_send(payload,_gmail_send)
+        completion=_finish_external_command(cmd.id,token,execution)
+    except BaseException as exc:
+        _finish_external_command(cmd.id,token,None,exc)
+        attempt.status="uncertain";attempt.error="PROVIDER_EXCEPTION";attempt.updated_at=datetime.utcnow();db.session.commit()
+        return {"ok":False,"stage":"send_failed","error":"provider execution became uncertain"}
+    if completion.get("status")!="succeeded":
+        attempt.status="uncertain" if completion.get("status")=="uncertain" else "failed"
         attempt.error=_clean(execution,2000);attempt.updated_at=datetime.utcnow();db.session.commit()
         return execution
     receipt=execution["send_receipt"]
