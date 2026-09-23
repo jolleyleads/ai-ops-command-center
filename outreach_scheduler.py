@@ -39,4 +39,7 @@ def start():
         thread.start()
 
 
-start()
+# Production uses the single Render cron job. In-process scheduling is opt-in only
+# for environments that intentionally do not run the cron service.
+if os.getenv("OUTREACH_INPROCESS_SCHEDULER","0").strip()=="1":
+    start()
