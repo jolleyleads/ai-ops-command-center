@@ -223,10 +223,22 @@ def _commit_unique_or_existing(model, lookup: Dict[str, Any]):
         return model.query.filter_by(**lookup).first()
 
 
-def _qualification_signing_key() -> bytes:
-    # Server-only key. Reuse the operator secret so deployment needs no new secret;
-    # rotating it invalidates all old qualification receipts fail-closed.
-    return os.environ.get("OPERATOR_CONTROL_TOKEN","").encode("utf-8")
+def _qualification_keyring() -> tuple[str,Dict[str,bytes]]:
+    active=_clean(os.environ.get("QUALIFICATION_SIGNING_KEY_VERSION"),64)
+    keys:Dict[str,bytes]={}
+    raw=os.environ.get("QUALIFICATION_SIGNING_KEYS","")
+    # Format: version=secret,version2=secret2. Secrets never enter receipts/logs.
+    for item in raw.split(","):
+        if "=" not in item:continue
+        version,secret=item.split("=",1)
+        version=_clean(version,64);secret=secret.strip()
+        if version and secret:keys[version]=secret.encode("utf-8")
+    return active,keys
+
+def _qualification_signing_key(version: str|None=None) -> tuple[str,bytes]:
+    active,keys=_qualification_keyring()
+    selected=_clean(version,64) if version else active
+    return selected,keys.get(selected,b"")
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value,sort_keys=True,separators=(",",":"),default=str)
@@ -260,10 +272,10 @@ def _qualification_evidence_digest(lead: OutreachLead, validated: Dict[str,Any],
     return hashlib.sha256(_canonical_json(bound).encode()).hexdigest()
 
 def _sign_qualification(receipt: Dict[str,Any], evidence_digest: str) -> Dict[str,Any]:
-    key=_qualification_signing_key()
-    if not key:
+    key_version,key=_qualification_signing_key()
+    if not key_version or not key:
         return {**receipt,"ok":False,"qualified":False,"status":"Needs More Evidence","reason_codes":["QUALIFICATION_SIGNING_KEY_MISSING"],"evidence_digest":evidence_digest}
-    payload={**receipt,"evidence_digest":evidence_digest,"signature_version":"hmac-sha256-v1"}
+    payload={**receipt,"evidence_digest":evidence_digest,"signature_version":"hmac-sha256-v1","key_version":key_version}
     sig=hmac.new(key,_canonical_json(payload).encode(),hashlib.sha256).hexdigest()
     return {**payload,"server_signature":sig}
 
@@ -275,8 +287,9 @@ def _qualification_gate(lead: OutreachLead) -> Dict[str, Any]:
     except Exception:receipt={}
     signature=_clean(receipt.get("server_signature"),128)
     unsigned={k:v for k,v in receipt.items() if k!="server_signature"}
-    key=_qualification_signing_key()
-    expected=hmac.new(key,_canonical_json(unsigned).encode(),hashlib.sha256).hexdigest() if key else ""
+    key_version=_clean(receipt.get("key_version"),64)
+    resolved_version,key=_qualification_signing_key(key_version)
+    expected=hmac.new(key,_canonical_json(unsigned).encode(),hashlib.sha256).hexdigest() if key and resolved_version==key_version else ""
     validated,context,_=_server_qualification_inputs(lead)
     current_digest=_qualification_evidence_digest(lead,validated,context)
     signature_ok=bool(signature and expected and hmac.compare_digest(signature,expected))

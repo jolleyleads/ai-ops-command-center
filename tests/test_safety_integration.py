@@ -15,6 +15,8 @@ import smart_search  # register remaining application routes before any test cli
 def env(monkeypatch):
     oa.app.config.update(TESTING=True)
     monkeypatch.setenv("OPERATOR_CONTROL_TOKEN", "operator-test-token")
+    monkeypatch.setenv("QUALIFICATION_SIGNING_KEY_VERSION","v1")
+    monkeypatch.setenv("QUALIFICATION_SIGNING_KEYS","v1=qualification-signing-secret")
     monkeypatch.setenv("OUTREACH_CRON_TOKEN", "cron-test-token")
     with oa.app.app_context():
         oa.db.session.remove()
