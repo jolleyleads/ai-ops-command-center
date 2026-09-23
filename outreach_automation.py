@@ -231,6 +231,17 @@ def _expire_stale_external_commands(now:datetime|None=None) -> int:
     if rows:db.session.commit()
     return len(rows)
 
+def _reconcile_external_command(cmd:ExternalSideEffectCommand, found:bool, proof:Dict[str,Any]|None=None) -> Dict[str,Any]:
+    if cmd.status!="uncertain":return {"ok":False,"stage":"reconciliation_not_allowed","status":cmd.status}
+    proof=proof if isinstance(proof,dict) else {}
+    cmd.status="reconciled" if found and proof else "failed"
+    cmd.provider_receipt_json=_canonical_json(proof)
+    cmd.error="" if cmd.status=="reconciled" else "RECONCILIATION_PROVED_NO_SIDE_EFFECT"
+    cmd.updated_at=datetime.utcnow()
+    _audit_actor(cmd.lead_id,"external_command_reconciled",{"command_key":cmd.idempotency_key},{"status":cmd.status,"proof":proof},"system")
+    db.session.commit()
+    return {"ok":cmd.status=="reconciled","status":cmd.status,"command_id":cmd.id}
+
 def _calendar_create_via_command(lead:OutreachLead, req:Dict[str,Any], *, summary:str, description:str, idempotency_key:str) -> Dict[str,Any]:
     payload={"request":req,"summary":summary,"description":description,"provider_idempotency_key":idempotency_key}
     cmd=_enqueue_external_command(lead,"calendar_create",payload)
