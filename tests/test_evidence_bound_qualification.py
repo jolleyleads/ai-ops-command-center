@@ -7,7 +7,7 @@ import smart_search
 
 @pytest.fixture()
 def env(monkeypatch):
-    monkeypatch.setenv("OPERATOR_CONTROL_TOKEN","qualification-signing-secret")
+    monkeypatch.setenv("OPERATOR_CONTROL_TOKEN","operator-test-token")\n    monkeypatch.setenv("QUALIFICATION_SIGNING_KEY_VERSION","v1")\n    monkeypatch.setenv("QUALIFICATION_SIGNING_KEYS","v1=qualification-signing-secret")\n    monkeypatch.setenv("QUALIFICATION_SIGNING_KEY_VERSION","v1")\n    monkeypatch.setenv("QUALIFICATION_SIGNING_KEYS","v1=qualification-signing-secret")
     with oa.app.app_context():
         oa.db.session.remove();oa.db.drop_all();oa.db.create_all()
         yield
@@ -65,7 +65,7 @@ def test_changed_evidence_invalidates_existing_receipt(env):
 
 
 def test_missing_signing_key_fails_closed(env,monkeypatch):
-    row=make_lead();monkeypatch.delenv("OPERATOR_CONTROL_TOKEN",raising=False)
+    row=make_lead();monkeypatch.delenv("QUALIFICATION_SIGNING_KEYS",raising=False)
     receipt=oa._store_qualification(row,{})
     assert receipt["ok"] is False
     assert "QUALIFICATION_SIGNING_KEY_MISSING" in receipt["reason_codes"]
