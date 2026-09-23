@@ -26,8 +26,8 @@ def lead():
 
 def test_gmail_provider_failure_becomes_uncertain_and_blocks_duplicate(env,monkeypatch):
     x=lead();calls=[]
-    def failed_provider(payload):
-        calls.append(payload)
+    def failed_provider(*args):
+        calls.append(args)
         return {"ok":False,"error":"injected lost provider response"}
     monkeypatch.setattr(oa,"_gmail_send",failed_provider)
     first=oa._safe_send(x,kind="initial",sequence=0,subject="s",body="b")
