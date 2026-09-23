@@ -916,7 +916,8 @@ def operator_control_form(lead_id:int):
     if not _operator_session_authorized():
         return redirect(url_for("operator_login"),303)
     action=_clean(request.form.get("action"),50).lower()
-    if not _csrf_ok(): return Response("CSRF validation failed",status=403)\n    lead=OutreachLead.query.get_or_404(lead_id)
+    if not _csrf_ok(): return Response("CSRF validation failed",status=403)
+    lead=OutreachLead.query.get_or_404(lead_id)
     # Reuse the same deterministic safety gates as the JSON control path without JavaScript.
     with app.test_request_context(f"/api/operator/leads/{lead_id}/control",method="POST",json={"action":action},headers={"X-Operator-Token":session["operator_token"],"X-Operator-Actor":"dashboard-session"}):
         response=operator_control(lead_id)
