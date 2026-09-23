@@ -860,19 +860,25 @@ def _operator_login_page(error: str = "") -> Response:
 def operator_login():
     if request.method=="GET":
         return _operator_login_page()
+    if not _csrf_ok():
+        return _operator_login_page("Invalid or expired form token."),403
     expected=os.environ.get("OPERATOR_CONTROL_TOKEN","").strip()
     supplied=_clean(request.form.get("token"),500)
     if not expected or not supplied or not hmac.compare_digest(expected,supplied):
         session.clear()
         return _operator_login_page("Invalid operator token."),401
-    session["operator_token"]=supplied
-    session.permanent=False
+    session.clear()
+    session["operator_auth"]=_session_proof()
+    session["csrf_token"]=secrets.token_urlsafe(32)
+    session.permanent=True
     return redirect(url_for("operator_dashboard"),303)
 
 
 @app.route("/operator/logout",methods=["POST"])
 def operator_logout():
-    session.pop("operator_token",None)
+    if not _operator_session_authorized(): return redirect(url_for("operator_login"),303)
+    if not _csrf_ok(): return Response("CSRF validation failed",status=403)
+    session.clear()
     return redirect(url_for("operator_login"),303)
 
 
