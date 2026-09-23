@@ -2,6 +2,7 @@ import json
 import os
 import hashlib
 import hmac
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
@@ -28,6 +29,8 @@ REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
 FIRST_FOLLOWUP_DAYS = int(os.getenv("OUTREACH_FIRST_FOLLOWUP_DAYS", "3"))
 SECOND_FOLLOWUP_DAYS = int(os.getenv("OUTREACH_SECOND_FOLLOWUP_DAYS", "4"))
 MAX_FOLLOWUPS = int(os.getenv("OUTREACH_MAX_FOLLOWUPS", "2"))
+
+app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SESSION_COOKIE_SECURE=True,PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
 
 
 class OutreachLead(db.Model):
@@ -129,6 +132,16 @@ class ExternalSideEffectCommand(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class FollowupSchedulerRun(db.Model):
+    __tablename__ = "followup_scheduler_run"
+    id = db.Column(db.Integer, primary_key=True)
+    window_key = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default="running")
+    processed_json = db.Column(db.Text, nullable=False, default="[]")
+    error = db.Column(db.Text, default="")
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
 
 class OutreachQualificationReceipt(db.Model):
     __tablename__ = "outreach_qualification_receipt"
@@ -805,17 +818,42 @@ def operator_control(lead_id:int):
     return _control_response(lead,action,payload,{"ok":False,"error":"unsupported operator action"},400)
 
 
-def _operator_session_authorized() -> bool:
+def _session_proof() -> str:
     expected=os.environ.get("OPERATOR_CONTROL_TOKEN","").strip()
-    supplied=str(session.get("operator_token") or "").strip()
+    return hmac.new(expected.encode(),"operator-session-v1".encode(),hashlib.sha256).hexdigest() if expected else ""
+
+def _operator_session_authorized() -> bool:
+    expected=_session_proof()
+    supplied=str(session.get("operator_auth") or "")
     return bool(expected and supplied and hmac.compare_digest(expected,supplied))
+
+def _csrf_token() -> str:
+    token=str(session.get("csrf_token") or "")
+    if not token:
+        token=secrets.token_urlsafe(32);session["csrf_token"]=token
+    return token
+
+def _csrf_ok() -> bool:
+    expected=str(session.get("csrf_token") or "")
+    supplied=str(request.form.get("csrf_token") or request.headers.get("X-CSRF-Token") or "")
+    return bool(expected and supplied and hmac.compare_digest(expected,supplied))
+
+@app.after_request
+def _secure_operator_responses(response):
+    if request.path.startswith("/operator") or request.path.startswith("/api/operator"):
+        response.headers["Cache-Control"]="no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"]="no-cache"
+        response.headers["X-Frame-Options"]="DENY"
+        response.headers["X-Content-Type-Options"]="nosniff"
+        response.headers["Referrer-Policy"]="no-referrer"
+    return response
 
 
 def _operator_login_page(error: str = "") -> Response:
     message=f'<p class="danger">{error}</p>' if error else ''
     return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Ops Operator Login</title><style>body{{font-family:system-ui,-apple-system,sans-serif;background:#0b1020;color:#e8ecf5;margin:0;padding:28px}}.box{{max-width:420px;margin:10vh auto;background:#141b2d;border:1px solid #27304a;border-radius:14px;padding:22px}}input,button{{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px;border:1px solid #394563}}input{{background:#0b1020;color:#fff}}button{{background:#fff;color:#101526;font-weight:700}}.muted{{color:#9aa7c2}}.danger{{color:#ffb4b4}}</style></head>
-<body><div class="box"><h2>AI Ops Command Center</h2><p class="muted">Operator authentication</p>{message}<form method="post" action="/operator/login"><input name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Operator token" required><button type="submit">Sign in</button></form></div></body></html>""",mimetype="text/html")
+<body><div class="box"><h2>AI Ops Command Center</h2><p class="muted">Operator authentication</p>{message}<form method="post" action="/operator/login"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><input name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Operator token" required><button type="submit">Sign in</button></form></div></body></html>""",mimetype="text/html")
 
 
 @app.route("/operator/login",methods=["GET","POST"])
@@ -825,7 +863,7 @@ def operator_login():
     expected=os.environ.get("OPERATOR_CONTROL_TOKEN","").strip()
     supplied=_clean(request.form.get("token"),500)
     if not expected or not supplied or not hmac.compare_digest(expected,supplied):
-        session.pop("operator_token",None)
+        session.clear()
         return _operator_login_page("Invalid operator token."),401
     session["operator_token"]=supplied
     session.permanent=False
@@ -867,9 +905,9 @@ def operator_dashboard():
         l=x["lead"];o=l.get("operational") or {}
         details=h(json.dumps({"qualification":x["qualification"],"send":x["send_receipt"],"reply":x["reply_evidence"],"booking":x["booking_receipt"],"evidence":l.get("evidence"),"audit":x["audit"]},indent=2))
         buttons="".join(f'<button name="action" value="{a}">{a.title()}</button>' for a in ("review","approve","reject","retry","reconcile","suppress","close"))
-        lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
+        lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control"><input type="hidden" name="csrf_token" value="{_csrf_token()}">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
     body="".join(lead_html) or '<p class="muted">No lead records yet.</p>'
-    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div></div>{body}</main></body></html>""",mimetype="text/html")
+    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div></div>{body}</main></body></html>""",mimetype="text/html")
 
 
 @app.route("/operator/leads/<int:lead_id>/control",methods=["POST"])
@@ -877,7 +915,7 @@ def operator_control_form(lead_id:int):
     if not _operator_session_authorized():
         return redirect(url_for("operator_login"),303)
     action=_clean(request.form.get("action"),50).lower()
-    lead=OutreachLead.query.get_or_404(lead_id)
+    if not _csrf_ok(): return Response("CSRF validation failed",status=403)\n    lead=OutreachLead.query.get_or_404(lead_id)
     # Reuse the same deterministic safety gates as the JSON control path without JavaScript.
     with app.test_request_context(f"/api/operator/leads/{lead_id}/control",method="POST",json={"action":action},headers={"X-Operator-Token":session["operator_token"],"X-Operator-Actor":"dashboard-session"}):
         response=operator_control(lead_id)
