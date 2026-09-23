@@ -95,3 +95,30 @@ def test_same_command_payload_is_idempotent(env):
     assert a.id==b.id
     assert oa.ExternalSideEffectCommand.query.count()==1
     assert oa.OperatorAuditEvent.query.filter_by(action="external_command_intent").count()==1
+
+
+def test_database_failure_after_provider_response_recovers_as_uncertain(env,monkeypatch):
+    x=lead();cmd=oa._enqueue_external_command(x,"gmail_send",{"recipient":"dbfail@example.com"})
+    token=oa._claim_external_command(cmd,lease_seconds=1)
+    real_commit=oa.db.session.commit
+    monkeypatch.setattr(oa.db.session,"commit",lambda:(_ for _ in ()).throw(RuntimeError("injected commit failure")))
+    with pytest.raises(RuntimeError):
+        oa._finish_external_command(cmd.id,token,{"ok":True,"message_id":"provider-accepted"})
+    oa.db.session.rollback()
+    monkeypatch.setattr(oa.db.session,"commit",real_commit)
+    cmd=oa.db.session.get(oa.ExternalSideEffectCommand,cmd.id)
+    # Completion did not commit, so durable state remains executing. Recovery must
+    # expire it to uncertain rather than re-execute the provider call.
+    cmd.lease_expires_at=datetime.utcnow()-timedelta(seconds=1);oa.db.session.commit()
+    oa._expire_stale_external_commands()
+    assert oa.db.session.get(oa.ExternalSideEffectCommand,cmd.id).status=="uncertain"
+
+
+def test_uncertain_command_can_only_finish_through_reconciliation(env):
+    x=lead();cmd=oa._enqueue_external_command(x,"calendar_create",{"event_id":"evt-r"})
+    token=oa._claim_external_command(cmd)
+    oa._finish_external_command(cmd.id,token,{"ok":False,"error":"lost response"})
+    cmd=oa.db.session.get(oa.ExternalSideEffectCommand,cmd.id)
+    result=oa._reconcile_external_command(cmd,True,{"event_id":"evt-r","source":"calendar_get"})
+    assert result["status"]=="reconciled"
+    assert oa.OperatorAuditEvent.query.filter_by(action="external_command_reconciled").count()==1
