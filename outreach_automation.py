@@ -231,6 +231,24 @@ def _expire_stale_external_commands(now:datetime|None=None) -> int:
     if rows:db.session.commit()
     return len(rows)
 
+def _calendar_create_via_command(lead:OutreachLead, req:Dict[str,Any], *, summary:str, description:str, idempotency_key:str) -> Dict[str,Any]:
+    payload={"request":req,"summary":summary,"description":description,"provider_idempotency_key":idempotency_key}
+    cmd=_enqueue_external_command(lead,"calendar_create",payload)
+    if cmd.status!="pending":
+        return {"ok":False,"error":"EXTERNAL_COMMAND_NOT_PENDING","command_status":cmd.status}
+    token=_claim_external_command(cmd)
+    if not token:return {"ok":False,"error":"EXTERNAL_COMMAND_ALREADY_CLAIMED"}
+    try:
+        result=create_event(req,summary=summary,description=description,idempotency_key=idempotency_key)
+        completion=_finish_external_command(cmd.id,token,result)
+    except BaseException as exc:
+        _finish_external_command(cmd.id,token,None,exc)
+        return {"ok":False,"error":"provider execution became uncertain"}
+    if completion.get("status")!="succeeded":
+        return {"ok":False,"error":_clean((result or {}).get("error") or "provider execution became uncertain",1000)}
+    return result
+
+
 def _control_response(lead:OutreachLead, action:str, payload:Dict[str,Any], result:Dict[str,Any], status:int=200):
     # Business mutation and audit append commit together for database-only actions.
     _audit(lead.id,action,payload,result)
@@ -526,7 +544,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     result=process_reply_to_booking(
         reply_text=text,proposed_classification={"classification":"interested"},proposed_booking=booking,
         availability_func=check_availability,
-        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated Gmail reply evidence.",idempotency_key=event_id),
+        event_create_func=lambda req:_calendar_create_via_command(lead,req,summary=summary,description="Booked from validated Gmail reply evidence.",idempotency_key=event_id),
     )
     execution=result.get("booking_execution") or {}
     receipt=execution.get("booking_receipt") or {}
@@ -1082,7 +1100,7 @@ def process_reply_booking(lead_id: int):
         proposed_classification=proposed_classification,
         proposed_booking=proposed_booking,
         availability_func=check_availability,
-        event_create_func=lambda req:create_event(req,summary=summary,description="Booked from validated outreach reply.",idempotency_key=idempotency_key),
+        event_create_func=lambda req:_calendar_create_via_command(lead,req,summary=summary,description="Booked from validated outreach reply.",idempotency_key=idempotency_key),
     )
 
     now=datetime.utcnow()
