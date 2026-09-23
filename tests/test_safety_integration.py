@@ -8,6 +8,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "integration-test-secret")
 
 import outreach_automation as oa
+import smart_search  # register remaining application routes before any test client sends a request
 
 
 @pytest.fixture()
