@@ -59,7 +59,7 @@ def run_workflow(*, oa, lead, draft_func:Callable, gmail_func:Callable,
 
     booking=oa.extract_explicit_booking(item["text"])
     if not booking:return {"ok":False,"stage":"calendar","trace":trace}
-    key=oa.booking_key(lead_id=lead.id,reply_message_id=item["message_id"],start=booking["start"],end=booking["end"],timezone_name=booking["timezone"],attendee_email=lead.contact_email)
+    key=oa.booking_key(lead_id=lead.id,reply_message_id=item["message_id"],start=booking["start"],end=booking["end"],attendee=lead.contact_email)
     event_id=oa.google_event_id(key)
     attempt=oa.OutreachBookingAttempt(lead_id=lead.id,reply_message_id=item["message_id"],idempotency_key=key,event_id=event_id,start=booking["start"],end=booking["end"],timezone=booking["timezone"],attendee_email=lead.contact_email,status="pending")
     oa.db.session.add(attempt);oa.db.session.commit()
