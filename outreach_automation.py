@@ -223,36 +223,86 @@ def _commit_unique_or_existing(model, lookup: Dict[str, Any]):
         return model.query.filter_by(**lookup).first()
 
 
+def _qualification_signing_key() -> bytes:
+    # Server-only key. Reuse the operator secret so deployment needs no new secret;
+    # rotating it invalidates all old qualification receipts fail-closed.
+    return os.environ.get("OPERATOR_CONTROL_TOKEN","").encode("utf-8")
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value,sort_keys=True,separators=(",",":"),default=str)
+
+def _server_qualification_inputs(lead: OutreachLead) -> tuple[Dict[str,Any],Dict[str,Any],list[Dict[str,Any]]]:
+    # Only persisted server state is authoritative. Request booleans/context are ignored.
+    try: raw=json.loads(lead.evidence_json or "[]")
+    except Exception: raw=[]
+    evidence=[x for x in raw if isinstance(x,dict)]
+    validated={
+        "company_name":_clean(lead.company,300),
+        "email":normalize_email(lead.contact_email),
+        "website":_clean(lead.source_url,1800),
+        "website_source_url":_clean(lead.source_url,1800),
+        "evidence":evidence,
+    }
+    # Contact provenance must be present in persisted evidence and bind this exact address.
+    email=normalize_email(lead.contact_email)
+    contact_source=""
+    for item in evidence:
+        candidate=normalize_email(item.get("email") or item.get("contact_email"))
+        url=_clean(item.get("url") or item.get("source_url"),1800)
+        if email and candidate==email and url.startswith(("http://","https://")):
+            contact_source=url;break
+    validated["email_source_url"]=contact_source
+    context={"candidate_location":_clean(lead.location,300),"lead_location":_clean(lead.location,300),"evidence":evidence}
+    return validated,context,evidence
+
+def _qualification_evidence_digest(lead: OutreachLead, validated: Dict[str,Any], context: Dict[str,Any]) -> str:
+    bound={"lead_id":lead.id,"company":_clean(lead.company,300),"email":normalize_email(lead.contact_email),"location":_clean(lead.location,300),"source_url":_clean(lead.source_url,1800),"validated":validated,"context":context}
+    return hashlib.sha256(_canonical_json(bound).encode()).hexdigest()
+
+def _sign_qualification(receipt: Dict[str,Any], evidence_digest: str) -> Dict[str,Any]:
+    key=_qualification_signing_key()
+    if not key:
+        return {**receipt,"ok":False,"qualified":False,"status":"Needs More Evidence","reason_codes":["QUALIFICATION_SIGNING_KEY_MISSING"],"evidence_digest":evidence_digest}
+    payload={**receipt,"evidence_digest":evidence_digest,"signature_version":"hmac-sha256-v1"}
+    sig=hmac.new(key,_canonical_json(payload).encode(),hashlib.sha256).hexdigest()
+    return {**payload,"server_signature":sig}
+
 def _qualification_gate(lead: OutreachLead) -> Dict[str, Any]:
     row=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
     if row is None:
         return {"ok":False,"qualified":False,"status":"Needs More Evidence","reason_codes":["MISSING_QUALIFICATION_RECEIPT"]}
     try:receipt=json.loads(row.receipt_json or "{}")
     except Exception:receipt={}
-    valid=bool(row.ok is True and row.qualified is True and row.status==QUALIFIED and receipt.get("ok") is True and receipt.get("qualified") is True and receipt.get("status")==QUALIFIED)
+    signature=_clean(receipt.get("server_signature"),128)
+    unsigned={k:v for k,v in receipt.items() if k!="server_signature"}
+    key=_qualification_signing_key()
+    expected=hmac.new(key,_canonical_json(unsigned).encode(),hashlib.sha256).hexdigest() if key else ""
+    validated,context,_=_server_qualification_inputs(lead)
+    current_digest=_qualification_evidence_digest(lead,validated,context)
+    signature_ok=bool(signature and expected and hmac.compare_digest(signature,expected))
+    evidence_ok=bool(receipt.get("evidence_digest") and hmac.compare_digest(str(receipt.get("evidence_digest")),current_digest))
+    valid=bool(row.ok is True and row.qualified is True and row.status==QUALIFIED and receipt.get("ok") is True and receipt.get("qualified") is True and receipt.get("status")==QUALIFIED and signature_ok and evidence_ok)
     if not valid:
-        return {"ok":False,"qualified":False,"status":row.status,"reason_codes":receipt.get("reason_codes") or ["QUALIFICATION_NOT_VALIDATED"]}
+        reasons=list(receipt.get("reason_codes") or [])
+        if not signature_ok:reasons.append("QUALIFICATION_SIGNATURE_INVALID")
+        if not evidence_ok:reasons.append("QUALIFICATION_EVIDENCE_CHANGED")
+        return {"ok":False,"qualified":False,"status":row.status,"reason_codes":list(dict.fromkeys(reasons or ["QUALIFICATION_NOT_VALIDATED"]))}
     return {"ok":True,"qualified":True,"status":QUALIFIED,"receipt":receipt}
 
-
-def _store_qualification(lead: OutreachLead, data: Dict[str, Any]) -> Dict[str, Any]:
-    validated=data.get("validated") if isinstance(data.get("validated"),dict) else {}
-    context=data.get("qualification_context") if isinstance(data.get("qualification_context"),dict) else {}
-    # Bind critical identity/contact fields to the actual lead; caller cannot qualify one
-    # identity then send to a different address.
-    validated={**validated,
-        "company_name":lead.company,
-        "email":normalize_email(lead.contact_email),
-        "email_source_url":_clean(validated.get("email_source_url"),1800),
-        "evidence":data.get("evidence") if isinstance(data.get("evidence"),list) else validated.get("evidence",[]),
-    }
-    receipt=qualify_lead(validated,verification_ok=bool(data.get("verification_ok") is True),context=context)
+def _store_qualification(lead: OutreachLead, data: Dict[str, Any]|None=None) -> Dict[str, Any]:
+    # data is intentionally ignored for trust decisions. Qualification is derived
+    # entirely from persisted lead/evidence state on the server.
+    validated,context,evidence=_server_qualification_inputs(lead)
+    verification_ok=bool(_clean(lead.company,300) and evidence)
+    receipt=qualify_lead(validated,verification_ok=verification_ok,context=context)
+    digest=_qualification_evidence_digest(lead,validated,context)
+    receipt=_sign_qualification(receipt,digest)
     row=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
     if row is None:
-        row=OutreachQualificationReceipt(lead_id=lead.id,status=receipt["status"],qualified=receipt["qualified"],ok=receipt["ok"],receipt_json=json.dumps(receipt))
+        row=OutreachQualificationReceipt(lead_id=lead.id,status=receipt["status"],qualified=receipt["qualified"],ok=receipt["ok"],receipt_json=_canonical_json(receipt))
         db.session.add(row)
     else:
-        row.status=receipt["status"];row.qualified=receipt["qualified"];row.ok=receipt["ok"];row.receipt_json=json.dumps(receipt)
+        row.status=receipt["status"];row.qualified=receipt["qualified"];row.ok=receipt["ok"];row.receipt_json=_canonical_json(receipt)
     lead.status="qualified" if receipt.get("ok") else ("rejected" if receipt.get("status")=="Not Qualified" else "needs_evidence")
     lead.last_error="" if receipt.get("ok") else ", ".join(receipt.get("reason_codes") or [])
     db.session.commit()

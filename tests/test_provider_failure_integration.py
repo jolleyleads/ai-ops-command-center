@@ -17,11 +17,12 @@ def env(monkeypatch):
 
 
 def lead():
-    x=oa.OutreachLead(company="Failure Test Electric",contact_email="owner@example.com",location="Portsmouth, VA",status="qualified",subject="s",body="b")
+    evidence=[{"url":"https://example.com/contact","email":"owner@example.com","title":"Failure Test Electric contact","text":"Failure Test Electric owner contact","observed_at":datetime.utcnow().isoformat()}]
+    x=oa.OutreachLead(company="Failure Test Electric",contact_email="owner@example.com",location="Portsmouth, VA",source_url="https://example.com",evidence_json=json.dumps(evidence),status="needs_evidence",subject="s",body="b")
     oa.db.session.add(x);oa.db.session.commit()
-    receipt={"ok":True,"qualified":True,"status":"Qualified","reason_codes":[]}
-    oa.db.session.add(oa.OutreachQualificationReceipt(lead_id=x.id,status="Qualified",qualified=True,ok=True,receipt_json=json.dumps(receipt)))
-    oa.db.session.commit();return x
+    receipt=oa._store_qualification(x,{})
+    assert receipt["ok"] is True
+    return x
 
 
 def test_gmail_provider_failure_becomes_uncertain_and_blocks_duplicate(env,monkeypatch):
