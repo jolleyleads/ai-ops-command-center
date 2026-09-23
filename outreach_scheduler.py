@@ -29,7 +29,7 @@ def _loop():
         time.sleep(_INTERVAL_SECONDS)
 
 
-def start():
+def if os.getenv("OUTREACH_INPROCESS_SCHEDULER","0").strip()=="1":\n    start():
     global _started
     with _lock:
         if _started:
