@@ -896,7 +896,7 @@ def operator_dashboard():
         return redirect(url_for("operator_login"),303)
     rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
     records=[_dashboard_record(x) for x in rows]
-    attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))
+    attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))\n    recovery=_recovery_queue();recovery_count=len(recovery)
     def h(v):
         import html
         return html.escape(str(v if v is not None else ""))
@@ -907,7 +907,7 @@ def operator_dashboard():
         buttons="".join(f'<button name="action" value="{a}">{a.title()}</button>' for a in ("review","approve","reject","retry","reconcile","suppress","close"))
         lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control"><input type="hidden" name="csrf_token" value="{_csrf_token()}">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
     body="".join(lead_html) or '<p class="muted">No lead records yet.</p>'
-    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div></div>{body}</main></body></html>""",mimetype="text/html")
+    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div><div class="stat"><div class="n">{recovery_count}</div><div class="muted">Recovery queue</div></div></div>{body}</main></body></html>""",mimetype="text/html")
 
 
 @app.route("/operator/leads/<int:lead_id>/control",methods=["POST"])
@@ -927,6 +927,36 @@ def operator_control_form(lead_id:int):
         return Response(f'<html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:24px"><h3>Action blocked</h3><p>{error}</p><a href="/operator">Back to dashboard</a></body></html>',status=status,mimetype="text/html")
     return redirect(url_for("operator_dashboard"),303)
 
+
+def _recovery_queue():
+    now=datetime.utcnow()
+    _expire_stale_external_commands(now)
+    rows=ExternalSideEffectCommand.query.filter(ExternalSideEffectCommand.status=="uncertain").order_by(ExternalSideEffectCommand.updated_at.asc()).all()
+    return rows
+
+@app.route("/api/operator/recovery",methods=["GET"])
+def operator_recovery_queue():
+    if not _operator_session_authorized(): return jsonify({"ok":False,"error":"operator session required"}),401
+    rows=_recovery_queue()
+    return jsonify({"ok":True,"alert_count":len(rows),"commands":[{"id":x.id,"lead_id":x.lead_id,"kind":x.kind,"status":x.status,"error":x.error,"updated_at":x.updated_at.isoformat() if x.updated_at else None} for x in rows]})
+
+@app.route("/api/operator/recovery/<int:command_id>/reconcile",methods=["POST"])
+def operator_reconcile_command(command_id:int):
+    if not _operator_session_authorized(): return jsonify({"ok":False,"error":"operator session required"}),401
+    if not _csrf_ok(): return jsonify({"ok":False,"error":"CSRF validation failed"}),403
+    cmd=db.session.get(ExternalSideEffectCommand,command_id)
+    if not cmd or cmd.status!="uncertain": return jsonify({"ok":False,"error":"uncertain command required"}),409
+    if cmd.kind=="calendar_create":
+        try: payload=json.loads(cmd.payload_json or "{}")
+        except Exception: payload={}
+        event_id=_clean(payload.get("provider_idempotency_key"),255)
+        if not event_id:return jsonify({"ok":False,"error":"calendar command lacks deterministic event id"}),409
+        proof=get_event(event_id)
+        if proof.get("found"): return jsonify(_reconcile_external_command(cmd,True,proof))
+        if proof.get("ok") is False and proof.get("found") is False and not proof.get("error"):
+            return jsonify(_reconcile_external_command(cmd,False,proof))
+        return jsonify({"ok":False,"status":"uncertain","error":proof.get("error") or "calendar reconciliation inconclusive"}),502
+    return jsonify({"ok":False,"status":"uncertain","error":"Gmail outcome cannot be safely inferred automatically; inspect provider Sent mail and resolve with evidence."}),409
 
 @app.route("/api/outreach/needs-attention", methods=["GET"])
 def outreach_needs_attention():
@@ -1048,6 +1078,14 @@ def process_followups():
         return jsonify({"ok":False,"error":"unauthorized"}),401
 
     now = datetime.utcnow()
+    window_key=now.strftime("%Y%m%d%H")
+    run=FollowupSchedulerRun(window_key=window_key,status="running",started_at=now)
+    db.session.add(run)
+    try: db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing=FollowupSchedulerRun.query.filter_by(window_key=window_key).first()
+        return jsonify({"ok":True,"duplicate_run_suppressed":True,"window_key":window_key,"status":existing.status if existing else "unknown","processed_count":0,"processed":[]})
     leads = OutreachLead.query.filter(
         OutreachLead.status.in_(["sent", "followup_sent"]),
         OutreachLead.follow_up_due_at.isnot(None),
@@ -1123,8 +1161,9 @@ def process_followups():
         lead.status="followup_sent";lead.last_error="";lead.updated_at=now
         processed.append({"id":lead.id,"status":"followup_sent","follow_up_count":next_number})
 
+    run.status="succeeded";run.processed_json=_canonical_json(processed);run.completed_at=datetime.utcnow()
     db.session.commit()
-    return jsonify({"ok":True,"processed_count":len(processed),"processed":processed})
+    return jsonify({"ok":True,"duplicate_run_suppressed":False,"window_key":window_key,"processed_count":len(processed),"processed":processed})
 
 
 @app.route("/api/outreach/leads/<int:lead_id>/process-reply-booking", methods=["POST"])
