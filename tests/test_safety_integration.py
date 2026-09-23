@@ -12,7 +12,7 @@ import outreach_automation as oa
 
 @pytest.fixture()
 def env(monkeypatch):
-    oa.app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI="sqlite:///:memory:")
+    oa.app.config.update(TESTING=True)
     monkeypatch.setenv("OPERATOR_CONTROL_TOKEN", "operator-test-token")
     monkeypatch.setenv("OUTREACH_CRON_TOKEN", "cron-test-token")
     with oa.app.app_context():
