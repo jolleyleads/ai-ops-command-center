@@ -1,0 +1,45 @@
+name: Controlled Live Acceptance
+on:
+  push:
+    branches: [live-acceptance-20260923]
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create qualified controlled lead and send through production
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://ai-ops-command-center.onrender.com"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BODY=$(cat <<JSON
+          {"company":"V1 Controlled Acceptance","contact_email":"Jolleyleads@gmail.com","contact_name":"Matthew","location":"Portsmouth, VA","source_url":"https://example.com/v1-acceptance","score":100,"verification":"controlled_acceptance","evidence":[{"url":"https://example.com/v1-acceptance/contact","email":"Jolleyleads@gmail.com","title":"V1 controlled acceptance contact","text":"Controlled V1 acceptance lead for deterministic production verification","observed_at":"$NOW"}]}
+JSON
+          )
+          CREATE=$(curl --fail-with-body -sS -H 'Content-Type: application/json' -d "$BODY" "$BASE/api/outreach/leads")
+          echo "$CREATE" > create.json
+          python - <<'PY'
+          import json
+          d=json.load(open("create.json"))
+          assert d["qualification"]["ok"] is True, d
+          print(d["lead"]["id"])
+          open("lead_id.txt","w").write(str(d["lead"]["id"]))
+          PY
+          ID=$(cat lead_id.txt)
+          DRAFT=$(curl --fail-with-body -sS -X POST "$BASE/api/outreach/leads/$ID/draft")
+          echo "$DRAFT" > draft.json
+          python - <<'PY'
+          import json
+          d=json.load(open("draft.json")); assert d["ok"] is True,d
+          PY
+          SEND=$(curl --fail-with-body -sS -X POST "$BASE/api/outreach/leads/$ID/send")
+          echo "$SEND" > send.json
+          python - <<'PY'
+          import json
+          d=json.load(open("send.json")); assert d["ok"] is True,d
+          lead=d["lead"]
+          assert lead["gmail_message_id"] and lead["gmail_thread_id"],d
+          print("LIVE_ACCEPTANCE_LEAD_ID="+str(lead["id"]))
+          print("LIVE_ACCEPTANCE_MESSAGE_ID="+lead["gmail_message_id"])
+          print("LIVE_ACCEPTANCE_THREAD_ID="+lead["gmail_thread_id"])
+          PY
