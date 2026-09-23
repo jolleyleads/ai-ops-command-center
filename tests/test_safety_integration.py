@@ -26,15 +26,15 @@ def env(monkeypatch):
 
 
 def lead(email="owner@example.com"):
-    row=oa.OutreachLead(company="Example Electric",contact_email=email,location="Portsmouth, VA",status="needs_evidence",subject="Hello",body="Body")
+    evidence=[{"url":"https://example.com/contact","email":email,"title":"Example Electric contact","text":"Example Electric owner contact","observed_at":datetime.utcnow().isoformat()}]
+    row=oa.OutreachLead(company="Example Electric",contact_email=email,location="Portsmouth, VA",source_url="https://example.com",evidence_json=json.dumps(evidence),status="needs_evidence",subject="Hello",body="Body")
     oa.db.session.add(row);oa.db.session.commit()
     return row
 
 
 def qualify(row):
-    receipt={"ok":True,"qualified":True,"status":"Qualified","reason_codes":[]}
-    oa.db.session.add(oa.OutreachQualificationReceipt(lead_id=row.id,status="Qualified",qualified=True,ok=True,receipt_json=json.dumps(receipt)))
-    row.status="qualified";oa.db.session.commit()
+    receipt=oa._store_qualification(row,{})
+    assert receipt["ok"] is True
 
 
 def test_unqualified_safe_send_never_calls_provider(env,monkeypatch):
