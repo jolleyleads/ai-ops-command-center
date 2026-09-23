@@ -21,6 +21,7 @@ from src.automatic_reply_router import classify_reply, extract_explicit_booking
 from src.booking_safety import booking_key, google_event_id, attempt_gate
 from src.qualification import qualify_lead, QUALIFIED
 from src.operational_state import state_snapshot
+from src.side_effect_outbox import command_key, lease_token, provider_outcome
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -113,6 +114,22 @@ class OutreachBookingAttempt(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ExternalSideEffectCommand(db.Model):
+    __tablename__ = "external_side_effect_command"
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, nullable=False, index=True)
+    kind = db.Column(db.String(50), nullable=False, index=True)
+    idempotency_key = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    payload_json = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending", index=True)
+    lease_token = db.Column(db.String(64), default="")
+    lease_expires_at = db.Column(db.DateTime)
+    provider_receipt_json = db.Column(db.Text, default="{}")
+    error = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class OutreachQualificationReceipt(db.Model):
     __tablename__ = "outreach_qualification_receipt"
     id = db.Column(db.Integer, primary_key=True)
@@ -159,6 +176,60 @@ def _audit(lead_id:int, action:str, payload:Dict[str,Any], result:Dict[str,Any])
     raw="|".join([previous_hash,str(lead_id),action,actor,request_json,result_json,created.isoformat()])
     event_hash=hashlib.sha256(raw.encode()).hexdigest()
     db.session.add(OperatorAuditEvent(lead_id=lead_id,action=action,actor=actor,request_json=request_json,result_json=result_json,previous_hash=previous_hash,event_hash=event_hash,created_at=created))
+
+def _audit_actor(lead_id:int, action:str, payload:Dict[str,Any], result:Dict[str,Any], actor:str) -> None:
+    if db.engine.dialect.name=="postgresql":
+        db.session.execute(db.text("SELECT pg_advisory_xact_lock(:key)"),{"key":90421001})
+    prev=OperatorAuditEvent.query.order_by(OperatorAuditEvent.id.desc()).first()
+    previous_hash=prev.event_hash if prev else ""
+    request_json=json.dumps(payload,sort_keys=True,separators=(",",":"),default=str)
+    result_json=json.dumps(result,sort_keys=True,separators=(",",":"),default=str)
+    created=datetime.utcnow()
+    raw="|".join([previous_hash,str(lead_id),action,actor,request_json,result_json,created.isoformat()])
+    event_hash=hashlib.sha256(raw.encode()).hexdigest()
+    db.session.add(OperatorAuditEvent(lead_id=lead_id,action=action,actor=actor,request_json=request_json,result_json=result_json,previous_hash=previous_hash,event_hash=event_hash,created_at=created))
+
+def _enqueue_external_command(lead:OutreachLead, kind:str, payload:Dict[str,Any]) -> ExternalSideEffectCommand:
+    key=command_key(kind,lead.id,payload)
+    existing=ExternalSideEffectCommand.query.filter_by(idempotency_key=key).first()
+    if existing:return existing
+    cmd=ExternalSideEffectCommand(lead_id=lead.id,kind=kind,idempotency_key=key,payload_json=_canonical_json(payload),status="pending")
+    db.session.add(cmd)
+    _audit_actor(lead.id,"external_command_intent",{"command_key":key,"kind":kind},{"status":"pending"},"system")
+    try:db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return ExternalSideEffectCommand.query.filter_by(idempotency_key=key).one()
+    return cmd
+
+def _claim_external_command(cmd:ExternalSideEffectCommand, lease_seconds:int=120) -> str:
+    if cmd.status!="pending":return ""
+    token=lease_token();now=datetime.utcnow()
+    updated=ExternalSideEffectCommand.query.filter_by(id=cmd.id,status="pending").update({"status":"executing","lease_token":token,"lease_expires_at":now+timedelta(seconds=lease_seconds),"updated_at":now},synchronize_session=False)
+    if updated!=1:
+        db.session.rollback();return ""
+    db.session.commit();return token
+
+def _finish_external_command(cmd_id:int, token:str, result:Dict[str,Any]|None=None, exc:BaseException|None=None) -> Dict[str,Any]:
+    cmd=db.session.get(ExternalSideEffectCommand,cmd_id)
+    if not cmd or cmd.status!="executing" or not token or not hmac.compare_digest(cmd.lease_token or "",token):
+        return {"ok":False,"stage":"lease_lost"}
+    status=provider_outcome(result,exc)
+    cmd.status=status;cmd.lease_token="";cmd.lease_expires_at=None;cmd.updated_at=datetime.utcnow()
+    cmd.provider_receipt_json=_canonical_json(result or {})
+    cmd.error=_clean(str(exc) if exc else ((result or {}).get("error") or ""),2000)
+    _audit_actor(cmd.lead_id,"external_command_complete",{"command_key":cmd.idempotency_key,"kind":cmd.kind},{"status":status,"provider":result or {}}, "system")
+    db.session.commit()
+    return {"ok":status=="succeeded","status":status,"command_id":cmd.id}
+
+def _expire_stale_external_commands(now:datetime|None=None) -> int:
+    now=now or datetime.utcnow()
+    rows=ExternalSideEffectCommand.query.filter(ExternalSideEffectCommand.status=="executing",ExternalSideEffectCommand.lease_expires_at<=now).all()
+    for cmd in rows:
+        cmd.status="uncertain";cmd.lease_token="";cmd.lease_expires_at=None;cmd.error="WORKER_LEASE_EXPIRED"
+        _audit_actor(cmd.lead_id,"external_command_lease_expired",{"command_key":cmd.idempotency_key},{"status":"uncertain"},"system")
+    if rows:db.session.commit()
+    return len(rows)
 
 def _control_response(lead:OutreachLead, action:str, payload:Dict[str,Any], result:Dict[str,Any], status:int=200):
     # Business mutation and audit append commit together for database-only actions.
