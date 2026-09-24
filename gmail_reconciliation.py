@@ -7,13 +7,13 @@ proves FOUND or, after a grace period, NOT_FOUND. Inconclusive results fail clos
 import base64
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.message import EmailMessage
 from email.utils import parseaddr
 from typing import Any, Dict
 
 import requests
-from flask import jsonify, request
+from flask import jsonify
 
 import outreach_automation as oa
 from app import app, db, gmail_access_token
@@ -102,8 +102,6 @@ def gmail_reconciliation_proof(cmd) -> Dict[str,Any]:
         age=(datetime.utcnow()-(cmd.updated_at or cmd.created_at or datetime.utcnow())).total_seconds()
         if age < NEGATIVE_GRACE_SECONDS:
             return {"ok":False,"outcome":"inconclusive","source":"gmail_sent_rfc822msgid","query":q,"message_identity":identity,"match_count":0,"age_seconds":int(age),"error":"NEGATIVE_SEARCH_GRACE_PERIOD"}
-        # A successful exact RFC Message-ID query against Sent after the grace period
-        # is the provider-side negative proof. We do not infer from transport errors.
         return {"ok":True,"outcome":"not_found","source":"gmail_sent_rfc822msgid","query":q,"message_identity":identity,"match_count":0,"age_seconds":int(age),"recipient":recipient,"subject":subject}
     except Exception as exc:
         return {"ok":False,"outcome":"inconclusive","source":"gmail_reconciliation","message_identity":identity,"error":oa._clean(exc,1000)}
@@ -158,7 +156,15 @@ def hardened_safe_send(lead, *, kind: str, sequence: int, subject: str, body: st
     token=oa._claim_external_command(cmd)
     if not token:return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["EXTERNAL_COMMAND_ALREADY_CLAIMED"]}}
     try:
-        execution=execute_outreach_send(payload,lambda to,sub,text:_gmail_send_identified(to,sub,text,command_key=cmd.idempotency_key))
+        # execute_outreach_send passes the existing Gmail thread ID as its fourth
+        # positional argument. Preserve that provider contract while binding the
+        # deterministic command identity as a keyword-only argument.
+        execution=execute_outreach_send(
+            payload,
+            lambda to,sub,text,thread_id="": _gmail_send_identified(
+                to,sub,text,command_key=cmd.idempotency_key,thread_id=thread_id
+            ),
+        )
         completion=oa._finish_external_command(cmd.id,token,execution)
     except BaseException as exc:
         oa._finish_external_command(cmd.id,token,None,exc);attempt.status="uncertain";attempt.error="PROVIDER_EXCEPTION";attempt.updated_at=datetime.utcnow();db.session.commit()
@@ -171,8 +177,6 @@ def hardened_safe_send(lead, *, kind: str, sequence: int, subject: str, body: st
 def retry_after_negative_reconciliation(lead, failed_attempt) -> Dict[str,Any]:
     if not failed_attempt or failed_attempt.status!="failed" or failed_attempt.error!="RECONCILIATION_PROVED_NO_SIDE_EFFECT":
         return {"ok":False,"stage":"blocked","error":"NEGATIVE_GMAIL_RECONCILIATION_REQUIRED"}
-    # One successor generation per failed attempt. Its sequence is deterministic,
-    # so concurrent callers converge on the same send/command idempotency keys.
     return hardened_safe_send(lead,kind="reconciled_retry",sequence=failed_attempt.id,subject=lead.subject,body=lead.body)
 
 
@@ -200,5 +204,4 @@ def operator_gmail_retry(command_id:int):
     return jsonify(result),200 if result.get("ok") else 409
 
 
-# Replace the old send path only after this module has loaded successfully.
 oa._safe_send=hardened_safe_send
