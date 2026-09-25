@@ -1,12 +1,8 @@
-import importlib
-
-import pytest
+import smart_search_outreach_hook as hook
 
 
 def _client(monkeypatch):
     monkeypatch.setenv("OUTREACH_CRON_TOKEN", "test-secret")
-    import smart_search_outreach_hook as hook
-    importlib.reload(hook)
     return hook.app.test_client()
 
 
