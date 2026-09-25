@@ -3,5 +3,6 @@ flask_sqlalchemy
 requests
 gunicorn
 openai>=1.0.0
+psycopg[binary]>=3.2,<4
 psycopg2-binary
 pytest>=8.0.0
