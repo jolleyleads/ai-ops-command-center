@@ -6,13 +6,14 @@ import requests
 
 def main():
     url = os.getenv("OUTREACH_FOLLOWUP_URL", "https://ai-ops-command-center.onrender.com/api/outreach/process-followups")
-    token = os.getenv("OUTREACH_CRON_TOKEN", "")
+    token = os.getenv("OUTREACH_CRON_TOKEN", "").strip()
     if not token:
         raise RuntimeError("OUTREACH_CRON_TOKEN is not configured")
 
+    # Must match the fail-closed production endpoint exactly.
     response = requests.post(
         url,
-        headers={"X-Outreach-Token": token},
+        headers={"X-Outreach-Cron-Token": token},
         timeout=120,
     )
     print(response.text)
