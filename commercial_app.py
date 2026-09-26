@@ -10,6 +10,7 @@ import rag_research  # noqa: F401
 import smart_search  # noqa: F401
 import outreach_automation  # noqa: F401
 import production_e2e  # noqa: F401
+import operator_e2e_ui  # noqa: F401
 import gmail_reconciliation  # noqa: F401
 import smart_search_outreach_hook  # noqa: F401
 import outreach_scheduler  # noqa: F401
