@@ -4,11 +4,18 @@ import time
 
 from app import app
 # The Render cron imports this module directly instead of commercial_app.
-# Bootstrap the persisted Google OAuth integration before gmail_outreach_state
-# captures app.gmail_access_token at import time.
+# Bootstrap the persisted Google OAuth integration before Gmail consumers run.
 import gmail_connect  # noqa: F401
+import gmail_outreach_state
+import outreach_automation
 from gmail_outreach_state import process_durable_followups
 from v1_orchestration import scan_real_inbound_replies
+
+# These modules import gmail_access_token by value. Bind them explicitly to the
+# persisted-refresh-token-aware resolver so cron workers cannot retain app.py's
+# legacy environment-only function reference.
+gmail_outreach_state.gmail_access_token = gmail_connect.gmail_access_token
+outreach_automation.gmail_access_token = gmail_connect.gmail_access_token
 
 _INTERVAL_SECONDS = max(300, int(os.getenv("OUTREACH_SCHEDULER_SECONDS", "900")))
 _started = False
@@ -39,7 +46,6 @@ def _oauth_diagnostics():
         gmail_connect.gmail_access_token()
         app.logger.warning("GMAIL_OAUTH_TOKEN_PROBE ok=True")
     except Exception as exc:
-        # Error text from Google's token endpoint is safe here; credentials/tokens are never included.
         app.logger.warning("GMAIL_OAUTH_TOKEN_PROBE ok=False type=%s detail=%s", type(exc).__name__, str(exc)[:300])
 
 
