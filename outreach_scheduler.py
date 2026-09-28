@@ -3,6 +3,10 @@ import threading
 import time
 
 from app import app
+# The Render cron imports this module directly instead of commercial_app.
+# Bootstrap the persisted Google OAuth integration before gmail_outreach_state
+# captures app.gmail_access_token at import time.
+import gmail_connect  # noqa: F401
 from gmail_outreach_state import process_durable_followups
 from v1_orchestration import scan_real_inbound_replies
 
