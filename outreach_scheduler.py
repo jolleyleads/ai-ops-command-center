@@ -15,13 +15,37 @@ _started = False
 _lock = threading.Lock()
 
 
-def run_scheduled_outreach_cycle():
-    """Process real inbound replies before any follow-up work.
+def _oauth_diagnostics():
+    """Return safe diagnostics only: never log tokens or secrets."""
+    try:
+        row = gmail_connect._stored_connection()
+        stored = bool(row and (row.refresh_token or "").strip())
+        stored_email = (row.email or "").strip() if row else ""
+    except Exception as exc:
+        stored = False
+        stored_email = ""
+        app.logger.warning("GMAIL_OAUTH_DIAGNOSTIC_DB_ERROR type=%s", type(exc).__name__)
+    legacy = bool(os.getenv("GOOGLE_REFRESH_TOKEN", "").strip())
+    direct = bool(os.getenv("GMAIL_ACCESS_TOKEN", "").strip())
+    app.logger.warning(
+        "GMAIL_OAUTH_DIAGNOSTIC stored_refresh=%s stored_email=%s legacy_refresh=%s direct_access=%s database_url=%s",
+        stored,
+        stored_email or "missing",
+        legacy,
+        direct,
+        "present" if os.getenv("DATABASE_URL", "").strip() else "missing",
+    )
+    try:
+        gmail_connect.gmail_access_token()
+        app.logger.warning("GMAIL_OAUTH_TOKEN_PROBE ok=True")
+    except Exception as exc:
+        # Error text from Google's token endpoint is safe here; credentials/tokens are never included.
+        app.logger.warning("GMAIL_OAUTH_TOKEN_PROBE ok=False type=%s detail=%s", type(exc).__name__, str(exc)[:300])
 
-    Reply processing is intentionally first so a newly received reply can stop
-    follow-up activity and, when classified as interested, use the existing
-    persisted-reply route for Calendar availability and booking.
-    """
+
+def run_scheduled_outreach_cycle():
+    """Process real inbound replies before any follow-up work."""
+    _oauth_diagnostics()
     inbound = scan_real_inbound_replies()
     app.logger.info(
         "OUTREACH_INBOUND_SCHEDULER ok=%s checked=%s processed=%s",
@@ -66,7 +90,5 @@ def start():
         thread.start()
 
 
-# Production uses the Render cron job. In-process scheduling is opt-in only
-# for environments that intentionally do not run the cron service.
 if os.getenv("OUTREACH_INPROCESS_SCHEDULER", "0").strip() == "1":
     start()
