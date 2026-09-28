@@ -16,6 +16,7 @@ import v1_orchestration  # noqa: F401
 import operator_inbound_ui  # noqa: F401
 import outreach_scheduler  # noqa: F401
 import db_diagnostic  # noqa: F401
+import provider_acceptance_ui  # noqa: F401
 
 rag_research.init_rag_tables()
 
