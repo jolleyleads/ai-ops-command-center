@@ -5,11 +5,11 @@ import sys
 from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import app, db
-from outreach_automation import OutreachLead
+from outreach_automation import OutreachLead, _safe_send
 from outreach_scheduler import run_scheduled_outreach_cycle
 
-def fail(reason):
-    print("PROVIDER_ACCEPTANCE_RESULT " + json.dumps({"ok": False, "reason": reason}, sort_keys=True))
+def fail(reason, **extra):
+    print("PROVIDER_ACCEPTANCE_RESULT " + json.dumps({"ok": False, "reason": reason, **extra}, default=str, sort_keys=True))
     raise SystemExit(1)
 
 def snapshot(lead):
@@ -31,10 +31,17 @@ def main():
             db.session.commit()
             created = True
         before = snapshot(lead)
+        send_result = None
+        if not (lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at):
+            send_result = _safe_send(lead, kind="initial", sequence=0, subject=lead.subject, body=lead.body)
+            db.session.expire_all()
+            lead = db.session.get(OutreachLead, lead.id)
+        if not (lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at):
+            fail("PROVIDER_BACKED_GMAIL_SEND_REQUIRED", lead_id=lead.id, send_result=send_result, after=snapshot(lead))
         cycle = run_scheduled_outreach_cycle()
         db.session.expire_all()
         lead = db.session.get(OutreachLead, lead.id)
-        result = {"ok": bool(cycle.get("ok")), "recipient": recipient, "lead_id": lead.id, "created": created, "before": before, "after": snapshot(lead), "cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat()}
+        result = {"ok": bool(cycle.get("ok")) and bool(lead.gmail_message_id) and bool(lead.gmail_thread_id), "recipient": recipient, "lead_id": lead.id, "created": created, "before": before, "send_result": send_result, "after": snapshot(lead), "cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat()}
         print("PROVIDER_ACCEPTANCE_RESULT " + json.dumps(result, default=str, sort_keys=True))
         if not result["ok"]: raise SystemExit(1)
 
