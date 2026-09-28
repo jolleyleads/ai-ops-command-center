@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import app, db
-from outreach_automation import OutreachLead, _safe_send
+from outreach_automation import OutreachLead, _safe_send, _store_qualification
 from outreach_scheduler import run_scheduled_outreach_cycle
 
 def fail(reason, **extra):
@@ -24,12 +24,12 @@ def main():
     with app.app_context():
         marker = "Provider Acceptance E2E"
         lead = OutreachLead.query.filter_by(contact_email=recipient, company=marker).order_by(OutreachLead.id.desc()).first()
-        created = False
-        if lead is None:
-            lead = OutreachLead(company=marker, contact_email=recipient, contact_name="Acceptance Test", location="Production Acceptance", source_url="provider-acceptance", evidence_json="[]", score=100, verification="SOURCE_VERIFIED", status="qualified", subject="AI Ops provider acceptance test", body="Production acceptance test. Please reply that you are interested and include a specific meeting time.")
-            db.session.add(lead)
-            db.session.commit()
-            created = True
+        if lead is None: fail("ACCEPTANCE_LEAD_REQUIRED")
+        qualification = _store_qualification(lead)
+        db.session.expire_all()
+        lead = db.session.get(OutreachLead, lead.id)
+        if not (qualification.get("ok") is True and qualification.get("qualified") is True and qualification.get("status") == "Qualified"):
+            fail("REAL_QUALIFICATION_REQUIRED", lead_id=lead.id, qualification=qualification, after=snapshot(lead))
         before = snapshot(lead)
         send_result = None
         if not (lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at):
@@ -37,11 +37,11 @@ def main():
             db.session.expire_all()
             lead = db.session.get(OutreachLead, lead.id)
         if not (lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at):
-            fail("PROVIDER_BACKED_GMAIL_SEND_REQUIRED", lead_id=lead.id, send_result=send_result, after=snapshot(lead))
+            fail("PROVIDER_BACKED_GMAIL_SEND_REQUIRED", lead_id=lead.id, qualification=qualification, send_result=send_result, after=snapshot(lead))
         cycle = run_scheduled_outreach_cycle()
         db.session.expire_all()
         lead = db.session.get(OutreachLead, lead.id)
-        result = {"ok": bool(cycle.get("ok")) and bool(lead.gmail_message_id) and bool(lead.gmail_thread_id), "recipient": recipient, "lead_id": lead.id, "created": created, "before": before, "send_result": send_result, "after": snapshot(lead), "cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat()}
+        result = {"ok": bool(cycle.get("ok")) and bool(lead.gmail_message_id) and bool(lead.gmail_thread_id), "recipient": recipient, "lead_id": lead.id, "qualification": qualification, "before": before, "send_result": send_result, "after": snapshot(lead), "cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat()}
         print("PROVIDER_ACCEPTANCE_RESULT " + json.dumps(result, default=str, sort_keys=True))
         if not result["ok"]: raise SystemExit(1)
 
