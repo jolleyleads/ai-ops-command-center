@@ -9,7 +9,9 @@ from scripts.provider_integration_acceptance import run_provider_integration_acc
 def provider_acceptance_once():
     if not oa._operator_session_authorized():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
-    if not oa._csrf_valid(request):
+    # Use the production operator CSRF validator. The prior endpoint referenced
+    # a nonexistent _csrf_valid(request), which caused the observed HTTP 500.
+    if not oa._csrf_ok():
         return jsonify({"ok": False, "error": "csrf_failed"}), 403
     data = request.get_json(silent=True) or {}
     recipient = str(data.get("recipient") or "jolleysalesfloor@gmail.com").strip().lower()
