@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin,urlparse
 import requests
 from app import db
 from outreach_automation import OutreachLead, _draft_email
@@ -24,37 +24,49 @@ def _same_company_domain(email,urls):
     return any(d==_host(u) or d.endswith("."+_host(u)) or _host(u).endswith("."+d) for u in urls if _host(u))
 def _candidate_urls(result):
     vals=[]
-    for k in ("website","direct_url","source_url","url"):
+    for k in ("website","direct_url","source_url","url","verification_source_url"):
         u=_clean(result.get(k),1800)
+        if u.startswith(("http://","https://")):vals.append(u)
+    for u in result.get("supporting_urls") or []:
+        u=_clean(u,1800)
         if u.startswith(("http://","https://")):vals.append(u)
     for e in result.get("evidence") or []:
         if isinstance(e,dict):
             u=_clean(e.get("url"),1800)
             if u.startswith(("http://","https://")):vals.append(u)
-    return list(dict.fromkeys(vals))[:6]
-def _verified_public_email(result):
-    urls=_candidate_urls(result)
-    for k in ("contact_email","email","recruiterEmail"):
-        e=_valid_email(result.get(k))
-        if e and urls and _same_company_domain(e,urls):return e,"search_result"
-    for evidence in result.get("evidence") or []:
-        if isinstance(evidence,dict):
-            for value in evidence.values():
-                if isinstance(value,str):
-                    for candidate in EMAIL_RE.findall(value):
-                        e=_valid_email(candidate)
-                        if e and urls and _same_company_domain(e,urls):return e,"evidence"
-    headers={"User-Agent":"Mozilla/5.0 AI-Ops-Contact-Verification/2.0"}
-    for url in urls:
-        try:r=requests.get(url,headers=headers,timeout=8,allow_redirects=True)
+    return list(dict.fromkeys(vals))[:8]
+def _public_contact_evidence(result):
+    """Fetch only candidate-bound public pages; return source rows, never guessed contacts."""
+    urls=_candidate_urls(result);rows=[];headers={"User-Agent":"Mozilla/5.0 AI-Ops-Contact-Verification/2.1"}
+    blocked_hosts=("indeed.","ziprecruiter.","glassdoor.","linkedin.","facebook.","google.","yelp.")
+    # Prefer the first non-aggregator company-bound URL as the website root.
+    roots=[]
+    for u in urls:
+        h=_host(u)
+        if h and not any(x in h for x in blocked_hosts):
+            root=f"{urlparse(u).scheme}://{h}/"
+            if root not in roots:roots.append(root)
+    fetch_urls=[]
+    for root in roots[:2]:
+        fetch_urls.extend([root,urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"careers")])
+    fetch_urls=list(dict.fromkeys(fetch_urls))[:8]
+    for url in fetch_urls:
+        try:r=requests.get(url,headers=headers,timeout=(2,4),allow_redirects=True)
         except requests.RequestException:continue
         if not r.ok:continue
         ct=(r.headers.get("content-type") or "").lower()
         if "text/html" not in ct and "text/plain" not in ct:continue
-        for candidate in EMAIL_RE.findall(r.text[:500000]):
-            e=_valid_email(candidate)
-            if e and _same_company_domain(e,[r.url,url]):return e,r.url
-    return "",""
+        final=r.url;final_host=_host(final)
+        if not final_host or not any(final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host) for root in roots):continue
+        text=r.text[:500000]
+        # Source row is accepted only when it exposes a same-domain public email or phone.
+        emails=[_valid_email(x) for x in EMAIL_RE.findall(text)]
+        emails=[e for e in emails if e and _same_company_domain(e,[final])]
+        phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
+        if emails or phone:
+            rows.append({"candidate_name":_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300),"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":text[:120000],"url":final,"source":"public_company_contact_page"})
+    return rows
+
 def _evidence_score(result):
     raw=result.get("intent_score")
     if raw is None:raw=result.get("prospect_score")
@@ -82,48 +94,34 @@ def _evidence_for_storage(result):
 
 def ingest_verified_results(search_payload):
     summary={"enabled":True,"autosend_enabled":AUTOSEND_ENABLED,"mode":"queue_only" if not AUTOSEND_ENABLED else "autosend","eligible":0,"saved":0,"drafted":0,"sent":0,"skipped":[]}
-    if not _contractor_search(search_payload):
-        summary["enabled"]=False;summary["paused_reason"]="not_contractor_or_permit_search";return summary
+    if not _contractor_search(search_payload):summary["enabled"]=False;summary["paused_reason"]="not_contractor_or_permit_search";return summary
     for result in search_payload.get("results") or []:
         if not isinstance(result,dict):continue
-        company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300)
-        score=_evidence_score(result)
+        company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300);score=_evidence_score(result)
         if not company or score<QUEUE_MIN_SCORE or not _verified(result):continue
-        summary["eligible"]+=1
-        urls=_candidate_urls(result);source_url=urls[0] if urls else ""
-        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls}, result.get("evidence") or [result])
+        summary["eligible"]+=1;urls=_candidate_urls(result);source_url=urls[0] if urls else ""
+        base_evidence=result.get("evidence") or [result]
+        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},base_evidence)
         validated=validated_payload(enrichment)
+        # If strict source-bound enrichment has no validated contact, inspect the
+        # candidate's own public company pages, then run the same validator again.
+        if not validated.get("email") and not validated.get("phone"):
+            contact_rows=_public_contact_evidence(result)
+            if contact_rows:
+                enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},list(base_evidence)+contact_rows)
+                validated=validated_payload(enrichment)
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
-        qctx={
-            "target_location":_clean(search_payload.get("location"),300),
-            "candidate_location":_clean(result.get("location"),300),
-            "business_type":_clean(search_payload.get("business_type") or search_payload.get("category"),300),
-            "candidate_type":_clean(result.get("category") or result.get("type"),300),
-            "query":_clean(search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent"),1000),
-            "intent_signal":_clean(search_payload.get("intent_signal") or search_payload.get("query") or search_payload.get("goal"),1000),
-            "evidence":result.get("evidence") or [],
-            "duplicate":bool(existing),
-            "excluded":bool(result.get("excluded")),
-            "exclusion_terms":search_payload.get("exclusion_terms") or [],
-            "max_evidence_age_days":search_payload.get("max_evidence_age_days") or 180,
-        }
-        qualification=qualify_lead(validated,verification_ok=_verified(result),context=qctx)
-        qualified=qualification_payload(validated,qualification)
-        if not qualified:
-            summary["skipped"].append({"company":company,"reason":"qualification_failed","qualification_status":qualification.get("status"),"qualification_reason_codes":qualification.get("reason_codes") or []});continue
-        email=_clean(qualified.get("email"),500)
-        email_source=_clean(qualified.get("email_source_url"),1800)
-        contact_name=_clean(qualified.get("decision_maker"),300)
-        if existing:
-            summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
+        qctx={"target_location":_clean(search_payload.get("location"),300),"candidate_location":_clean(result.get("location"),300),"business_type":_clean(search_payload.get("business_type") or search_payload.get("category"),300),"candidate_type":_clean(result.get("category") or result.get("type"),300),"query":_clean(search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent"),1000),"intent_signal":_clean(search_payload.get("intent_signal") or search_payload.get("query") or search_payload.get("goal"),1000),"evidence":result.get("evidence") or [],"duplicate":bool(existing),"excluded":bool(result.get("excluded")),"exclusion_terms":search_payload.get("exclusion_terms") or [],"max_evidence_age_days":search_payload.get("max_evidence_age_days") or 180}
+        qualification=qualify_lead(validated,verification_ok=_verified(result),context=qctx);qualified=qualification_payload(validated,qualification)
+        if not qualified:summary["skipped"].append({"company":company,"reason":"qualification_failed","qualification_status":qualification.get("status"),"qualification_reason_codes":qualification.get("reason_codes") or [],"validated_contact_fields":[k for k in ("email","phone","decision_maker") if validated.get(k)]});continue
+        email=_clean(qualified.get("email"),500);email_source=_clean(qualified.get("email_source_url"),1800);contact_name=_clean(qualified.get("decision_maker"),300)
+        if existing:summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
         lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated,"qualification":qualification,"qualified":qualified}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
         db.session.add(lead);db.session.commit();summary["saved"]+=1
         if email:
             drafted=_draft_email(lead)
-            if drafted.get("ok"):
-                lead.subject=drafted["subject"];lead.body=drafted["body"];lead.status="drafted";lead.last_error="";db.session.commit();summary["drafted"]+=1
-            else:
-                lead.last_error=_clean(drafted.get("error"),2000);db.session.commit();summary["skipped"].append({"company":company,"reason":"draft_failed"})
+            if drafted.get("ok"):lead.subject=drafted["subject"];lead.body=drafted["body"];lead.status="drafted";lead.last_error="";db.session.commit();summary["drafted"]+=1
+            else:lead.last_error=_clean(drafted.get("error"),2000);db.session.commit();summary["skipped"].append({"company":company,"reason":"draft_failed"})
         else:summary["skipped"].append({"company":company,"reason":"no_verified_public_email"})
         summary["skipped"].append({"company":company,"email_source":email_source,"status":lead.status,"lead_id":lead.id})
     return summary
