@@ -1,12 +1,26 @@
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from flask import jsonify, request
 from app import app, db
-from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _contractor_search, _evidence_for_storage, _evidence_score, _verified, _verified_public_email
+from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _contractor_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
 from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
 
 AUTOSEND_ENABLED = os.getenv("OUTREACH_AUTOSEND_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
+
+
+def _verified_public_email(result):
+    """Return only a source-visible, same-company-domain email; never synthesize one."""
+    for row in _public_contact_evidence(result):
+        url = _clean(row.get("url"), 1800)
+        text = " ".join([_clean(row.get("subtitle"), 5000), _clean(row.get("text"), 120000)])
+        for raw in EMAIL_SCAN_RE.findall(text):
+            email = _valid_email(raw)
+            if email and url and _same_company_domain(email, [url]):
+                return email, url
+    return "", ""
 
 
 def _evidence_with_contact(result, email, email_source):
