@@ -1,0 +1,70 @@
+name: V1.1 Production Acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call live one-shot acceptance harness
+        id: acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://ai-ops-command-center.onrender.com/api/operator/v1-1-acceptance-once"
+          HTTP_CODE=$(curl --fail-with-body --silent --show-error \
+            --connect-timeout 20 --max-time 420 \
+            -X POST \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -o acceptance.json \
+            -w '%{http_code}' \
+            "$URL") || {
+              rc=$?
+              echo "HTTP transport failed with curl exit $rc"
+              test -f acceptance.json && cat acceptance.json || true
+              exit "$rc"
+            }
+          echo "HTTP $HTTP_CODE"
+          cat acceptance.json
+          python - <<'PY'
+          import json, sys
+          with open('acceptance.json', encoding='utf-8') as f:
+              data=json.load(f)
+          print(json.dumps(data, indent=2, sort_keys=True))
+          if data.get('ok') is not True or data.get('pass') is not True or data.get('stage') != 'complete':
+              print('FAIL: production acceptance did not return ok=true, pass=true, stage=complete', file=sys.stderr)
+              sys.exit(1)
+          print('PASS: V1.1 production acceptance complete')
+          PY
+
+      - name: Publish acceptance summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## V1.1 Production Acceptance'
+            echo
+            if [ -f acceptance.json ]; then
+              echo '```json'
+              cat acceptance.json
+              echo
+              echo '```'
+            else
+              echo 'No JSON response was produced.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload acceptance receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v11-production-acceptance-receipt
+          path: acceptance.json
+          if-no-files-found: warn
+          retention-days: 14
