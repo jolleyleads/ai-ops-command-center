@@ -1,7 +1,7 @@
 """V1.1 customer demo and deterministic acceptance harness.
 
-The adapter calls the frozen V1 discovery/orchestration functions. The acceptance
-endpoint exercises the same adapter without bypassing verification or safe-send.
+The adapter calls the frozen V1 discovery/orchestration functions. V1.1 may add
+candidate-specific evidence before orchestration, but never bypasses V1 gates.
 """
 import json
 from datetime import datetime, timezone
@@ -10,12 +10,11 @@ from app import app
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
 from v1_orchestration import orchestrate_discovery
+from v11_evidence_upgrade import enhance_discovery
 
 MAX_DEMO_SEND_LIMIT=100
 
-
 def _text(v, limit): return str(v or "").strip()[:limit]
-
 
 def _lead_view(lead):
     try: evidence=json.loads(lead.evidence_json or "[]")
@@ -26,7 +25,6 @@ def _lead_view(lead):
     status=(lead.status or "new").lower()
     return {"id":lead.id,"company":lead.company or "Unknown company","location":lead.location or "","why_qualified":"Verified public evidence met the V1 qualification gate" if status not in {"needs_evidence","rejected"} else "Additional evidence required","supporting_evidence":safe,"contact_status":"Verified contact available" if lead.contact_email else "Contact research pending","pipeline_stage":status.replace("_"," ").title(),"score":lead.score}
 
-
 def _campaign_payload(data):
     target=_text(data.get("target_customer"),500); territory=_text(data.get("territory"),200); offer=_text(data.get("offer"),1200)
     try: send_limit=int(data.get("sending_limit") or 25)
@@ -36,7 +34,6 @@ def _campaign_payload(data):
     if not territory:return None,{"ok":False,"error":"territory_required"}
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"query":target},None
 
-
 def _run_campaign(data):
     campaign,error=_campaign_payload(data)
     if error:return None,"configuration",error["error"]
@@ -44,20 +41,22 @@ def _run_campaign(data):
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
     if not isinstance(discovery,dict):return None,"discovery","DISCOVERY_NOT_OBJECT"
     if not isinstance(discovery.get("results",[]),list):return None,"discovery","DISCOVERY_RESULTS_NOT_LIST"
+    try: discovery=enhance_discovery(discovery,campaign["query"],campaign["territory"])
+    except Exception as exc:
+        app.logger.exception("V11_EVIDENCE_UPGRADE_ERROR")
+        return None,"verification",f"{type(exc).__name__}: {exc}"
     try: outreach=orchestrate_discovery(discovery)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
     visible=[]
     for result in discovery.get("results") or []:
-        if isinstance(result,dict): visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
+        if isinstance(result,dict): visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
     payload={"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach}
     return payload,None,None
-
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all(); return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
-
 
 @app.route("/api/demo/campaigns/launch",methods=["POST"])
 def launch_demo_campaign():
@@ -65,27 +64,15 @@ def launch_demo_campaign():
     if payload:return jsonify(payload),200
     return jsonify({"ok":False,"stage":stage,"reason":reason}),400 if stage=="configuration" else 500
 
-
 @app.route("/api/operator/v1-1-acceptance-once",methods=["POST"])
 def v11_acceptance_once():
-    """One-shot server-side acceptance of the customer launch adapter.
-
-    Uses a controlled campaign with sending_limit=1 and the unchanged V1 gates.
-    PASS means adapter + discovery + orchestration returned structurally valid
-    results. A zero-lead outcome is valid; fabricated leads are never required.
-    """
     started=datetime.now(timezone.utc).isoformat()
     controlled={"target_customer":"HVAC companies actively hiring technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1}
     payload,stage,reason=_run_campaign(controlled)
-    if not payload:
-        return jsonify({"ok":False,"pass":False,"stage":stage,"reason":reason,"timestamp":started}),500
-    d=payload["discovery"]; o=payload["outreach"]
-    required=("qualified","drafted","sent")
-    missing=[k for k in required if k not in o]
-    if missing:
-        return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started}),500
-    return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":{"verified":d["verified"],"candidates":d["candidates"],"rejected":d["rejected"],"result_count":len(d["results"])},"outreach":{"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0)},"safety":"Frozen V1 verification, qualification and safe-send gates remained authoritative"}),200
-
+    if not payload:return jsonify({"ok":False,"pass":False,"stage":stage,"reason":reason,"timestamp":started}),500
+    d=payload["discovery"];o=payload["outreach"];required=("qualified","drafted","sent");missing=[k for k in required if k not in o]
+    if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started}),500
+    return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":{"verified":d["verified"],"candidates":d["candidates"],"rejected":d["rejected"],"result_count":len(d["results"])},"outreach":{"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0)},"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),200
 
 @app.route("/demo",methods=["GET"])
 def customer_demo():
