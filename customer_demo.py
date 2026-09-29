@@ -68,11 +68,15 @@ def launch_demo_campaign():
 def v11_acceptance_once():
     started=datetime.now(timezone.utc).isoformat()
     controlled={"target_customer":"HVAC companies actively hiring technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1}
-    payload,stage,reason=_run_campaign(controlled)
-    if not payload:return jsonify({"ok":False,"pass":False,"stage":stage,"reason":reason,"timestamp":started}),500
-    d=payload["discovery"];o=payload["outreach"];required=("qualified","drafted","sent");missing=[k for k in required if k not in o]
-    if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started}),500
-    return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":{"verified":d["verified"],"candidates":d["candidates"],"rejected":d["rejected"],"result_count":len(d["results"])},"outreach":{"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0)},"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),200
+    try:
+        payload,stage,reason=_run_campaign(controlled)
+        if not payload:return jsonify({"ok":False,"pass":False,"stage":stage or "unknown","reason":reason or "UNKNOWN_FAILURE","timestamp":started}),500
+        d=payload.get("discovery") or {};o=payload.get("outreach") or {};required=("qualified","drafted","sent");missing=[k for k in required if k not in o]
+        if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started}),500
+        return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":{"verified":d.get("verified",0),"candidates":d.get("candidates",0),"rejected":d.get("rejected",0),"result_count":len(d.get("results") or [])},"outreach":{"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0)},"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),200
+    except Exception as exc:
+        app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR")
+        return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started}),500
 
 @app.route("/demo",methods=["GET"])
 def customer_demo():
