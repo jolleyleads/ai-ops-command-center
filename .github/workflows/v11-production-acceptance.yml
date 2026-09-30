@@ -15,21 +15,23 @@ concurrency:
 jobs:
   production-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 7
     steps:
       - name: Wait for Render auto-deploy to settle
         shell: bash
-        run: sleep 90
+        run: sleep 60
 
       - name: Call live one-shot acceptance harness
         id: acceptance
         shell: bash
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           URL="https://ai-ops-command-center.onrender.com/api/operator/v1-1-acceptance-once"
+          # One bounded attempt. Do not multiply a slow/hung server request with
+          # curl retries: a timeout is a real acceptance failure that must surface.
           HTTP_CODE=$(curl --fail-with-body --silent --show-error \
-            --retry 4 --retry-delay 20 --retry-all-errors \
-            --connect-timeout 20 --max-time 420 \
+            --connect-timeout 15 --max-time 240 \
             -X POST \
             -H 'Accept: application/json' \
             -H 'Content-Type: application/json' \
@@ -37,7 +39,7 @@ jobs:
             -w '%{http_code}' \
             "$URL") || {
               rc=$?
-              echo "HTTP transport failed with curl exit $rc"
+              echo "FAIL: acceptance transport did not complete inside the 240s budget (curl exit $rc)"
               test -f acceptance.json && cat acceptance.json || true
               exit "$rc"
             }
@@ -69,7 +71,7 @@ jobs:
               echo
               echo '```'
             else
-              echo 'No JSON response was produced.'
+              echo 'No JSON response was produced. Acceptance failed before a receipt was returned.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
