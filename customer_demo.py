@@ -65,16 +65,16 @@ def launch_demo_campaign():
 @app.route("/api/operator/v1-1-acceptance-once",methods=["POST"])
 def v11_acceptance_once():
     started=datetime.now(timezone.utc).isoformat()
-    # Rotate through nearby territories so a previous acceptance run cannot pass
-    # merely by rediscovering the same already-queued companies. No production
-    # lead is deleted or mutated to manufacture freshness.
-    # Keep acceptance bounded to one fresh territory per invocation. The old
-    # four-territory serial loop made a single HTTP acceptance request spend
-    # ~2+ minutes in discovery before it could return a truthful 409/PASS.
-    # Norfolk is intentionally outside the prior acceptance rotation; all V1
-    # verification, qualification, contact-validation and safe-send gates remain.
+    # Search a bounded set of distinct discovery pools. A pool that only
+    # rediscovers already-queued companies remains a truthful non-pass; the
+    # harness continues to the next pool and stops on the first genuinely fresh
+    # lead that crosses the unchanged V1 qualification + drafting gates.
+    # Nothing is deleted, reset, or mutated to manufacture freshness.
     campaigns=[
-      {"target_customer":"HVAC companies actively hiring technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC companies actively hiring service technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC contractors hiring installers or technicians","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"heating and air conditioning companies with technician openings","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"commercial HVAC companies actively hiring technicians","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
     attempts=[]
     try:
