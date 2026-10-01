@@ -13,7 +13,13 @@ EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{
 
 def _verified_public_email(result):
     """Return only a source-visible, same-company-domain email; never synthesize one."""
-    for row in _public_contact_evidence(result):
+    contact_result = _public_contact_evidence(result)
+    # outreach_bridge returns (rows, probe_metadata). Older callers expected rows
+    # directly; normalize both shapes here and keep verification fail-closed.
+    rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
         url = _clean(row.get("url"), 1800)
         text = " ".join([_clean(row.get("subtitle"), 5000), _clean(row.get("text"), 120000)])
         for raw in EMAIL_SCAN_RE.findall(text):
