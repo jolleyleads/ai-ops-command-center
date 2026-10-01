@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 import outreach_automation as oa
 import smart_search
+import v1_orchestration as v1
 
 
 @pytest.fixture()
@@ -93,7 +94,6 @@ def test_scheduler_rejects_wrong_secret(env):
 
 
 def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
-    import v1_orchestration as v1
     monkeypatch.setattr(
         v1,
         "_public_contact_evidence",
