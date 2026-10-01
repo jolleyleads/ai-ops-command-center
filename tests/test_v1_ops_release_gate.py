@@ -90,3 +90,19 @@ def test_scheduler_same_hour_executes_window_only_once(env,monkeypatch):
 def test_scheduler_rejects_wrong_secret(env):
     c=oa.app.test_client()
     assert c.post("/api/outreach/process-followups",headers={"X-Outreach-Cron-Token":"wrong"},json={}).status_code==401
+
+
+def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
+    import v1_orchestration as v1
+    monkeypatch.setattr(
+        v1,
+        "_public_contact_evidence",
+        lambda result: (
+            [{"url": "https://example.com/contact", "subtitle": "owner@example.com", "text": ""}],
+            {"attempted": 1, "budget_exhausted": False},
+        ),
+    )
+    monkeypatch.setattr(v1, "_same_company_domain", lambda email, urls: True)
+    email, source = v1._verified_public_email({"company": "Example"})
+    assert email == "owner@example.com"
+    assert source == "https://example.com/contact"
