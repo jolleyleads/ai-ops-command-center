@@ -68,11 +68,13 @@ def v11_acceptance_once():
     # Rotate through nearby territories so a previous acceptance run cannot pass
     # merely by rediscovering the same already-queued companies. No production
     # lead is deleted or mutated to manufacture freshness.
+    # Keep acceptance bounded to one fresh territory per invocation. The old
+    # four-territory serial loop made a single HTTP acceptance request spend
+    # ~2+ minutes in discovery before it could return a truthful 409/PASS.
+    # Norfolk is intentionally outside the prior acceptance rotation; all V1
+    # verification, qualification, contact-validation and safe-send gates remain.
     campaigns=[
-      {"target_customer":"HVAC companies actively hiring technicians","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC companies actively hiring technicians","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC companies actively hiring technicians","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC companies actively hiring technicians","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC companies actively hiring technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
     attempts=[]
     try:
