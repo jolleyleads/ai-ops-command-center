@@ -70,12 +70,28 @@ def v11_acceptance_once():
     # harness continues to the next pool and stops on the first genuinely fresh
     # lead that crosses the unchanged V1 qualification + drafting gates.
     # Nothing is deleted, reset, or mutated to manufacture freshness.
-    campaigns=[
+    campaign_pool=[
       {"target_customer":"HVAC companies actively hiring service technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"HVAC contractors hiring installers or technicians","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"heating and air conditioning companies with technician openings","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"commercial HVAC companies actively hiring technicians","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC service companies hiring technicians","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC contractors with current technician job openings","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"heating and cooling contractors actively hiring technicians","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"commercial heating and air companies hiring service technicians","territory":"Yorktown, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC companies hiring installers and service technicians","territory":"Poquoson, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"heating and air contractors with active technician openings","territory":"Smithfield, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"commercial HVAC contractors hiring field technicians","territory":"Gloucester, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"HVAC service contractors actively hiring field staff","territory":"Franklin, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
+    # Rotate four bounded pools from durable lead state so repeated acceptance
+    # runs do not keep exhausting the same top-ranked companies. This changes
+    # discovery breadth only; verification, qualification, duplicate and
+    # safe-send gates remain unchanged.
+    latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
+    rotation_seed=(latest.id if latest else 0)
+    start=rotation_seed % len(campaign_pool)
+    campaigns=[campaign_pool[(start+i)%len(campaign_pool)] for i in range(4)]
     attempts=[]
     try:
         for controlled in campaigns:
