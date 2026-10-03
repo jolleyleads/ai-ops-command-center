@@ -112,7 +112,7 @@ def _evidence_for_storage(result):
 
 def ingest_verified_results(search_payload):
     summary={"enabled":True,"autosend_enabled":AUTOSEND_ENABLED,"mode":"queue_only" if not AUTOSEND_ENABLED else "autosend","eligible":0,"saved":0,"drafted":0,"sent":0,"skipped":[]}
-    if not _contractor_search(search_payload):summary["enabled"]=False;summary["paused_reason"]="not_contractor_or_permit_search";return summary
+    if not _outreach_search(search_payload):summary["enabled"]=False;summary["paused_reason"]="not_b2b_outreach_search";return summary
     for result in search_payload.get("results") or []:
         if not isinstance(result,dict):continue
         company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300);score=_evidence_score(result)
