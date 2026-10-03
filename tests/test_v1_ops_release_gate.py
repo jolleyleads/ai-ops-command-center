@@ -197,3 +197,9 @@ def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
     assert "campaign_pool=[" in source
     assert "for controlled in campaign_pool:" in source
     assert "for controlled in campaigns:" not in source
+
+
+def test_customer_demo_module_compiles(env):
+    from pathlib import Path
+    source = Path("customer_demo.py").read_text(encoding="utf-8")
+    compile(source, "customer_demo.py", "exec")
