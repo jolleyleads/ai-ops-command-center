@@ -106,3 +106,25 @@ def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
     email, source = v1._verified_public_email({"company": "Example"})
     assert email == "owner@example.com"
     assert source == "https://example.com/contact"
+
+
+def test_verified_public_email_accepts_source_visible_same_domain_email(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: (_ for _ in ()).throw(AssertionError("probe should not run")))
+    email, source = v1._verified_public_email({
+        "company": "Example HVAC",
+        "website": "https://examplehvac.com",
+        "evidence": [{"url": "https://examplehvac.com/careers", "snippet": "Apply: jobs@examplehvac.com"}],
+    })
+    assert email == "jobs@examplehvac.com"
+    assert source == "https://examplehvac.com/careers"
+
+
+def test_verified_public_email_rejects_source_visible_off_domain_email(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([], {"attempted": 0}))
+    email, source = v1._verified_public_email({
+        "company": "Example HVAC",
+        "website": "https://examplehvac.com",
+        "evidence": [{"url": "https://examplehvac.com/careers", "snippet": "Apply: recruiter@gmail.com"}],
+    })
+    assert email == ""
+    assert source == ""
