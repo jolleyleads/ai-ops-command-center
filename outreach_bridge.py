@@ -88,14 +88,16 @@ def _public_contact_evidence(result):
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the
         # company's own page. Only same-company-domain URLs may enter the queue.
-        for href in re.findall(r'(?i)href=["\']([^"\']+)["\']',text):
+        for href,label in re.findall(r'(?is)<a[^>]+href=["\\']([^"\\']+)["\\'][^>]*>(.*?)</a>',text):
             href=_clean(href,1800)
             if not href or href.startswith(("mailto:","tel:","#","javascript:")):continue
             absolute=urljoin(final,href)
             ah=_host(absolute)
             if not ah or not (ah==_host(owning_root) or ah.endswith("."+_host(owning_root)) or _host(owning_root).endswith("."+ah)):continue
             path=(urlparse(absolute).path or "").lower()
-            if any(token in path for token in ("contact","about","team","staff","career","location")) and absolute not in seen and absolute not in fetch_urls:
+            label_text=re.sub(r"<[^>]+>"," ",label).lower()
+            contactish=("contact","about","team","staff","career","location","reach","get in touch","connect")
+            if any(token in path or token in label_text for token in contactish) and absolute not in seen and absolute not in fetch_urls:
                 fetch_urls.insert(0,absolute)
     return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
 
