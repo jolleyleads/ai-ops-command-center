@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: production-live-proof
+  cancel-in-progress: false
+
 jobs:
   smoke-test:
     runs-on: ubuntu-latest

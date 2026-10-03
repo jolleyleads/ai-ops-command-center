@@ -128,10 +128,10 @@ def _semantic_keep(evidence,evaluation):
 def _deterministic_route_intent(q):
     """Stable universal intent label when the semantic planner is unavailable."""
     ql=_clean(q,1200).lower()
+    if any(x in ql for x in ("contractor","contractors")):return "contractors"
     if "master electrician" in ql and any(x in ql for x in ("lead","leads","pull permit","permit pulling")):return "permit_leads"
     if any(x in ql for x in ("permit","permits","inspection","inspections","license","licensing")):return "permits"
-    if any(x in ql for x in ("job","jobs","hiring","hire ","career","careers","open role","opening")) and not any(x in ql for x in ("contractor","contractors","company","companies","business","businesses","firm","firms")):return "jobs"
-    if any(x in ql for x in ("contractor","contractors")):return "contractors"
+    if any(x in ql for x in ("job","jobs","hiring","hire ","career","careers","open role","opening")) and not any(x in ql for x in ("company","companies","business","businesses","firm","firms")):return "jobs"
     if any(x in ql for x in ("company","companies","business","businesses","firm","firms")):return "businesses"
     return "web_research"
 

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: v11-production-acceptance
+  group: production-live-proof
   cancel-in-progress: false
 
 jobs:
