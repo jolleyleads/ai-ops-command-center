@@ -87,7 +87,7 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
             if tm:
                 window=text[max(0,tm.start()-100):min(len(text),tm.end()+100)]
                 names=re.findall(r"\b([A-Z][a-z]{1,30}\s+[A-Z][a-z]{1,30})\b",window)
-                names=[n for n in names if n.lower() not in {"Virginia Beach","United States","Master Electrician"}]
+                names=[n for n in names if n.lower() not in {"Virginia Beach","United States"}]
                 if names:
                     out["fields"]["decision_maker"]={"value":names[0],"title":tm.group(1),"source_url":u,"validated":True}
         out["evidence"].append({"url":u,"title":_clean(row.get("title"),500),"snippet":_clean(row.get("subtitle") or row.get("snippet"),1500)})

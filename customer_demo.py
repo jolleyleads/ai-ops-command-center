@@ -75,23 +75,11 @@ def v11_acceptance_once():
       {"target_customer":"roofing companies actively hiring roofers","business_type":"roofing","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"property management companies actively hiring maintenance technicians","business_type":"property management","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"auto repair companies actively hiring mechanics","business_type":"auto repair","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC service companies hiring technicians","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC contractors with current technician job openings","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"heating and cooling contractors actively hiring technicians","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"commercial heating and air companies hiring service technicians","territory":"Yorktown, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC companies hiring installers and service technicians","territory":"Poquoson, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"heating and air contractors with active technician openings","territory":"Smithfield, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"commercial HVAC contractors hiring field technicians","territory":"Gloucester, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC service contractors actively hiring field staff","territory":"Franklin, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"law firms actively hiring paralegals","business_type":"legal services","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"dental practices actively hiring dental assistants","business_type":"dental practice","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"restaurants actively hiring managers","business_type":"restaurant","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"landscaping companies actively hiring crew members","business_type":"landscaping","territory":"Yorktown, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
-    # Rotate four bounded pools from durable lead state so repeated acceptance
-    # runs do not keep exhausting the same top-ranked companies. This changes
-    # discovery breadth only; verification, qualification, duplicate and
-    # safe-send gates remain unchanged.
-    latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
-    rotation_seed=(latest.id if latest else 0)
-    start=rotation_seed % len(campaign_pool)
-    campaigns=[campaign_pool[(start+i)%len(campaign_pool)] for i in range(4)]
     attempts=[]
     try:
         for controlled in campaigns:
