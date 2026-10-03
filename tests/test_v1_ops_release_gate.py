@@ -132,7 +132,7 @@ def test_verified_public_email_rejects_source_visible_off_domain_email(env, monk
 
 def test_outreach_gate_is_universal_for_non_contractor_b2b_search(env):
     payload={"query":"law firms actively hiring paralegals","intent":"law firms actively hiring paralegals","results":[]}
-    assert v1._contractor_search(payload) is True
+    assert v1._outreach_search(payload) is True
 
 
 def test_v11_hiring_patterns_are_not_hvac_specific(env):
@@ -174,14 +174,15 @@ def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
 
 
 def test_acceptance_pool_is_cross_industry(env):
-    import customer_demo
-    source = __import__("inspect").getsource(customer_demo.v11_acceptance_once).lower()
-    assert "plumbing companies" in source
-    assert "law firms" in source
-    assert "dental practices" in source
-    assert "restaurants" in source
-    assert "hvac" not in source
-    assert "heating and cooling" not in source
+    from pathlib import Path
+    source = Path("customer_demo.py").read_text(encoding="utf-8").lower()
+    pool = source[source.index("campaign_pool=["):source.index("attempts=[]", source.index("campaign_pool=["))]
+    assert "plumbing companies" in pool
+    assert "law firms" in pool
+    assert "dental practices" in pool
+    assert "restaurants" in pool
+    assert "hvac" not in pool
+    assert "heating and cooling" not in pool
 
 
 def test_active_orchestration_uses_universal_outreach_gate(env):
