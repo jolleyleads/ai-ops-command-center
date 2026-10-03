@@ -143,3 +143,31 @@ def test_v11_hiring_patterns_are_not_hvac_specific(env):
     assert any(__import__("re").search(p,text,__import__("re").I|__import__("re").S) for p in patterns)
     assert v11._intent_supported("auto repair companies actively hiring mechanics",text) is True
     assert v11._intent_supported("plumbing companies actively hiring plumbers",text) is False
+
+
+def test_initial_draft_is_universal_and_not_electrical_specific(env, monkeypatch):
+    captured = {}
+    def fake_run_ai(*, prompt, instructions):
+        captured["prompt"] = prompt
+        captured["instructions"] = instructions
+        return {"ok": True, "output": json.dumps({"subject": "Hello", "body": "Body"}), "model": "test"}
+    monkeypatch.setattr(oa, "run_ai", fake_run_ai)
+    x = oa.OutreachLead(company="Example Law", location="Norfolk, VA", score=80, verification="VERIFIED", evidence_json="[]")
+    result = oa._draft_email(x)
+    assert result["ok"] is True
+    combined = (captured["prompt"] + " " + captured["instructions"]).lower()
+    assert "master electrician" not in combined
+    assert "permit-pulling" not in combined
+    assert "verified contractor" not in combined
+    assert "business automation" in combined
+
+
+def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
+    monkeypatch.setattr(oa, "run_ai", lambda **kwargs: {"ok": False, "error": "provider unavailable"})
+    x = oa.OutreachLead(company="Example Roofing", location="Chesapeake, VA", score=80, verification="VERIFIED", evidence_json="[]")
+    result = oa._draft_email(x)
+    assert result["ok"] is True
+    assert result["fallback"] is True
+    assert result["model"] == "deterministic-fallback"
+    assert "Example Roofing" in result["subject"]
+    assert "lead generation" in result["body"]
