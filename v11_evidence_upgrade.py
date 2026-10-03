@@ -56,7 +56,7 @@ def _identity_supported(name,row,urls,text):
     if not nk:return False
     hay=_key(" ".join([_s(row.get("title"),1000),text[:8000]]));hosts=_key(" ".join((urlparse(u).hostname or "") for u in urls))
     if nk in hay or nk in hosts:return True
-    tokens=[_key(t) for t in re.findall(r"[A-Za-z0-9]+",name) if len(t)>=6 and t.lower() not in {"company","services","service","heating","cooling"}]
+    tokens=[_key(t) for t in re.findall(r"[A-Za-z0-9]+",name) if len(t)>=6 and t.lower() not in {"company","services","service"}]
     return any(t and (t in hay or t in hosts) for t in tokens)
 def _bounded_exa(name,query,territory):
     key=os.getenv("EXA_API_KEY") or ""
