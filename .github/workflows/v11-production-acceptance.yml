@@ -17,9 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 7
     steps:
-      - name: Wait for Render auto-deploy to settle
+      - name: Wait for live service readiness
         shell: bash
-        run: sleep 60
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          BASE="https://ai-ops-command-center.onrender.com"
+          for i in {1..18}; do
+            code=$(curl --silent --output /dev/null --connect-timeout 5 --max-time 10 -w '%{http_code}' "$BASE/" || true)
+            echo "readiness attempt $i: HTTP $code"
+            if [[ "$code" =~ ^(200|301|302|401|403|404)$ ]]; then
+              echo "Render service is accepting application traffic"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "FAIL: Render did not become ready inside bounded readiness window" >&2
+          exit 1
 
       - name: Call live one-shot acceptance harness
         id: acceptance
