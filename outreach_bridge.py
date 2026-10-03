@@ -12,8 +12,8 @@ from src.qualification import qualify_lead, qualification_payload
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
 AUTOSEND_ENABLED=os.getenv("OUTREACH_AUTOSEND_ENABLED","false").lower() in {"1","true","yes","on"}
-CONTACT_MAX_URLS=max(1,min(int(os.getenv("CONTACT_ENRICH_MAX_URLS","5")),8))
-CONTACT_BUDGET_SECONDS=max(2.0,min(float(os.getenv("CONTACT_ENRICH_BUDGET_SECONDS","12")),20.0))
+CONTACT_MAX_URLS=max(1,min(int(os.getenv("CONTACT_ENRICH_MAX_URLS","8")),12))
+CONTACT_BUDGET_SECONDS=max(2.0,min(float(os.getenv("CONTACT_ENRICH_BUDGET_SECONDS","18")),30.0))
 CONTACT_CONNECT_TIMEOUT=max(0.5,min(float(os.getenv("CONTACT_CONNECT_TIMEOUT","1.5")),3.0))
 CONTACT_READ_TIMEOUT=max(1.0,min(float(os.getenv("CONTACT_READ_TIMEOUT","2.5")),5.0))
 
@@ -57,7 +57,7 @@ def _public_contact_evidence(result):
     fetch_urls=list(roots)
     fallback_urls=[]
     for root in roots:
-        fallback_urls.extend([urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"careers")])
+        fallback_urls.extend([urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"staff"),urljoin(root,"our-team"),urljoin(root,"locations"),urljoin(root,"careers"),urljoin(root,"privacy")])
     fallback_urls=list(dict.fromkeys(fallback_urls))
     budget_exhausted=False
     seen=set()
@@ -82,7 +82,7 @@ def _public_contact_evidence(result):
         owning_root=next((root for root in roots if final_host and (final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host))),"")
         if not owning_root:continue
         text=r.text[:500000]
-        emails=[_valid_email(x) for x in EMAIL_RE.findall(text)]
+        emails=[_valid_email(x) for x in re.findall(r'(?i)mailto:([^?"<> ]+)',text)]+[_valid_email(x) for x in EMAIL_RE.findall(text)]
         emails=list(dict.fromkeys(e for e in emails if e and _same_company_domain(e,[final])))
         phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
         if emails or phone:
@@ -101,7 +101,7 @@ def _public_contact_evidence(result):
             if not ah or not (ah==_host(owning_root) or ah.endswith("."+_host(owning_root)) or _host(owning_root).endswith("."+ah)):continue
             path=(urlparse(absolute).path or "").lower()
             label_text=re.sub(r"<[^>]+>"," ",anchor).lower()
-            contactish=("contact","about","team","staff","career","location","reach","get in touch","connect")
+            contactish=("contact","about","team","staff","people","leadership","career","location","reach","get in touch","connect","privacy")
             if any(token in path or token in label_text for token in contactish) and absolute not in seen and absolute not in fetch_urls:
                 fetch_urls.insert(0,absolute)
     return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
