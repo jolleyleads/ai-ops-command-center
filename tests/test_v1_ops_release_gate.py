@@ -204,3 +204,46 @@ def test_customer_demo_module_compiles(env):
     from pathlib import Path
     source = Path("customer_demo.py").read_text(encoding="utf-8")
     compile(source, "customer_demo.py", "exec")
+
+
+def test_public_contact_probe_discovers_same_domain_contact_links(env, monkeypatch):
+    import outreach_bridge as bridge
+    class Resp:
+        def __init__(self,url,text):
+            self.url=url; self.text=text; self.ok=True; self.headers={"content-type":"text/html"}
+    seen=[]
+    def fake_get(url,**kwargs):
+        seen.append(url)
+        if url=="https://example.com/":
+            return Resp(url, '<a href="/our-team">Team</a><a href="/reach-us">Contact</a>')
+        if url=="https://example.com/reach-us":
+            return Resp(url, 'Email us at hello@example.com')
+        return Resp(url, 'No contact here')
+    monkeypatch.setattr(bridge.requests,"get",fake_get)
+    rows,meta=bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
+    assert rows
+    assert rows[0]["url"]=="https://example.com/reach-us"
+    assert "hello@example.com" in rows[0]["subtitle"]
+    assert meta["attempted"] <= bridge.CONTACT_MAX_URLS
+
+def test_public_contact_probe_rejects_off_domain_email(env, monkeypatch):
+    import outreach_bridge as bridge
+    class Resp:
+        ok=True; headers={"content-type":"text/html"}
+        def __init__(self,url): self.url=url; self.text="Email vendor@gmail.com"
+    monkeypatch.setattr(bridge.requests,"get",lambda url,**kwargs: Resp(url))
+    rows,meta=bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
+    assert not any("vendor@gmail.com" in (x.get("subtitle") or "") for x in rows)
+
+def test_public_contact_probe_never_follows_third_party_discovered_links(env, monkeypatch):
+    import outreach_bridge as bridge
+    class Resp:
+        ok=True; headers={"content-type":"text/html"}
+        def __init__(self,url,text): self.url=url; self.text=text
+    seen=[]
+    def fake_get(url,**kwargs):
+        seen.append(url)
+        return Resp(url,'<a href="https://evil.example/contact">Contact</a>')
+    monkeypatch.setattr(bridge.requests,"get",fake_get)
+    bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
+    assert not any("evil.example" in x for x in seen)
