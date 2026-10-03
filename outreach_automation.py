@@ -602,6 +602,27 @@ def _rank_status(score: int) -> str:
     return "rejected"
 
 
+def _fallback_draft(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any]:
+    """Deterministic evidence-safe draft used only when AI drafting is unavailable/invalid."""
+    company = _clean(lead.company, 300) or "your team"
+    if follow_up_number:
+        subject = _clean(lead.subject, 500) or f"Following up — {company}"
+        body = (
+            f"Hi {company} team,\n\n"
+            "Following up on my earlier note. We help businesses automate lead follow-up and routine outreach workflows. "
+            "If that is relevant, would a brief conversation be useful?\n\nBest,\nMatthew"
+        )
+    else:
+        subject = f"Automation support for {company}"
+        body = (
+            f"Hi {company} team,\n\n"
+            "I came across your company while researching businesses with current public activity. "
+            "We help businesses automate lead generation, follow-up, and repetitive outreach workflows. "
+            "Would you be open to a brief conversation to see whether that could be useful for your team?\n\nBest,\nMatthew"
+        )
+    return {"ok": True, "subject": subject, "body": body, "model": "deterministic-fallback", "fallback": True}
+
+
 def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any]:
     try:
         evidence = json.loads(lead.evidence_json or "[]")
@@ -627,13 +648,14 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
         }
     else:
         instructions = (
-            "Write a concise personalized B2B outreach email for a verified contractor lead. "
-            "Use only facts supplied in workflow data. Never invent a contact name, company need, license, project, or claim. "
+            "Write a concise personalized B2B outreach email for a verified business lead. "
+            "Use only facts supplied in workflow data. Never invent a contact name, company need, credential, project, or claim. "
             "Return strict JSON with keys subject and body."
         )
         prompt = (
-            "Draft a short first-touch email offering Master Electrician / qualifying-agent / permit-pulling support only when "
-            "the supplied evidence supports that need. Mention one specific verified signal, avoid hype, and end with a low-friction call to action."
+            "Draft a short first-touch email offering business automation for lead generation, follow-up, and repetitive outreach workflows. "
+            "Mention a specific verified signal only when the supplied evidence clearly supports it. "
+            "Do not assume an industry, trade, hiring need, license, permit, or role. Avoid hype and end with a low-friction call to action."
         )
         workflow_data = {
             "company": lead.company,
@@ -649,7 +671,7 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
         instructions=instructions,
     )
     if not result.get("ok"):
-        return {"ok": False, "error": result.get("error") or "OpenAI drafting failed."}
+        return _fallback_draft(lead, follow_up_number)
 
     raw = _clean(result.get("output"), 8000)
     try:
@@ -657,18 +679,17 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
     except Exception:
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
-            return {"ok": False, "error": "OpenAI did not return valid JSON."}
+            return _fallback_draft(lead, follow_up_number)
         try:
             parsed = json.loads(raw[start:end + 1])
         except Exception:
-            return {"ok": False, "error": "OpenAI did not return valid JSON."}
+            return _fallback_draft(lead, follow_up_number)
 
     subject = _clean(parsed.get("subject"), 500)
     body = _clean(parsed.get("body"), 6000)
     if not subject or not body:
-        return {"ok": False, "error": "OpenAI response was missing subject or body."}
-    return {"ok": True, "subject": subject, "body": body, "model": result.get("model")}
-
+        return _fallback_draft(lead, follow_up_number)
+    return {"ok": True, "subject": subject, "body": body, "model": result.get("model"), "fallback": False}
 
 def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> Dict[str, Any]:
     try:
