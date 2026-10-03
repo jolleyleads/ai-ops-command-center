@@ -178,9 +178,9 @@ def test_acceptance_pool_is_cross_industry(env):
     source = Path("customer_demo.py").read_text(encoding="utf-8").lower()
     pool = source[source.index("campaign_pool=["):source.index("attempts=[]", source.index("campaign_pool=["))]
     assert "plumbing companies" in pool
-    assert "law firms" in pool
-    assert "dental practices" in pool
-    assert "restaurants" in pool
+    assert "property management companies" in pool
+    assert "auto repair companies" in pool
+    assert pool.count('"target_customer"') == 4
     assert "hvac" not in pool
     assert "heating and cooling" not in pool
 

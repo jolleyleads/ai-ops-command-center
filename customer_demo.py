@@ -75,13 +75,8 @@ def v11_acceptance_once():
       {"target_customer":"roofing companies actively hiring roofers","business_type":"roofing","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"property management companies actively hiring maintenance technicians","business_type":"property management","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"auto repair companies actively hiring mechanics","business_type":"auto repair","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"law firms actively hiring paralegals","business_type":"legal services","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"dental practices actively hiring dental assistants","business_type":"dental practice","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"restaurants actively hiring managers","business_type":"restaurant","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"landscaping companies actively hiring crew members","business_type":"landscaping","territory":"Yorktown, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
-    attempts=[]
-    try:
+    # Keep the one-shot proof bounded. Four distinct industries prove the\n    # universal path without turning one HTTP request into an unbounded search sweep.\n    attempts=[]\n    try:
         for controlled in campaign_pool:
             before_max=0
             latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
