@@ -91,7 +91,7 @@ def _public_contact_evidence(result):
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the
         # company's own page. Only same-company-domain URLs may enter the queue.
-        for anchor in re.findall(r"(?is)<a\\b[^>]*>.*?</a>",text):
+        for anchor in re.findall(r"(?is)<a\b[^>]*>.*?</a>",text):
             hm=re.search(r'''(?is)href=["']([^"']+)["']''',anchor)
             if not hm:continue
             href=_clean(hm.group(1),1800)
