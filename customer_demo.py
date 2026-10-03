@@ -34,8 +34,8 @@ def _campaign_payload(data):
     if not territory:return None,{"ok":False,"error":"territory_required"}
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"query":target},None
 def _orchestration_payload(discovery,campaign):
-    payload=dict(discovery);target=campaign["target_customer"];trade_context=" contractor" if "hvac" in target.lower() else ""
-    payload.update({"query":target+trade_context,"goal":target+trade_context,"intent":target,"location":campaign["territory"],"business_type":"HVAC" if "hvac" in target.lower() else "","intent_signal":target})
+    payload=dict(discovery);target=campaign["target_customer"]
+    payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"business_type":_text(campaign.get("business_type"),300),"intent_signal":target})
     return payload
 def _run_campaign(data):
     campaign,error=_campaign_payload(data)
@@ -71,10 +71,10 @@ def v11_acceptance_once():
     # lead that crosses the unchanged V1 qualification + drafting gates.
     # Nothing is deleted, reset, or mutated to manufacture freshness.
     campaign_pool=[
-      {"target_customer":"HVAC companies actively hiring service technicians","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"HVAC contractors hiring installers or technicians","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"heating and air conditioning companies with technician openings","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"commercial HVAC companies actively hiring technicians","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"plumbing companies actively hiring plumbers","business_type":"plumbing","territory":"Norfolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"roofing companies actively hiring roofers","business_type":"roofing","territory":"Chesapeake, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"property management companies actively hiring maintenance technicians","business_type":"property management","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+      {"target_customer":"auto repair companies actively hiring mechanics","business_type":"auto repair","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"HVAC service companies hiring technicians","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"HVAC contractors with current technician job openings","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"heating and cooling contractors actively hiring technicians","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
