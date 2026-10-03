@@ -12,8 +12,8 @@ from src.qualification import qualify_lead, qualification_payload
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
 AUTOSEND_ENABLED=os.getenv("OUTREACH_AUTOSEND_ENABLED","false").lower() in {"1","true","yes","on"}
-CONTACT_MAX_URLS=max(1,min(int(os.getenv("CONTACT_ENRICH_MAX_URLS","3")),5))
-CONTACT_BUDGET_SECONDS=max(2.0,min(float(os.getenv("CONTACT_ENRICH_BUDGET_SECONDS","8")),15.0))
+CONTACT_MAX_URLS=max(1,min(int(os.getenv("CONTACT_ENRICH_MAX_URLS","5")),8))
+CONTACT_BUDGET_SECONDS=max(2.0,min(float(os.getenv("CONTACT_ENRICH_BUDGET_SECONDS","12")),20.0))
 CONTACT_CONNECT_TIMEOUT=max(0.5,min(float(os.getenv("CONTACT_CONNECT_TIMEOUT","1.5")),3.0))
 CONTACT_READ_TIMEOUT=max(1.0,min(float(os.getenv("CONTACT_READ_TIMEOUT","2.5")),5.0))
 
@@ -41,9 +41,9 @@ def _candidate_urls(result):
             if u.startswith(("http://","https://")):vals.append(u)
     return list(dict.fromkeys(vals))[:8]
 def _public_contact_evidence(result):
-    """Fetch a bounded set of candidate-owned pages. Fail closed on timeout/budget."""
+    """Fetch bounded candidate-owned pages and retain exact public contact evidence."""
     started=time.monotonic();urls=_candidate_urls(result);rows=[];attempted=0
-    headers={"User-Agent":"Mozilla/5.0 AI-Ops-Contact-Verification/2.2"}
+    headers={"User-Agent":"Mozilla/5.0 AI-Ops-Contact-Verification/2.3"}
     blocked_hosts=("indeed.","ziprecruiter.","glassdoor.","linkedin.","facebook.","google.","yelp.")
     roots=[]
     for u in urls:
@@ -51,17 +51,23 @@ def _public_contact_evidence(result):
         if h and not any(x in h for x in blocked_hosts):
             root=f"{urlparse(u).scheme}://{h}/"
             if root not in roots:roots.append(root)
+    # Search more than one candidate-owned domain when discovery provides them,
+    # but remain tightly bounded and never follow third-party/aggregator hosts.
+    roots=roots[:2]
     fetch_urls=[]
-    for root in roots[:1]:
-        fetch_urls.extend([root,urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"careers")])
-    fetch_urls=list(dict.fromkeys(fetch_urls))[:CONTACT_MAX_URLS]
+    for root in roots:
+        fetch_urls.extend([root,urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"careers")])
+    fetch_urls=list(dict.fromkeys(fetch_urls))
     budget_exhausted=False
-    for url in fetch_urls:
+    seen=set()
+    while fetch_urls and attempted<CONTACT_MAX_URLS:
         elapsed=time.monotonic()-started
         remaining=CONTACT_BUDGET_SECONDS-elapsed
         if remaining<=0.5:
             budget_exhausted=True;break
-        attempted+=1
+        url=fetch_urls.pop(0)
+        if url in seen:continue
+        seen.add(url);attempted+=1
         connect_timeout=min(CONTACT_CONNECT_TIMEOUT,max(0.5,remaining/2))
         read_timeout=min(CONTACT_READ_TIMEOUT,max(0.5,remaining-connect_timeout))
         try:r=requests.get(url,headers=headers,timeout=(connect_timeout,read_timeout),allow_redirects=True)
@@ -70,15 +76,28 @@ def _public_contact_evidence(result):
         ct=(r.headers.get("content-type") or "").lower()
         if "text/html" not in ct and "text/plain" not in ct:continue
         final=r.url;final_host=_host(final)
-        if not final_host or not any(final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host) for root in roots):continue
+        owning_root=next((root for root in roots if final_host and (final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host))),"")
+        if not owning_root:continue
         text=r.text[:500000]
         emails=[_valid_email(x) for x in EMAIL_RE.findall(text)]
-        emails=[e for e in emails if e and _same_company_domain(e,[final])]
+        emails=list(dict.fromkeys(e for e in emails if e and _same_company_domain(e,[final])))
         phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
         if emails or phone:
             rows.append({"candidate_name":_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300),"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":text[:120000],"url":final,"source":"public_company_contact_page"})
-            break
-    return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted}
+            # Email is the outreach requirement; stop once exact same-domain proof exists.
+            if emails:break
+        # Discover explicit contact/about/team/careers links advertised by the
+        # company's own page. Only same-company-domain URLs may enter the queue.
+        for href in re.findall(r'(?i)href=["\']([^"\']+)["\']',text):
+            href=_clean(href,1800)
+            if not href or href.startswith(("mailto:","tel:","#","javascript:")):continue
+            absolute=urljoin(final,href)
+            ah=_host(absolute)
+            if not ah or not (ah==_host(owning_root) or ah.endswith("."+_host(owning_root)) or _host(owning_root).endswith("."+ah)):continue
+            path=(urlparse(absolute).path or "").lower()
+            if any(token in path for token in ("contact","about","team","staff","career","location")) and absolute not in seen and absolute not in fetch_urls:
+                fetch_urls.insert(0,absolute)
+    return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
 
 def _evidence_score(result):
     raw=result.get("intent_score")
