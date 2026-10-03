@@ -54,13 +54,16 @@ def _public_contact_evidence(result):
     # Search more than one candidate-owned domain when discovery provides them,
     # but remain tightly bounded and never follow third-party/aggregator hosts.
     roots=roots[:2]
-    fetch_urls=[]
+    fetch_urls=list(roots)
+    fallback_urls=[]
     for root in roots:
-        fetch_urls.extend([root,urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"careers")])
-    fetch_urls=list(dict.fromkeys(fetch_urls))
+        fallback_urls.extend([urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"careers")])
+    fallback_urls=list(dict.fromkeys(fallback_urls))
     budget_exhausted=False
     seen=set()
-    while fetch_urls and attempted<CONTACT_MAX_URLS:
+    while (fetch_urls or fallback_urls) and attempted<CONTACT_MAX_URLS:
+        if not fetch_urls:
+            fetch_urls.append(fallback_urls.pop(0))
         elapsed=time.monotonic()-started
         remaining=CONTACT_BUDGET_SECONDS-elapsed
         if remaining<=0.5:
