@@ -171,3 +171,20 @@ def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
     assert result["model"] == "deterministic-fallback"
     assert "Example Roofing" in result["subject"]
     assert "lead generation" in result["body"]
+
+
+def test_acceptance_pool_is_cross_industry(env):
+    import customer_demo
+    source = __import__("inspect").getsource(customer_demo.v11_acceptance_once).lower()
+    assert "plumbing companies" in source
+    assert "law firms" in source
+    assert "dental practices" in source
+    assert "restaurants" in source
+    assert "hvac" not in source
+    assert "heating and cooling" not in source
+
+
+def test_active_orchestration_uses_universal_outreach_gate(env):
+    source = __import__("inspect").getsource(v1.orchestrate_discovery)
+    assert "_outreach_search(payload)" in source
+    assert "not_b2b_outreach_search" in source
