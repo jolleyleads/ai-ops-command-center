@@ -128,3 +128,18 @@ def test_verified_public_email_rejects_source_visible_off_domain_email(env, monk
     })
     assert email == ""
     assert source == ""
+
+
+def test_outreach_gate_is_universal_for_non_contractor_b2b_search(env):
+    payload={"query":"law firms actively hiring paralegals","intent":"law firms actively hiring paralegals","results":[]}
+    assert v1._contractor_search(payload) is True
+
+
+def test_v11_hiring_patterns_are_not_hvac_specific(env):
+    import v11_evidence_upgrade as v11
+    patterns=v11._intent_patterns("auto repair companies actively hiring mechanics")
+    assert patterns
+    text="Now hiring experienced mechanics. Apply for an open position today."
+    assert any(__import__("re").search(p,text,__import__("re").I|__import__("re").S) for p in patterns)
+    assert v11._intent_supported("auto repair companies actively hiring mechanics",text) is True
+    assert v11._intent_supported("plumbing companies actively hiring plumbers",text) is False
