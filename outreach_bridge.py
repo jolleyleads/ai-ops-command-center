@@ -88,14 +88,16 @@ def _public_contact_evidence(result):
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the
         # company's own page. Only same-company-domain URLs may enter the queue.
-        for href,label in re.findall(r'(?is)<a[^>]+href=["\\']([^"\\']+)["\\'][^>]*>(.*?)</a>',text):
-            href=_clean(href,1800)
+        for anchor in re.findall(r"(?is)<a\\b[^>]*>.*?</a>",text):
+            hm=re.search(r'''(?is)href=["']([^"']+)["']''',anchor)
+            if not hm:continue
+            href=_clean(hm.group(1),1800)
             if not href or href.startswith(("mailto:","tel:","#","javascript:")):continue
             absolute=urljoin(final,href)
             ah=_host(absolute)
             if not ah or not (ah==_host(owning_root) or ah.endswith("."+_host(owning_root)) or _host(owning_root).endswith("."+ah)):continue
             path=(urlparse(absolute).path or "").lower()
-            label_text=re.sub(r"<[^>]+>"," ",label).lower()
+            label_text=re.sub(r"<[^>]+>"," ",anchor).lower()
             contactish=("contact","about","team","staff","career","location","reach","get in touch","connect")
             if any(token in path or token in label_text for token in contactish) and absolute not in seen and absolute not in fetch_urls:
                 fetch_urls.insert(0,absolute)
