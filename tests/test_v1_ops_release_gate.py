@@ -189,3 +189,11 @@ def test_active_orchestration_uses_universal_outreach_gate(env):
     source = __import__("inspect").getsource(v1.orchestrate_discovery)
     assert "_outreach_search(payload)" in source
     assert "not_b2b_outreach_search" in source
+
+
+def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
+    from pathlib import Path
+    source = Path("customer_demo.py").read_text(encoding="utf-8")
+    assert "campaign_pool=[" in source
+    assert "for controlled in campaign_pool:" in source
+    assert "for controlled in campaigns:" not in source
