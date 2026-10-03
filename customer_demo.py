@@ -76,7 +76,10 @@ def v11_acceptance_once():
       {"target_customer":"property management companies actively hiring maintenance technicians","business_type":"property management","territory":"Virginia Beach, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
       {"target_customer":"auto repair companies actively hiring mechanics","business_type":"auto repair","territory":"Hampton, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
     ]
-    # Keep the one-shot proof bounded. Four distinct industries prove the\n    # universal path without turning one HTTP request into an unbounded search sweep.\n    attempts=[]\n    try:
+    # Keep the one-shot proof bounded. Four distinct industries prove the
+    # universal path without turning one HTTP request into an unbounded search sweep.
+    attempts=[]
+    try:
         for controlled in campaign_pool:
             before_max=0
             latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
