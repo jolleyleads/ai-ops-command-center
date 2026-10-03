@@ -685,8 +685,8 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
         except Exception:
             return _fallback_draft(lead, follow_up_number)
 
-    subject = _clean(parsed.get("subject"), 500)
-    body = _clean(parsed.get("body"), 6000)
+    subject = _clean(parsed.get("subject"), 160)
+    body = _clean(parsed.get("body"), 5000)
     if not subject or not body:
         return _fallback_draft(lead, follow_up_number)
     return {"ok": True, "subject": subject, "body": body, "model": result.get("model"), "fallback": False}

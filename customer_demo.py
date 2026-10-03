@@ -101,7 +101,11 @@ def v11_acceptance_once():
             if qualified_fresh and drafted_fresh:
                 sent_expected=bool(o.get("autosend_enabled"))
                 sent_fresh=[x for x in fresh if x.gmail_message_id]
-                if sent_expected and not sent_fresh:continue
+                if sent_expected and not sent_fresh:
+                    send_failures=[x for x in (o.get("skipped") or []) if x.get("reason")=="safe_send_failed"]
+                    if send_failures:
+                        return jsonify({"ok":False,"pass":False,"stage":"safe_send","reason":"FRESH_QUALIFIED_DRAFT_FAILED_SAFE_SEND","timestamp":started,"controlled_campaign":controlled,"discovery":attempt["discovery"],"outreach":attempt["outreach"],"fresh_proof":{"new_lead_ids":[x.id for x in fresh],"validated_contact_count":sum(1 for x in fresh if x.contact_email),"qualified_count":len(qualified_fresh),"drafted_count":len(drafted_fresh),"sent_count":0},"attempts":attempts,"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),409
+                    continue
                 return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":attempt["discovery"],"outreach":attempt["outreach"],"fresh_proof":{"new_lead_ids":[x.id for x in fresh],"validated_contact_count":sum(1 for x in fresh if x.contact_email),"qualified_count":len(qualified_fresh),"drafted_count":len(drafted_fresh),"sent_count":len(sent_fresh)},"attempts":attempts,"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),200
         return jsonify({"ok":False,"pass":False,"stage":"fresh_lead_proof","reason":"NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED","timestamp":started,"attempts":attempts,"safety":"V1 gates were not weakened; acceptance refused to count already-queued leads"}),409
     except Exception as exc:app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR");return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started,"attempts":attempts}),500

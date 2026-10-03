@@ -125,6 +125,16 @@ def _semantic_keep(evidence,evaluation):
     relevant={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
     return [x for x in evidence if _clean(x.get("url"),1600) in relevant] if relevant else evidence
 
+def _deterministic_route_intent(q):
+    """Stable universal intent label when the semantic planner is unavailable."""
+    ql=_clean(q,1200).lower()
+    if "master electrician" in ql and any(x in ql for x in ("lead","leads","pull permit","permit pulling")):return "permit_leads"
+    if any(x in ql for x in ("permit","permits","inspection","inspections","license","licensing")):return "permits"
+    if any(x in ql for x in ("job","jobs","hiring","hire ","career","careers","open role","opening")) and not any(x in ql for x in ("contractor","contractors","company","companies","business","businesses","firm","firms")):return "jobs"
+    if any(x in ql for x in ("contractor","contractors")):return "contractors"
+    if any(x in ql for x in ("company","companies","business","businesses","firm","firms")):return "businesses"
+    return "web_research"
+
 def _verification_intent(q):
     """Deterministically classify verification needs without asking the LLM."""
     ql=_clean(q,1200).lower()
@@ -340,7 +350,7 @@ def _smart_search(q,loc,runtime_budget=25):
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
         provider_message=" ".join(dict.fromkeys(messages))
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":plan.get("intent") or "web_research","goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":(_deterministic_route_intent(q) if plan.get("planning_degraded") or _clean(plan.get("intent"),80) in {"","planning_unavailable","unavailable"} else plan.get("intent")),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
