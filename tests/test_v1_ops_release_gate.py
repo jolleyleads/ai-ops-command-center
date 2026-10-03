@@ -247,3 +247,15 @@ def test_public_contact_probe_never_follows_third_party_discovered_links(env, mo
     monkeypatch.setattr(bridge.requests,"get",fake_get)
     bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
     assert not any("evil.example" in x for x in seen)
+
+
+def test_contact_enrichment_is_deeper_but_still_same_domain(env):
+    from pathlib import Path
+    source=Path("outreach_bridge.py").read_text(encoding="utf-8")
+    assert 'CONTACT_ENRICH_MAX_URLS","8"' in source
+    assert 'CONTACT_ENRICH_BUDGET_SECONDS","18"' in source
+    assert 'urljoin(root,"staff")' in source
+    assert 'urljoin(root,"locations")' in source
+    assert "mailto:" in source
+    assert "_same_company_domain" in source
+    assert "blocked_hosts" in source
