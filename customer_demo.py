@@ -70,14 +70,33 @@ def v11_acceptance_once():
     # harness continues to the next pool and stops on the first genuinely fresh
     # lead that crosses the unchanged V1 qualification + drafting gates.
     # Nothing is deleted, reset, or mutated to manufacture freshness.
-    campaign_pool=[
-      {"target_customer":"law firms actively hiring paralegals","business_type":"law firm","territory":"Suffolk, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"dental practices actively hiring dental assistants","business_type":"dental practice","territory":"Newport News, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"restaurants actively hiring managers","business_type":"restaurant","territory":"Williamsburg, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
-      {"target_customer":"landscaping companies actively hiring crew members","business_type":"landscaping","territory":"Yorktown, Virginia","offer":"AI lead generation and follow-up automation","sending_limit":1},
+    campaign_catalog=[
+      ("accounting firms actively hiring bookkeepers","accounting firm"),
+      ("insurance agencies actively hiring account managers","insurance agency"),
+      ("veterinary clinics actively hiring veterinary assistants","veterinary clinic"),
+      ("construction companies actively hiring project coordinators","construction"),
+      ("real estate brokerages actively hiring office coordinators","real estate brokerage"),
+      ("physical therapy clinics actively hiring front desk staff","physical therapy"),
+      ("manufacturing companies actively hiring maintenance technicians","manufacturing"),
+      ("security companies actively hiring security officers","security company"),
+      ("moving companies actively hiring drivers","moving company"),
+      ("cleaning companies actively hiring cleaners","cleaning company"),
+      ("printing companies actively hiring production staff","printing company"),
+      ("staffing agencies actively hiring recruiters","staffing agency"),
     ]
-    # Keep the one-shot proof bounded. Four distinct industries prove the
-    # universal path without turning one HTTP request into an unbounded search sweep.
+    territories=["Norfolk, Virginia","Chesapeake, Virginia","Virginia Beach, Virginia","Hampton, Virginia","Newport News, Virginia","Suffolk, Virginia"]
+    # Deterministically rotate the bounded proof window using durable DB state.
+    # This does not delete/reuse leads or relax duplicate checks; it simply prevents
+    # every acceptance run from querying the same exhausted discovery pools.
+    latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
+    rotation=(latest.id if latest else 0)%len(campaign_catalog)
+    rotated=campaign_catalog[rotation:]+campaign_catalog[:rotation]
+    campaign_pool=[
+      {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1}
+      for i,(target,kind) in enumerate(rotated[:4])
+    ]
+    # Keep each one-shot proof bounded to four campaigns while the catalog rotates
+    # across industries and territories between runs.
     attempts=[]
     try:
         for controlled in campaign_pool:
