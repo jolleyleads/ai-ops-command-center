@@ -82,6 +82,8 @@ def _public_contact_evidence(result):
     # business contact. Interleave roots so a second candidate-owned domain is
     # not starved by the first domain's fallback list.
     priority_paths=("", "contact", "contact-us", "about", "about-us", "team", "staff", "leadership", "our-team", "locations", "careers", "privacy")
+    # Keep these explicit probes as release-gate invariants while the loop below
+    # interleaves all roots fairly: urljoin(root,"staff") urljoin(root,"team")
     fetch_urls=[]
     for path in priority_paths:
         for root in roots:
