@@ -63,5 +63,5 @@ def execute_outreach_send(lead:Dict[str,Any],send_func)->Dict[str,Any]:
     if not gate["ok"]:return {"ok":False,"stage":"blocked","gate":gate,"send_receipt":{}}
     raw=send_func(gate["recipient"],gate["subject"],gate["body"],_clean(lead.get("gmail_thread_id"),255))
     receipt=validate_send_receipt(raw)
-    if not receipt["ok"]:return {"ok":False,"stage":"send_failed","gate":gate,"send_receipt":receipt}
+    if not receipt["ok"]:return {"ok":False,"stage":"send_failed","gate":gate,"send_receipt":receipt,"error":_clean(raw.get("error"),1000) if isinstance(raw,dict) else ""}
     return {"ok":True,"stage":"contacted","gate":gate,"send_receipt":receipt}
