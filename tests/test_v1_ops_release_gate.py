@@ -197,10 +197,10 @@ def test_active_orchestration_uses_universal_outreach_gate(env):
 def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
     from pathlib import Path
     source = Path("customer_demo.py").read_text(encoding="utf-8")
-    assert "campaign_catalog=[" in source\n    assert "campaign_pool=[" in source
+    assert "campaign_catalog=[" in source
+    assert "campaign_pool=[" in source
     assert "for controlled in campaign_pool:" in source
     assert "for controlled in campaigns:" not in source
-
 
 def test_customer_demo_module_compiles(env):
     from pathlib import Path
