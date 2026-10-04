@@ -176,15 +176,17 @@ def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
 def test_acceptance_pool_is_cross_industry(env):
     from pathlib import Path
     source = Path("customer_demo.py").read_text(encoding="utf-8").lower()
-    pool = source[source.index("campaign_pool=["):source.index("attempts=[]", source.index("campaign_pool=["))]
-    assert "law firms" in pool
-    assert "dental practices" in pool
-    assert "restaurants" in pool
-    assert "landscaping companies" in pool
-    assert pool.count('"target_customer"') == 4
-    assert "hvac" not in pool
-    assert "heating and cooling" not in pool
-
+    block = source[source.index("campaign_catalog=["):source.index("attempts=[]", source.index("campaign_catalog=["))]
+    assert block.count('actively hiring') >= 12
+    assert "accounting firms" in block
+    assert "veterinary clinics" in block
+    assert "manufacturing companies" in block
+    assert "staffing agencies" in block
+    assert "territories=[" in block
+    assert "rotated[:4]" in block
+    assert "outreachlead.query.order_by" in block
+    assert "hvac" not in block
+    assert "heating and cooling" not in block
 
 def test_active_orchestration_uses_universal_outreach_gate(env):
     source = __import__("inspect").getsource(v1.orchestrate_discovery)
@@ -195,10 +197,10 @@ def test_active_orchestration_uses_universal_outreach_gate(env):
 def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
     from pathlib import Path
     source = Path("customer_demo.py").read_text(encoding="utf-8")
+    assert "campaign_catalog=[" in source
     assert "campaign_pool=[" in source
     assert "for controlled in campaign_pool:" in source
     assert "for controlled in campaigns:" not in source
-
 
 def test_customer_demo_module_compiles(env):
     from pathlib import Path
