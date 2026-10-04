@@ -4,6 +4,10 @@ from flask import send_from_directory
 @app.route('/chat-operator')
 def chat_operator_ui():
     return send_from_directory('demo', 'index.html')
+
+@app.route('/chat-operator/automake-logo.svg')
+def automake_logo():
+    return send_from_directory('demo', 'automake-logo.svg', mimetype='image/svg+xml')
 import db_resilience  # noqa: F401
 import gmail_connect  # noqa: F401
 import search_overrides  # noqa: F401
