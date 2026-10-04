@@ -271,3 +271,13 @@ def test_orchestration_reports_safe_send_failure_details(env):
     assert '"gate_reasons"' in source
     assert '"receipt_reasons"' in source
     assert '"provider_error"' in source
+
+
+def test_failed_provider_receipt_preserves_provider_error(env):
+    from src.outreach_execution import execute_outreach_send
+    lead={"contact_email":"hello@example.com","subject":"Hello","body":"Body","evidence":[],"source_url":""}
+    result=execute_outreach_send(lead,lambda *args: {"ok":False,"error":"Gmail error 401: invalid credentials"})
+    assert result["ok"] is False
+    assert result["stage"]=="send_failed"
+    assert result["error"]=="Gmail error 401: invalid credentials"
+    assert "PROVIDER_SEND_FAILED" in result["send_receipt"]["reasons"]
