@@ -1,4 +1,9 @@
 from app import app
+from flask import send_from_directory
+
+@app.route('/chat-operator')
+def chat_operator_ui():
+    return send_from_directory('demo', 'index.html')
 import db_resilience  # noqa: F401
 import gmail_connect  # noqa: F401
 import search_overrides  # noqa: F401
