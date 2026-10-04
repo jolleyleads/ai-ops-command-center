@@ -261,3 +261,13 @@ def test_contact_enrichment_is_deeper_but_still_same_domain(env):
     assert "mailto:" in source
     assert "_same_company_domain" in source
     assert "blocked_hosts" in source
+
+
+def test_orchestration_reports_safe_send_failure_details(env):
+    from pathlib import Path
+    source=Path("v1_orchestration.py").read_text(encoding="utf-8")
+    assert '"reason":"safe_send_failed"' in source
+    assert '"stage":_clean(execution.get("stage"),100)' in source
+    assert '"gate_reasons"' in source
+    assert '"receipt_reasons"' in source
+    assert '"provider_error"' in source
