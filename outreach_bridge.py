@@ -21,6 +21,30 @@ def _clean(v,limit=2000):return str(v or "").strip()[:limit]
 def _valid_email(v):
     v=_clean(v,500).lower()
     return v if EMAIL_RE.fullmatch(v) and not v.endswith((".png",".jpg",".jpeg",".gif",".webp",".svg")) else ""
+
+def _decode_cfemail(value):
+    """Decode Cloudflare email-protection hex without treating it as independent proof."""
+    value=_clean(value,1000)
+    try:
+        raw=bytes.fromhex(value)
+        if len(raw)<2:return ""
+        key=raw[0]
+        return _valid_email(bytes(b ^ key for b in raw[1:]).decode("utf-8","ignore"))
+    except (ValueError,TypeError):
+        return ""
+
+def _page_emails(text):
+    """Extract only addresses actually represented in the fetched company page."""
+    text=str(text or "")
+    found=[_valid_email(x) for x in re.findall(r'(?i)mailto:([^?"<> ]+)',text)]
+    found += [_valid_email(x) for x in EMAIL_RE.findall(text)]
+    # Common human-readable anti-spam forms: name [at] domain [dot] com.
+    for local,domain,tld in re.findall(r'(?i)\b([a-z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\sat\s)\s*([a-z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\sdot\s)\s*([a-z]{2,})\b',text):
+        found.append(_valid_email(f"{local}@{domain}.{tld}"))
+    # Cloudflare's data-cfemail is reversible source evidence from this exact page.
+    for encoded in re.findall(r'(?i)data-cfemail=["\']([0-9a-f]{6,})["\']',text):
+        found.append(_decode_cfemail(encoded))
+    return list(dict.fromkeys(x for x in found if x))
 def _host(url):
     try:return (urlparse(url).hostname or "").lower().removeprefix("www.")
     except Exception:return ""
@@ -54,11 +78,16 @@ def _public_contact_evidence(result):
     # Search more than one candidate-owned domain when discovery provides them,
     # but remain tightly bounded and never follow third-party/aggregator hosts.
     roots=roots[:2]
-    fetch_urls=list(roots)
+    # Spend the bounded fetch budget on the pages most likely to publish a real
+    # business contact. Interleave roots so a second candidate-owned domain is
+    # not starved by the first domain's fallback list.
+    priority_paths=("", "contact", "contact-us", "about", "about-us", "team", "staff", "leadership", "our-team", "locations", "careers", "privacy")
+    fetch_urls=[]
+    for path in priority_paths:
+        for root in roots:
+            candidate=root if not path else urljoin(root,path)
+            if candidate not in fetch_urls:fetch_urls.append(candidate)
     fallback_urls=[]
-    for root in roots:
-        fallback_urls.extend([urljoin(root,"contact"),urljoin(root,"contact-us"),urljoin(root,"about"),urljoin(root,"about-us"),urljoin(root,"team"),urljoin(root,"staff"),urljoin(root,"our-team"),urljoin(root,"locations"),urljoin(root,"careers"),urljoin(root,"privacy")])
-    fallback_urls=list(dict.fromkeys(fallback_urls))
     budget_exhausted=False
     seen=set()
     while (fetch_urls or fallback_urls) and attempted<CONTACT_MAX_URLS:
@@ -82,8 +111,7 @@ def _public_contact_evidence(result):
         owning_root=next((root for root in roots if final_host and (final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host))),"")
         if not owning_root:continue
         text=r.text[:500000]
-        emails=[_valid_email(x) for x in re.findall(r'(?i)mailto:([^?"<> ]+)',text)]+[_valid_email(x) for x in EMAIL_RE.findall(text)]
-        emails=list(dict.fromkeys(e for e in emails if e and _same_company_domain(e,[final])))
+        emails=[e for e in _page_emails(text) if _same_company_domain(e,[final])]
         phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
         if emails or phone:
             rows.append({"candidate_name":_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300),"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":text[:120000],"url":final,"source":"public_company_contact_page"})
