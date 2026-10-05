@@ -67,9 +67,12 @@ def _evidence_with_contact(result, email, email_source):
 
 def orchestrate_discovery(payload):
     summary={"enabled":True,"autosend_enabled":AUTOSEND_ENABLED,"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
+    try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
+    except (TypeError,ValueError): outreach_limit=0
     if not _outreach_search(payload):
         summary["enabled"]=False; summary["paused_reason"]="not_b2b_outreach_search"; return summary
     for result in payload.get("results") or []:
+        if outreach_limit and summary["sent"]>=outreach_limit: break
         if not isinstance(result,dict): continue
         company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300)
         score=_evidence_score(result)
