@@ -152,7 +152,9 @@ def _evidence_score(result):
 def _verified(result):
     label=_clean(result.get("verification"),100).upper()
     if label in {"VERIFIED_INTENT","CROSS_CHECKED_VERIFIED_INTENT","LIKELY_VERIFIED_INTENT","VERIFIED"}:return True
-    return _clean(result.get("promotion_status"),50).lower() in {"promoted","verified_page"} and bool(_candidate_urls(result))
+    promotion=_clean(result.get("promotion_status"),50).lower()
+    gate=_clean(result.get("verification_gate"),50).lower()
+    return promotion in {"promoted","verified_page","verified"} and gate in {"","passed"} and bool(_candidate_urls(result))
 def _outreach_search(payload):
     """Allow any evidence-backed B2B prospecting search with an explicit target intent."""
     text=" ".join([_clean(payload.get("intent"),500),_clean(payload.get("goal"),500),_clean(payload.get("query"),500)]).strip()
