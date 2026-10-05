@@ -146,7 +146,7 @@ def _evidence_score(result):
     status=_clean(result.get("promotion_status"),50).lower()
     try:base=float(result.get("evidence_score") or 0)
     except (TypeError,ValueError):base=0
-    if status=="promoted":return max(75,min(100,int(base*100)))
+    if status in {"promoted","verified"}:return max(75,min(100,int(base*100)))
     if status=="verified_page":return max(60,min(89,int(base*100)))
     return min(59,max(0,int(base*100)))
 def _verified(result):
