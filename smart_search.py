@@ -358,7 +358,10 @@ def _smart_search(q,loc,runtime_budget=25):
 def smart_search():
     d=(request.get_json(silent=True) or {}) if request.method=="POST" else request.args;q=_clean(d.get("prompt") or d.get("query") or d.get("keyword"),500);loc=_clean(d.get("location"),200)
     if not q:return jsonify({"error":"Enter a search inquiry.","results":[],"count":0}),400
-    return jsonify(_smart_search(q,loc))
+    result=_smart_search(q,loc)
+    try: result["outreach_limit"]=max(0,int(d.get("outreach_limit") or 0))
+    except (TypeError,ValueError): result["outreach_limit"]=0
+    return jsonify(result)
 @app.route("/api/test-smart-search",methods=["GET"])
 def test_smart_search():
     # Deployment smoke route must finish well inside the platform request timeout.
