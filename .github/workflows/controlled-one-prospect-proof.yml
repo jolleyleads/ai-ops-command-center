@@ -22,7 +22,7 @@ jobs:
           BASE="https://ai-ops-command-center.onrender.com"
           curl --fail-with-body --silent --show-error --max-time 180 \
             --get "$BASE/api/smart-search" \
-            --data-urlencode 'query=Shaw Boiler and Mechanical Portsmouth hiring Commercial HVAC Technician current evidence' \
+            --data-urlencode 'query=Shaw Boiler and Mechanical contractor Portsmouth hiring Commercial HVAC Technician current evidence' \
             --data-urlencode 'location=Portsmouth, VA' \
             --data-urlencode 'outreach_limit=1' \
             -o prospect.json
