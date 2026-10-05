@@ -1,0 +1,83 @@
+name: Controlled One Prospect Proof
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/controlled-one-prospect-proof.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  prove-one-real-prospect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for production deployment
+        run: sleep 150
+      - name: Run exactly one verified prospect
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://ai-ops-command-center.onrender.com"
+          curl --fail-with-body --silent --show-error --max-time 180 \
+            --get "$BASE/api/smart-search" \
+            --data-urlencode 'query=Shaw Boiler and Mechanical Portsmouth hiring Commercial HVAC Technician current evidence' \
+            --data-urlencode 'location=Portsmouth, VA' \
+            --data-urlencode 'outreach_limit=1' \
+            -o prospect.json
+          cat prospect.json
+          python - <<'PY'
+          import json,sys
+          d=json.load(open("prospect.json"))
+          o=d.get("outreach_automation") or {}
+          if o.get("sent") != 1:
+              print("FAIL: expected exactly one sent prospect",o,file=sys.stderr);sys.exit(1)
+          sent=[x for x in o.get("skipped",[]) if x.get("status")=="sent"]
+          if len(sent)!=1 or not sent[0].get("lead_id") or not sent[0].get("message_id"):
+              print("FAIL: missing unique Gmail send receipt",sent,file=sys.stderr);sys.exit(1)
+          json.dump({"lead_id":sent[0]["lead_id"],"message_id":sent[0]["message_id"],"thread_id":sent[0].get("thread_id")},open("send.json","w"))
+          PY
+      - name: Verify persisted pipeline and pending external response
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://ai-ops-command-center.onrender.com"
+          curl --fail-with-body --silent --show-error "$BASE/api/outreach/leads" -o leads.json
+          python - <<'PY'
+          import json,sys
+          s=json.load(open("send.json")); leads=json.load(open("leads.json")).get("leads",[])
+          lead=next((x for x in leads if x.get("id")==s["lead_id"]),None)
+          if not lead: print("FAIL: persisted lead missing",file=sys.stderr);sys.exit(1)
+          checks={
+            "company":lead.get("company"),
+            "lead_id":lead.get("id"),
+            "verification":lead.get("verification"),
+            "score":lead.get("score"),
+            "status":lead.get("status"),
+            "subject":lead.get("subject"),
+            "gmail_message_id":lead.get("gmail_message_id"),
+            "gmail_thread_id":lead.get("gmail_thread_id"),
+            "sent_at":lead.get("sent_at"),
+            "follow_up_due_at":lead.get("follow_up_due_at"),
+            "follow_up_count":lead.get("follow_up_count"),
+            "reply_status":"PENDING_EXTERNAL_RESPONSE" if not lead.get("replied_at") else "REPLIED",
+            "booking_status":"PENDING_EXTERNAL_RESPONSE" if not lead.get("replied_at") else "AWAITING_REAL_ROUTING_RESULT",
+            "operational":lead.get("operational"),
+          }
+          required=[lead.get("status")=="sent",bool(lead.get("subject")),bool(lead.get("gmail_message_id")),bool(lead.get("gmail_thread_id")),bool(lead.get("sent_at")),bool(lead.get("follow_up_due_at")),not lead.get("replied_at")]
+          json.dump(checks,open("final-proof.json","w"),indent=2)
+          print(json.dumps(checks,indent=2))
+          if not all(required): print("FAIL: persisted proof incomplete",file=sys.stderr);sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controlled-one-real-prospect-proof
+          path: |
+            prospect.json
+            send.json
+            leads.json
+            final-proof.json
+          if-no-files-found: warn
+          retention-days: 30
