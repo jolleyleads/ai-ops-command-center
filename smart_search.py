@@ -195,10 +195,7 @@ def _deterministic_need_verification(evidence,q):
         tail=re.split(r"\\b(?:actively\\s+)?(?:hiring|hire)\\b",_clean(q,1200).lower(),maxsplit=1)
         role_stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings"}
         role_terms=[x for x in re.findall(r"[a-z0-9]+",tail[1] if len(tail)>1 else "") if len(x)>=4 and x not in role_stop][:8]
-        hiring_signal=re.search(r"\\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\\b",text,re.I|re.S)
-        role_signal=any(re.search(rf"\\b{re.escape(term)}(?:s|es)?\\b",text,re.I) for term in role_terms)
-        if hiring_signal and role_terms and role_signal:
-            patterns.append(r".*")
+        # evaluated per candidate-specific evidence row below
     if "permit_license" in intents:
         patterns.extend([
             r"\b(?:permit|permits|inspection|inspections|license|licensing|licensed)\b.{0,140}\b(?:electrical|electrician|project|contractor|required|approved|issued|active|current)\b",
@@ -216,7 +213,12 @@ def _deterministic_need_verification(evidence,q):
         url=_clean(item.get("url"),1600)
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
         if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
-        if not url or url in seen or not any(re.search(p,text,re.I|re.S) for p in patterns):continue
+        pattern_match=any(re.search(p,text,re.I|re.S) for p in patterns)
+        if "hiring" in intents and role_terms:
+            hiring_signal=bool(re.search(r"\\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\\b",text,re.I|re.S))
+            role_signal=any(re.search(rf"\\b{re.escape(term)}(?:s|es)?\\b",text,re.I) for term in role_terms)
+            pattern_match=pattern_match or (hiring_signal and role_signal)
+        if not url or url in seen or not pattern_match:continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
         x["verified_claim"]="Candidate-specific source evidence explicitly supports the requested current claim."
