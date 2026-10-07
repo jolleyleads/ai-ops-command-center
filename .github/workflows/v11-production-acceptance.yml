@@ -24,13 +24,21 @@ jobs:
           set -euo pipefail
           BASE="https://ai-ops-command-center.onrender.com"
           consecutive=0
-          for i in {1..24}; do
-            code=$(curl --silent --output /dev/null --connect-timeout 5 --max-time 10 -w '%{http_code}' "$BASE/api/health" || true)
-            echo "readiness attempt $i: HTTP $code (consecutive=$consecutive)"
-            if [[ "$code" == "200" ]]; then
+          for i in {1..36}; do
+            code=$(curl --silent --connect-timeout 5 --max-time 10 -o health.json -w '%{http_code}' "$BASE/api/health" || true)
+            live_sha=$(python - <<'PY'
+          import json
+          try:
+              print(json.load(open("health.json", encoding="utf-8")).get("git_commit", ""))
+          except Exception:
+              print("")
+          PY
+            )
+            echo "readiness attempt $i: HTTP $code live_sha=$live_sha expected=$GITHUB_SHA (consecutive=$consecutive)"
+            if [[ "$code" == "200" && "$live_sha" == "$GITHUB_SHA" ]]; then
               consecutive=$((consecutive + 1))
               if [[ "$consecutive" -ge 3 ]]; then
-                echo "Render application health endpoint passed 3 consecutive checks"
+                echo "Exact deployed commit passed 3 consecutive application health checks"
                 exit 0
               fi
             else
@@ -38,7 +46,7 @@ jobs:
             fi
             sleep 5
           done
-          echo "FAIL: /api/health did not pass 3 consecutive checks inside bounded readiness window" >&2
+          echo "FAIL: exact commit did not pass 3 consecutive /api/health checks inside bounded readiness window" >&2
           exit 1
 
       - name: Call live one-shot acceptance harness
