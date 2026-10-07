@@ -41,7 +41,7 @@ def _web_search(query,location=""):
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
     text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.6-luna","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
-        r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=15)
+        r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=30)
         if not r.ok:
             try: detail=_clean((r.json().get("error") or {}).get("message"),700)
             except Exception: detail=_clean(r.text,700)
