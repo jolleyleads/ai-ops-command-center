@@ -135,104 +135,102 @@ def _deterministic_route_intent(q):
     if any(x in ql for x in ("company","companies","business","businesses","firm","firms")):return "businesses"
     return "web_research"
 
+def _claim_terms(q):
+    """Extract meaningful requested-claim terms without encoding any industry."""
+    ql=_clean(q,1200).lower()
+    stop={
+        "find","show","give","list","business","businesses","company","companies","firm","firms",
+        "contractor","contractors","clinic","clinics","agency","agencies","shop","shops",
+        "in","near","around","that","who","which","with","and","or","the","a","an","of","for",
+        "current","currently","active","actively","evidence","proof","recent","latest",
+    }
+    return [x for x in re.findall(r"[a-z0-9]+",ql) if len(x)>=4 and x not in stop]
+
+
 def _verification_intent(q):
-    """Deterministically classify verification needs without asking the LLM."""
+    """Classify claim channels generically; industry names never change verification rules."""
     ql=_clean(q,1200).lower()
     intents=[]
-    if any(x in ql for x in ("hiring","hire ","jobs","job opening","open role","technician")):
+    if re.search(r"\b(?:hiring|hire|jobs?|careers?|open(?:ing)?s?|seeking|recruiting)\b",ql):
         intents.append("hiring")
-    if "electric" in ql and any(x in ql for x in ("contractor","contractors","company","companies","business","businesses")):
-        intents.extend(["hiring","permit_license","projects"])
-    if any(x in ql for x in ("permit","inspection","license","licensing","master electrician","pull permits","permit-pulling")):
+    if re.search(r"\b(?:permit|permits|inspection|inspections|license|licenses|licensed|licensing)\b",ql):
         intents.append("permit_license")
-    if any(x in ql for x in ("active project","recent project","projects","project notice","bid","awarded","subcontractor")):
+    if re.search(r"\b(?:project|projects|contract|contracts|bid|bids|awarded|expanding|expansion|opening|launching)\b",ql):
         intents.append("projects")
     if not intents:
         intents.append("claim")
     return tuple(dict.fromkeys(intents))
 
+
 def _needs_candidate_verification(q):
+    """Any requested business condition beyond plain discovery requires candidate proof."""
     ql=_clean(q,1200).lower()
-    discovery_terms=("contractor","contractors","company","companies","business","businesses","firm","firms")
-    claim_terms=("hiring","hire ","jobs","job opening","open role","technician","master electrician","permit","inspection","license","licensing","active project","recent project","projects","project notice","bid","awarded","subcontractor","current evidence","evidence of")
-    return any(x in ql for x in discovery_terms) and any(x in ql for x in claim_terms)
+    discovery_terms=("business","businesses","company","companies","firm","firms","contractor","contractors","clinic","clinics","agency","agencies","shop","shops")
+    return any(x in ql for x in discovery_terms) and _verification_intent(q)!=("claim",)
+
+
+def _requested_role_terms(q):
+    ql=_clean(q,1200).lower()
+    m=re.search(r"\b(?:actively\s+)?(?:hiring|hire|seeking|recruiting)\b(.*)",ql)
+    if not m:return []
+    stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","now","today"}
+    return [x for x in re.findall(r"[a-z0-9]+",m.group(1)) if len(x)>=4 and x not in stop][:8]
+
 
 def _verification_queries(name,q,intents=None):
-    """Deterministic candidate research plan covering the claim channels named by the inquiry."""
+    """Build candidate-specific research queries from the user's claim, never from an industry whitelist."""
     intents=tuple(intents or _verification_intent(q))
-    ql=_clean(q,1200).lower()
-    queries=[]
+    claim=_clean(q,700)
+    queries=[f'"{name}" "{claim}"']
     if "hiring" in intents:
-        role="technician" if "technician" in ql else ("master electrician" if "master electrician" in ql else "electrician" if "electric" in ql else "")
+        role=" ".join(_requested_role_terms(q))
         queries.extend([
             f'"{name}" (jobs OR careers OR hiring OR opening) "{role}"' if role else f'"{name}" (jobs OR careers OR hiring OR opening)',
-            f'"{name}" (seeking OR hiring OR "looking for" OR needed OR required) "{role}"' if role else f'"{name}" (seeking OR hiring OR "looking for" OR needed OR required)',
+            f'"{name}" (seeking OR recruiting OR hiring OR "looking for") "{role}"' if role else f'"{name}" (seeking OR recruiting OR hiring OR "looking for")',
         ])
     if "permit_license" in intents:
-        trade="electrical" if "electric" in ql else ""
-        queries.extend([
-            f'"{name}" (permit OR permits OR inspection OR inspections) {trade}'.strip(),
-            f'"{name}" (license OR licensing OR licensed OR "master electrician" OR "pull permits" OR "permit pulling") {trade}'.strip(),
-        ])
+        queries.append(f'"{name}" (permit OR permits OR inspection OR inspections OR license OR licensing OR licensed)')
     if "projects" in intents:
-        queries.extend([
-            f'"{name}" ("active project" OR "recent project" OR projects OR awarded)',
-            f'"{name}" ("project notice" OR bid OR subcontractor OR awarded)',
-        ])
-    if intents==("claim",) or not queries:
-        queries=[f'"{name}" {q}']
+        queries.append(f'"{name}" (project OR projects OR contract OR awarded OR bid OR expansion OR opening)')
     return list(dict.fromkeys(queries))
 
+
 def _deterministic_need_verification(evidence,q):
-    """Fail closed: promote only candidate-specific source text that explicitly supports the requested claim."""
+    """Fail closed: candidate-specific evidence must support the exact requested claim channel."""
     intents=_verification_intent(q)
-    patterns=[]
-    if "hiring" in intents:
-        # Keep the deterministic gate universal: require a real hiring signal AND
-        # a role term explicitly requested after "hiring"/"hire" in the query.
-        # This preserves candidate-specific fail-closed verification without
-        # hard-coding HVAC/electrical job titles.
-        tail=re.split(r"\b(?:actively\s+)?(?:hiring|hire)\b",_clean(q,1200).lower(),maxsplit=1)
-        role_stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings"}
-        role_terms=[x for x in re.findall(r"[a-z0-9]+",tail[1] if len(tail)>1 else "") if len(x)>=4 and x not in role_stop][:8]
-        # evaluated per candidate-specific evidence row below
-    if "permit_license" in intents:
-        patterns.extend([
-            r"\b(?:permit|permits|inspection|inspections|license|licensing|licensed)\b.{0,140}\b(?:electrical|electrician|project|contractor|required|approved|issued|active|current)\b",
-            r"\b(?:master electrician|pull permits|permit pulling)\b.{0,120}\b(?:required|needed|hiring|seeking|help|service|permit|permits)\b",
-        ])
-    if "projects" in intents:
-        patterns.extend([
-            r"\b(?:active|current|recent|awarded|ongoing|new)\b.{0,100}\b(?:project|projects|contract|contracts|bid|work)\b",
-            r"\b(?:project|projects|contract|contracts|bid|subcontractor)\b.{0,100}\b(?:active|current|recent|awarded|ongoing|notice|202[5-9])\b",
-        ])
+    role_terms=_requested_role_terms(q) if "hiring" in intents else []
+    channel_patterns={
+        "hiring":r"\b(?:hiring|hire|seeking|recruiting|looking for|job opening|open position|careers?|apply)\b",
+        "permit_license":r"\b(?:permit|permits|inspection|inspections|license|licenses|licensed|licensing)\b",
+        "projects":r"\b(?:project|projects|contract|contracts|bid|bids|awarded|expanding|expansion|opening|launching)\b",
+    }
     if intents==("claim",):
         return []
     out=[];seen=set()
     for item in evidence:
         url=_clean(item.get("url"),1600)
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
-        if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
-        pattern_match=any(re.search(p,text,re.I|re.S) for p in patterns)
-        if "hiring" in intents:
-            hiring_signal=bool(re.search(r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\b",text,re.I|re.S))
-            if role_terms:
-                role_signal=all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
-                # When the request names a role, require that exact requested role.
-                pattern_match=hiring_signal and role_signal
-            # Legacy electrical-contractor discovery requests intentionally span
-            # hiring + permit/license + project evidence without naming a role.
-            # In that case, the existing explicit trade patterns remain the
-            # fail-closed authority instead of forcing an absent role term.
-            else:
-                pattern_match=pattern_match and hiring_signal
-        if not url or url in seen or not pattern_match:continue
-        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
+        candidate=_clean(item.get("candidate_name"),300)
+        if not item.get("verification_research") or not candidate or not url or url in seen:
+            continue
+        matched=[]
+        for intent in intents:
+            pattern=channel_patterns.get(intent)
+            if pattern and re.search(pattern,text,re.I|re.S):
+                if intent=="hiring" and role_terms:
+                    if not all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms):
+                        continue
+                matched.append(intent)
+        if not matched:
+            continue
+        x=dict(item);x.pop("page_text",None);x["candidate_name"]=candidate;x["title"]=candidate
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
-        x["verified_claim"]="Candidate-specific source evidence explicitly supports the requested current claim."
-        x["supporting_urls"]=[url];x["confidence"]="high";x["evidence_basis"]="deterministic requested-claim phrase matched in candidate-specific source evidence"
+        x["verified_claim"]="Candidate-specific source evidence supports the requested claim."
+        x["supporting_urls"]=[url];x["confidence"]="high"
+        x["evidence_basis"]="candidate-specific evidence matched requested claim channel: "+",".join(matched)
         out.append(x);seen.add(url)
     return out
+
 
 def _verified_results(evidence,evaluation,q):
     by_url={_clean(x.get("url"),1600):x for x in evidence if _clean(x.get("url"),1600)}
