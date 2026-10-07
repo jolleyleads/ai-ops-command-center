@@ -116,7 +116,7 @@ def test_verified_public_email_accepts_source_visible_same_domain_email(env, mon
         "evidence": [{"url": "https://examplehvac.com/contact", "snippet": "Contact: sales@examplehvac.com"}],
     })
     assert email == "sales@examplehvac.com"
-    assert source == "https://examplehvac.com/careers"
+    assert source == "https://examplehvac.com/contact"
 
 
 def test_verified_public_email_rejects_source_visible_off_domain_email(env, monkeypatch):
