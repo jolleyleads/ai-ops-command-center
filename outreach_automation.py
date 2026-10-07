@@ -5,6 +5,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import requests
 from flask import jsonify, request, Response, session, redirect, url_for
@@ -455,7 +456,22 @@ def _suppress(email: str, reason: str="opt_out", message_id: str="", thread_id: 
     row.source_thread_id=_clean(thread_id,255)
 
 
+def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
+    """Fail closed unless recipient belongs to the prospect's persisted company source domain."""
+    address=normalize_email(lead.contact_email)
+    try:
+        source_host=(urlparse(_clean(lead.source_url,1800)).hostname or "").lower().removeprefix("www.")
+    except Exception:
+        source_host=""
+    if not address or not source_host or "@" not in address:
+        return False
+    email_host=address.rsplit("@",1)[-1].lower().removeprefix("www.")
+    return email_host==source_host or email_host.endswith("."+source_host) or source_host.endswith("."+email_host)
+
+
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
+    if not _recipient_matches_source_domain(lead):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
