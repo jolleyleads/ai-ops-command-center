@@ -302,3 +302,25 @@ def test_failed_provider_receipt_preserves_provider_error(env):
     assert result["stage"]=="send_failed"
     assert result["error"]=="Gmail error 401: invalid credentials"
     assert "PROVIDER_SEND_FAILED" in result["send_receipt"]["reasons"]
+
+
+def test_final_send_gate_rejects_off_company_domain_before_provider(env, monkeypatch):
+    x=oa.OutreachLead(
+        company="Shaw Boiler and Mechanical",
+        contact_email="privacy@wayup.com",
+        source_url="https://www.shawboiler.com/",
+        status="qualified",
+    )
+    oa.db.session.add(x); oa.db.session.commit()
+    monkeypatch.setattr(oa, "_qualification_gate", lambda lead: (_ for _ in ()).throw(AssertionError("domain gate must run first")))
+    result=oa._safe_send(x,kind="followup",sequence=1,subject="Follow up",body="Body")
+    assert result["ok"] is False
+    assert result["stage"] == "blocked"
+    assert result["gate"]["reasons"] == ["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]
+
+
+def test_final_send_gate_accepts_company_domain_and_subdomain_shape(env):
+    x=oa.OutreachLead(company="Example",contact_email="hello@mail.example.com",source_url="https://www.example.com/")
+    assert oa._recipient_matches_source_domain(x) is True
+    x.contact_email="privacy@wayup.com"
+    assert oa._recipient_matches_source_domain(x) is False
