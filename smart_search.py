@@ -216,11 +216,16 @@ def _deterministic_need_verification(evidence,q):
         pattern_match=any(re.search(p,text,re.I|re.S) for p in patterns)
         if "hiring" in intents:
             hiring_signal=bool(re.search(r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\b",text,re.I|re.S))
-            role_signal=bool(role_terms) and all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
-            # For hiring requests the requested role is authoritative. Generic
-            # hiring language or unrelated legacy trade patterns cannot promote
-            # a candidate whose evidence names a different job.
-            pattern_match=hiring_signal and role_signal
+            if role_terms:
+                role_signal=all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
+                # When the request names a role, require that exact requested role.
+                pattern_match=hiring_signal and role_signal
+            # Legacy electrical-contractor discovery requests intentionally span
+            # hiring + permit/license + project evidence without naming a role.
+            # In that case, the existing explicit trade patterns remain the
+            # fail-closed authority instead of forcing an absent role term.
+            else:
+                pattern_match=pattern_match and hiring_signal
         if not url or url in seen or not pattern_match:continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
