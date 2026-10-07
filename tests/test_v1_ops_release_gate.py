@@ -324,3 +324,37 @@ def test_final_send_gate_accepts_company_domain_and_subdomain_shape(env):
     assert oa._recipient_matches_source_domain(x) is True
     x.contact_email="privacy@wayup.com"
     assert oa._recipient_matches_source_domain(x) is False
+
+
+def test_enrichment_rejects_same_domain_non_outreach_mailboxes(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([], {"attempted": 0}))
+    for address in ("privacy@example.com","legal@example.com","medicalrecords@example.com","grievance@example.com","jobs@example.com","hr@example.com"):
+        email, source = v1._verified_public_email({
+            "company":"Example Co","website":"https://example.com/",
+            "evidence":[{"url":"https://example.com/contact","snippet":f"Contact {address}"}],
+        })
+        assert email == "" and source == ""
+
+
+def test_enrichment_keeps_normal_company_mailboxes(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([], {"attempted": 0}))
+    for address in ("info@example.com","sales@example.com","hello@example.com","owner@example.com"):
+        email, _ = v1._verified_public_email({
+            "company":"Example Co","website":"https://example.com/",
+            "evidence":[{"url":"https://example.com/contact","snippet":f"Contact {address}"}],
+        })
+        assert email == address
+
+
+def test_final_send_gate_rejects_same_domain_non_outreach_mailbox_before_provider(env, monkeypatch):
+    x=oa.OutreachLead(company="Example",contact_email="privacy@example.com",source_url="https://example.com/",status="qualified")
+    oa.db.session.add(x);oa.db.session.commit()
+    monkeypatch.setattr(oa, "_qualification_gate", lambda lead: (_ for _ in ()).throw(AssertionError("purpose mailbox gate must run first")))
+    result=oa._safe_send(x,kind="followup",sequence=1,subject="Follow up",body="Body")
+    assert result["ok"] is False
+    assert result["gate"]["reasons"] == ["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]
+
+
+def test_final_mailbox_gate_allows_normal_business_mailboxes(env):
+    for address in ("info@example.com","sales@example.com","hello@example.com","owner@example.com"):
+        assert oa._recipient_mailbox_allowed(address) is True
