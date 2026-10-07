@@ -456,6 +456,21 @@ def _suppress(email: str, reason: str="opt_out", message_id: str="", thread_id: 
     row.source_thread_id=_clean(thread_id,255)
 
 
+DISALLOWED_OUTREACH_MAILBOXES = {
+    "abuse","careers","compliance","dmca","donotreply","grievance","hr","humanresources",
+    "jobs","legal","medicalrecords","noreply","postmaster","privacy","recruiting","recruitment","webmaster",
+}
+
+
+def _recipient_mailbox_allowed(address: str) -> bool:
+    normalized=normalize_email(address)
+    if not normalized or "@" not in normalized:
+        return False
+    local=normalized.rsplit("@",1)[0].lower()
+    canonical=re.sub(r"[^a-z0-9]+","",local)
+    return canonical not in DISALLOWED_OUTREACH_MAILBOXES
+
+
 def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
     """Fail closed unless recipient belongs to the prospect's persisted company source domain."""
     address=normalize_email(lead.contact_email)
@@ -472,6 +487,8 @@ def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
     if not _recipient_matches_source_domain(lead):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
+    if not _recipient_mailbox_allowed(lead.contact_email):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
