@@ -12,35 +12,26 @@ EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{
 
 
 def _verified_public_email(result):
-    """Return only a source-visible, same-company-domain email; never synthesize one."""
-    candidate_urls = _candidate_urls(result)
+    """Return only a source-visible email on the prospect's explicit company website domain.
 
-    # Prefer an email already visible in verified discovery evidence. This avoids
-    # throwing away a valid company-domain contact just because a later HTTP
-    # contact-page probe times out or is blocked.
+    Third-party evidence may verify intent, but it can never establish the outreach recipient domain.
+    """
+    website = _clean(result.get("website"), 1800)
+    if not website.startswith(("http://", "https://")):
+        return "", ""
+    company_urls = [website]
+
     direct_rows = [result]
     direct_rows.extend(x for x in (result.get("evidence") or []) if isinstance(x, dict))
     for row in direct_rows:
-        row_url = _clean(
-            row.get("url") or row.get("source_url") or row.get("website")
-            or row.get("verification_source_url"),
-            1800,
-        )
-        text = " ".join([
-            _clean(row.get("email"), 500),
-            _clean(row.get("subtitle"), 5000),
-            _clean(row.get("snippet"), 5000),
-            _clean(row.get("text"), 120000),
-        ])
+        row_url = _clean(row.get("url") or row.get("source_url") or row.get("website") or row.get("verification_source_url"), 1800)
+        text = " ".join([_clean(row.get("email"), 500), _clean(row.get("subtitle"), 5000), _clean(row.get("snippet"), 5000), _clean(row.get("text"), 120000)])
         for raw in EMAIL_SCAN_RE.findall(text):
             email = _valid_email(raw)
-            domain_urls = [row_url] if row_url else candidate_urls
-            if email and domain_urls and _same_company_domain(email, domain_urls):
-                return email, row_url or domain_urls[0]
+            if email and _same_company_domain(email, company_urls):
+                return email, row_url or website
 
     contact_result = _public_contact_evidence(result)
-    # outreach_bridge returns (rows, probe_metadata). Normalize both shapes and
-    # keep verification fail-closed.
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
     for row in rows or []:
         if not isinstance(row, dict):
@@ -49,7 +40,7 @@ def _verified_public_email(result):
         text = " ".join([_clean(row.get("subtitle"), 5000), _clean(row.get("text"), 120000)])
         for raw in EMAIL_SCAN_RE.findall(text):
             email = _valid_email(raw)
-            if email and url and _same_company_domain(email, [url]):
+            if email and _same_company_domain(email, company_urls):
                 return email, url
     return "", ""
 
