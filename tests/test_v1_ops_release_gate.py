@@ -103,7 +103,7 @@ def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
         ),
     )
     monkeypatch.setattr(v1, "_same_company_domain", lambda email, urls: True)
-    email, source = v1._verified_public_email({"company": "Example"})
+    email, source = v1._verified_public_email({"company": "Example", "website": "https://example.com"})
     assert email == "owner@example.com"
     assert source == "https://example.com/contact"
 
