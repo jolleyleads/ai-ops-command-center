@@ -358,3 +358,37 @@ def test_final_send_gate_rejects_same_domain_non_outreach_mailbox_before_provide
 def test_final_mailbox_gate_allows_normal_business_mailboxes(env):
     for address in ("info@example.com","sales@example.com","hello@example.com","owner@example.com"):
         assert oa._recipient_mailbox_allowed(address) is True
+
+
+def test_deterministic_hiring_verification_supports_requested_non_hvac_role(env):
+    import smart_search as ss
+    evidence=[{
+        "url":"https://examplevet.com/careers",
+        "title":"Example Veterinary Clinic careers",
+        "subtitle":"Now hiring veterinary assistants. Apply today.",
+        "page_text":"Example Veterinary Clinic is now hiring veterinary assistants. Apply today.",
+        "verification_research":True,
+        "candidate_name":"Example Veterinary Clinic",
+    }]
+    promoted=ss._deterministic_need_verification(evidence,"veterinary clinics actively hiring veterinary assistants")
+    assert len(promoted)==1
+    assert promoted[0]["verification_gate"]=="passed"
+
+
+def test_deterministic_hiring_verification_rejects_wrong_requested_role(env):
+    import smart_search as ss
+    evidence=[{
+        "url":"https://examplevet.com/careers",
+        "title":"Example Veterinary Clinic careers",
+        "subtitle":"Now hiring kennel managers. Apply today.",
+        "page_text":"Example Veterinary Clinic is now hiring kennel managers.",
+        "verification_research":True,
+        "candidate_name":"Example Veterinary Clinic",
+    }]
+    assert ss._deterministic_need_verification(evidence,"veterinary clinics actively hiring veterinary assistants")==[]
+
+
+def test_demo_orchestration_honors_campaign_send_limit(env):
+    import customer_demo as demo
+    payload=demo._orchestration_payload({"results":[]},{"target_customer":"accounting firms actively hiring bookkeepers","territory":"Norfolk, Virginia","business_type":"accounting firm","sending_limit":1})
+    assert payload["outreach_limit"]==1
