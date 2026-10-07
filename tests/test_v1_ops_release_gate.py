@@ -392,3 +392,33 @@ def test_demo_orchestration_honors_campaign_send_limit(env):
     import customer_demo as demo
     payload=demo._orchestration_payload({"results":[]},{"target_customer":"accounting firms actively hiring bookkeepers","territory":"Norfolk, Virginia","business_type":"accounting firm","sending_limit":1})
     assert payload["outreach_limit"]==1
+
+
+def test_universal_verifier_is_industry_agnostic(env):
+    import smart_search as ss
+    cases=[
+        ("law firms actively hiring paralegals","Example Law","Now hiring paralegals. Apply today."),
+        ("manufacturing companies with recent permits","Example Manufacturing","Recent permits were issued for facility work."),
+        ("software companies with active projects","Example Software","Active projects include a new enterprise rollout."),
+    ]
+    for query,name,proof in cases:
+        evidence=[{"url":"https://example.com/proof","title":name,"subtitle":proof,"page_text":proof,"verification_research":True,"candidate_name":name}]
+        promoted=ss._deterministic_need_verification(evidence,query)
+        assert len(promoted)==1
+        assert promoted[0]["verification_gate"]=="passed"
+
+
+def test_universal_verifier_rejects_unrelated_claim_evidence(env):
+    import smart_search as ss
+    evidence=[{"url":"https://example.com/proof","title":"Example Law","subtitle":"Awarded a renovation project.","page_text":"Awarded a renovation project.","verification_research":True,"candidate_name":"Example Law"}]
+    assert ss._deterministic_need_verification(evidence,"law firms actively hiring paralegals")==[]
+
+
+def test_verification_plan_does_not_inject_industry_specific_claims(env):
+    import smart_search as ss
+    q="accounting firms actively hiring bookkeepers"
+    joined=" ".join(ss._verification_queries("Example Accounting",q,ss._verification_intent(q))).lower()
+    assert "bookkeeper" in joined
+    assert "electrician" not in joined
+    assert "technician" not in joined
+    assert "permit pulling" not in joined
