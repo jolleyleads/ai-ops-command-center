@@ -188,10 +188,17 @@ def _deterministic_need_verification(evidence,q):
     intents=_verification_intent(q)
     patterns=[]
     if "hiring" in intents:
-        patterns.extend([
-            r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?)\b.{0,120}\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician|employee|employees|staff|worker|workers)\b",
-            r"\b(?:hvac\s+)?(?:technician|technicians|electrician|electricians|master electrician)\b.{0,120}\b(?:hiring|job|position|opening|needed|required)\b",
-        ])
+        # Keep the deterministic gate universal: require a real hiring signal AND
+        # a role term explicitly requested after "hiring"/"hire" in the query.
+        # This preserves candidate-specific fail-closed verification without
+        # hard-coding HVAC/electrical job titles.
+        tail=re.split(r"\\b(?:actively\\s+)?(?:hiring|hire)\\b",_clean(q,1200).lower(),maxsplit=1)
+        role_stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings"}
+        role_terms=[x for x in re.findall(r"[a-z0-9]+",tail[1] if len(tail)>1 else "") if len(x)>=4 and x not in role_stop][:8]
+        hiring_signal=re.search(r"\\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\\b",text,re.I|re.S)
+        role_signal=any(re.search(rf"\\b{re.escape(term)}(?:s|es)?\\b",text,re.I) for term in role_terms)
+        if hiring_signal and role_terms and role_signal:
+            patterns.append(r".*")
     if "permit_license" in intents:
         patterns.extend([
             r"\b(?:permit|permits|inspection|inspections|license|licensing|licensed)\b.{0,140}\b(?:electrical|electrician|project|contractor|required|approved|issued|active|current)\b",
