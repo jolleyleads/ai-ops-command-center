@@ -192,7 +192,7 @@ def _deterministic_need_verification(evidence,q):
         # a role term explicitly requested after "hiring"/"hire" in the query.
         # This preserves candidate-specific fail-closed verification without
         # hard-coding HVAC/electrical job titles.
-        tail=re.split(r"\\b(?:actively\\s+)?(?:hiring|hire)\\b",_clean(q,1200).lower(),maxsplit=1)
+        tail=re.split(r"\b(?:actively\s+)?(?:hiring|hire)\b",_clean(q,1200).lower(),maxsplit=1)
         role_stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings"}
         role_terms=[x for x in re.findall(r"[a-z0-9]+",tail[1] if len(tail)>1 else "") if len(x)>=4 and x not in role_stop][:8]
         # evaluated per candidate-specific evidence row below
@@ -215,8 +215,8 @@ def _deterministic_need_verification(evidence,q):
         if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         pattern_match=any(re.search(p,text,re.I|re.S) for p in patterns)
         if "hiring" in intents and role_terms:
-            hiring_signal=bool(re.search(r"\\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\\b",text,re.I|re.S))
-            role_signal=any(re.search(rf"\\b{re.escape(term)}(?:s|es)?\\b",text,re.I) for term in role_terms)
+            hiring_signal=bool(re.search(r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\b",text,re.I|re.S))
+            role_signal=any(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
             pattern_match=pattern_match or (hiring_signal and role_signal)
         if not url or url in seen or not pattern_match:continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
