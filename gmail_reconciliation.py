@@ -102,6 +102,10 @@ def reconcile_gmail_command(cmd):
 
 
 def hardened_safe_send(lead,*,kind,sequence,subject,body):
+    if not oa._recipient_matches_source_domain(lead):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
+    if not oa._recipient_mailbox_allowed(lead.contact_email):
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
     qualification=oa._qualification_gate(lead)
     if not qualification.get("ok"):return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
     address=normalize_email(lead.contact_email);sg=suppression_gate(address,oa._is_suppressed(address))
