@@ -214,10 +214,13 @@ def _deterministic_need_verification(evidence,q):
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
         if not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         pattern_match=any(re.search(p,text,re.I|re.S) for p in patterns)
-        if "hiring" in intents and role_terms:
+        if "hiring" in intents:
             hiring_signal=bool(re.search(r"\b(?:hiring|seeking|looking for|job opening|open position|opening|careers?|now hiring|apply)\b",text,re.I|re.S))
-            role_signal=any(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
-            pattern_match=pattern_match or (hiring_signal and role_signal)
+            role_signal=bool(role_terms) and all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms)
+            # For hiring requests the requested role is authoritative. Generic
+            # hiring language or unrelated legacy trade patterns cannot promote
+            # a candidate whose evidence names a different job.
+            pattern_match=hiring_signal and role_signal
         if not url or url in seen or not pattern_match:continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=x["candidate_name"]
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
