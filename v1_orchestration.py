@@ -10,6 +10,20 @@ from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, _draft_email,
 AUTOSEND_ENABLED = os.getenv("OUTREACH_AUTOSEND_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 
+DISALLOWED_OUTREACH_MAILBOXES = {
+    "abuse","careers","compliance","dmca","donotreply","grievance","hr","humanresources",
+    "jobs","legal","medicalrecords","noreply","postmaster","privacy","recruiting","recruitment","webmaster",
+}
+
+
+def _purpose_mailbox_allowed(email):
+    value=_clean(email,500).lower()
+    if "@" not in value:
+        return False
+    local=value.rsplit("@",1)[0]
+    canonical=re.sub(r"[^a-z0-9]+","",local)
+    return canonical not in DISALLOWED_OUTREACH_MAILBOXES
+
 
 def _verified_public_email(result):
     """Return only a source-visible email on the prospect's explicit company website domain.
@@ -28,7 +42,7 @@ def _verified_public_email(result):
         text = " ".join([_clean(row.get("email"), 500), _clean(row.get("subtitle"), 5000), _clean(row.get("snippet"), 5000), _clean(row.get("text"), 120000)])
         for raw in EMAIL_SCAN_RE.findall(text):
             email = _valid_email(raw)
-            if email and _same_company_domain(email, company_urls):
+            if email and _same_company_domain(email, company_urls) and _purpose_mailbox_allowed(email):
                 return email, row_url or website
 
     contact_result = _public_contact_evidence(result)
@@ -40,7 +54,7 @@ def _verified_public_email(result):
         text = " ".join([_clean(row.get("subtitle"), 5000), _clean(row.get("text"), 120000)])
         for raw in EMAIL_SCAN_RE.findall(text):
             email = _valid_email(raw)
-            if email and _same_company_domain(email, company_urls):
+            if email and _same_company_domain(email, company_urls) and _purpose_mailbox_allowed(email):
                 return email, url
     return "", ""
 
