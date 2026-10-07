@@ -113,9 +113,9 @@ def test_verified_public_email_accepts_source_visible_same_domain_email(env, mon
     email, source = v1._verified_public_email({
         "company": "Example HVAC",
         "website": "https://examplehvac.com",
-        "evidence": [{"url": "https://examplehvac.com/careers", "snippet": "Apply: jobs@examplehvac.com"}],
+        "evidence": [{"url": "https://examplehvac.com/contact", "snippet": "Contact: sales@examplehvac.com"}],
     })
-    assert email == "jobs@examplehvac.com"
+    assert email == "sales@examplehvac.com"
     assert source == "https://examplehvac.com/careers"
 
 
