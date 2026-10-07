@@ -23,16 +23,22 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://ai-ops-command-center.onrender.com"
-          for i in {1..18}; do
-            code=$(curl --silent --output /dev/null --connect-timeout 5 --max-time 10 -w '%{http_code}' "$BASE/" || true)
-            echo "readiness attempt $i: HTTP $code"
-            if [[ "$code" =~ ^(200|301|302|401|403|404)$ ]]; then
-              echo "Render service is accepting application traffic"
-              exit 0
+          consecutive=0
+          for i in {1..24}; do
+            code=$(curl --silent --output /dev/null --connect-timeout 5 --max-time 10 -w '%{http_code}' "$BASE/api/health" || true)
+            echo "readiness attempt $i: HTTP $code (consecutive=$consecutive)"
+            if [[ "$code" == "200" ]]; then
+              consecutive=$((consecutive + 1))
+              if [[ "$consecutive" -ge 3 ]]; then
+                echo "Render application health endpoint passed 3 consecutive checks"
+                exit 0
+              fi
+            else
+              consecutive=0
             fi
-            sleep 10
+            sleep 5
           done
-          echo "FAIL: Render did not become ready inside bounded readiness window" >&2
+          echo "FAIL: /api/health did not pass 3 consecutive checks inside bounded readiness window" >&2
           exit 1
 
       - name: Call live one-shot acceptance harness
