@@ -130,6 +130,27 @@ def test_verified_public_email_rejects_source_visible_off_domain_email(env, monk
     assert source == ""
 
 
+def test_verified_public_email_rejects_third_party_evidence_domain_even_when_source_matches(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([], {"attempted": 0}))
+    email, source = v1._verified_public_email({
+        "company": "Shaw Boiler and Mechanical",
+        "website": "https://www.shawboiler.com/",
+        "evidence": [{"url": "https://www.wayup.com/jobs/example", "snippet": "Privacy: privacy@wayup.com"}],
+    })
+    assert email == ""
+    assert source == ""
+
+
+def test_verified_public_email_requires_explicit_company_website(env, monkeypatch):
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: (_ for _ in ()).throw(AssertionError("probe should not run without company website")))
+    email, source = v1._verified_public_email({
+        "company": "Example Co",
+        "evidence": [{"url": "https://jobs.example.net/posting", "snippet": "hello@jobs.example.net"}],
+    })
+    assert email == ""
+    assert source == ""
+
+
 def test_outreach_gate_is_universal_for_non_contractor_b2b_search(env):
     payload={"query":"law firms actively hiring paralegals","intent":"law firms actively hiring paralegals","results":[]}
     assert v1._outreach_search(payload) is True
