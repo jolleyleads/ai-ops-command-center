@@ -1662,7 +1662,8 @@ def health():
     return jsonify({
         "status": "AI Ops Universal Automation v2 online",
         "workflow_builder": "/workflows",
-        "credential_status": "/api/credentials/status"
+        "credential_status": "/api/credentials/status",
+        "git_commit": os.environ.get("RENDER_GIT_COMMIT", "")
     })
 
 if __name__ == "__main__":
