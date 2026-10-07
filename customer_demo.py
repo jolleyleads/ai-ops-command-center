@@ -35,7 +35,7 @@ def _campaign_payload(data):
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"query":target},None
 def _orchestration_payload(discovery,campaign):
     payload=dict(discovery);target=campaign["target_customer"]
-    payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"business_type":_text(campaign.get("business_type"),300),"intent_signal":target})
+    payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"]})
     return payload
 def _run_campaign(data):
     campaign,error=_campaign_payload(data)
