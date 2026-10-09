@@ -309,6 +309,26 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
+def _relevance_filter(items,query,location=""):
+    """Fail closed for specialized job searches instead of surfacing unrelated businesses."""
+    q=_clean(query,1200).lower()
+    if not re.search(r"\\b(job|jobs|hiring|careers|positions|vacancies|openings)\\b",q):
+        return items
+    specialized=re.findall(r"\\b(?:ai|artificial intelligence|automation|automated|workflow|machine learning|ml|software|electrical|electrician|plumbing|hvac|sales|outreach|crm|data engineer|developer)\\b",q)
+    if not specialized:
+        return items
+    expanded={"ai":("artificial intelligence","machine learning","ai engineer","ai automation","generative ai"),"automation":("automated","workflow automation","automation engineer","rpa"),"ml":("machine learning",),"crm":("customer relationship management",)}
+    terms=set(specialized)
+    for term in specialized:
+        terms.update(expanded.get(term,()))
+    result=[]
+    for item in items:
+        if not isinstance(item,dict):continue
+        evidence=" ".join(_clean(item.get(k),2500) for k in ("title","subtitle","page_text","verified_claim")).lower()
+        if any(re.search(r"(?<![a-z])"+re.escape(t)+r"(?![a-z])",evidence) for t in terms):
+            result.append(item)
+    return result
+
 def _smart_search(q,loc,runtime_budget=25):
     started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),25));messages=[];tools=[]
     try:
@@ -358,6 +378,8 @@ def _smart_search(q,loc,runtime_budget=25):
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
         discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
+        discovery_visible=_relevance_filter(discovery_visible,q,loc)
+        promoted=_relevance_filter(promoted,q,loc)
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
