@@ -52,3 +52,25 @@ def test_verification_requires_a_literal_source_quote():
     assert _verified_results(evidence, {'verified_results':[verdict]}, 'AI jobs') == []
     verdict['evidence_quote'] = evidence[0]['subtitle']
     assert len(_verified_results(evidence, {'verified_results':[verdict]}, 'AI jobs')) == 1
+
+
+def test_job_role_matching_ignores_location_and_output_instructions():
+    from smart_search import _requested_role_terms
+    assert _requested_role_terms('Find companies hiring AI automation engineers in Washington DC. Include source links.') == ['automation', 'engineer']
+
+
+def test_research_json_mode_names_json_in_the_input(monkeypatch):
+    import research_agent as agent
+    calls=[]
+    class Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return Mock(output_text='{"intent":"jobs","tool_calls":[{"tool":"web_search","query":"jobs"}],"candidates":[],"verified_results":[]}')
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only-key')
+    monkeypatch.setattr(agent, '_client', lambda: Mock(responses=Responses()))
+    agent.plan_research('automation jobs')
+    agent.recover_tool_plan('automation jobs')
+    agent.extract_candidates('automation jobs', '', [{'url':'https://example.com','title':'Example'}])
+    agent.evaluate_research('automation jobs', '', [{'url':'https://example.com','title':'Example'}])
+    assert len(calls)==4
+    assert all('json' in call['input'].lower() for call in calls)

@@ -175,7 +175,9 @@ def _requested_role_terms(q):
     m=re.search(r"\b(?:actively\s+)?(?:hiring|hire|seeking|recruiting)\b(.*)",ql)
     if not m:return []
     stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","now","today"}
-    return [x for x in re.findall(r"[a-z0-9]+",m.group(1)) if len(x)>=4 and x not in stop][:8]
+    role=re.split(r"\b(?:in|near|around|within|located|include)\b|[.;]",m.group(1),maxsplit=1)[0]
+    terms=[x for x in re.findall(r"[a-z0-9]+",role) if len(x)>=4 and x not in stop]
+    return [x[:-1] if x.endswith("s") and not x.endswith("ss") else x for x in terms][:8]
 
 
 def _verification_queries(name,q,intents=None):
@@ -337,7 +339,7 @@ def _relevance_filter(items,query,location=""):
     return result
 
 def _smart_search(q,loc,runtime_budget=25):
-    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),25));messages=[];tools=[]
+    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),90));messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {}
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
@@ -422,7 +424,7 @@ def _smart_search(q,loc,runtime_budget=25):
 def smart_search():
     d=(request.get_json(silent=True) or {}) if request.method=="POST" else request.args;q=_clean(d.get("prompt") or d.get("query") or d.get("keyword"),500);loc=_clean(d.get("location"),200)
     if not q:return jsonify({"error":"Enter a search inquiry.","results":[],"count":0}),400
-    result=_smart_search(q,loc)
+    result=_smart_search(q,loc,runtime_budget=90)
     try: result["outreach_limit"]=max(0,int(d.get("outreach_limit") or 0))
     except (TypeError,ValueError): result["outreach_limit"]=0
     return jsonify(result)
