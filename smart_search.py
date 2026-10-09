@@ -313,9 +313,9 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
 def _relevance_filter(items,query,location=""):
     """Fail closed for specialized job searches instead of surfacing unrelated businesses."""
     q=_clean(query,1200).lower()
-    if not re.search(r"\\b(job|jobs|hiring|careers|positions|vacancies|openings)\\b",q):
+    if not re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q):
         return items
-    specialized=re.findall(r"\\b(?:ai|artificial intelligence|automation|automated|workflow|machine learning|ml|software|electrical|electrician|plumbing|hvac|sales|outreach|crm|data engineer|developer)\\b",q)
+    specialized=re.findall(r"\b(?:ai|artificial intelligence|automation|automated|workflow|machine learning|ml|software|electrical|electrician|plumbing|hvac|sales|outreach|crm|data engineer|developer)\b",q)
     if not specialized:
         return items
     expanded={"ai":("artificial intelligence","machine learning","ai engineer","ai automation","generative ai"),"automation":("automated","workflow automation","automation engineer","rpa"),"ml":("machine learning",),"crm":("customer relationship management",)}
