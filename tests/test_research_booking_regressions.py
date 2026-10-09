@@ -85,3 +85,22 @@ def test_unavailable_records_provider_uses_only_government_sources(monkeypatch):
     rows, message = search._run_tool({'tool':'public_records','query':'permits','location':'Example'})
     assert [x['url'] for x in rows] == ['https://www.example.gov/permits']
     assert 'provider unavailable' in message
+
+
+def test_same_source_keeps_independent_verification_evidence():
+    from smart_search import _dedupe, _verified_results
+    discovery=dict(url='https://example.com/job',title='Acme careers',candidate_name='Acme',subtitle='Acme is hiring automation engineers.')
+    verified={**discovery,'verification_research':True,'page_text':'Acme is hiring automation engineers.'}
+    rows=_dedupe([discovery,verified])
+    assert len(rows)==1 and rows[0]['verification_research'] is True
+    verdict=dict(url=discovery['url'],entity_name='Acme',claim='Hiring automation engineers',
+                 evidence_quote=verified['page_text'],supporting_urls=[discovery['url']])
+    assert len(_verified_results(rows,{'verified_results':[verdict]},'automation jobs'))==1
+
+
+def test_shared_source_does_not_inherit_another_company_identity():
+    from smart_search import _dedupe
+    rows=_dedupe([dict(url='https://example.com/jobs',candidate_name='Acme',verification_research=True),
+                  dict(url='https://example.com/jobs',candidate_name='Other company',verification_research=True)])
+    assert rows[0]['verification_research'] is False
+    assert rows[0]['ambiguous_candidate_identity'] is True

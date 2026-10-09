@@ -10,11 +10,26 @@ from universal_app import _search_public_records,_search_businesses,_normalize_j
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
 def _dedupe(items):
-    out=[];seen=set()
+    out=[];by_url={}
     for x in items:
         if not isinstance(x,dict):continue
-        k=_clean(x.get("url"),1600).lower()
-        if k and k not in seen:seen.add(k);out.append(x)
+        key=_clean(x.get("url"),1600).lower()
+        if not key:continue
+        if key not in by_url:
+            row=dict(x);by_url[key]=row;out.append(row);continue
+        row=by_url[key]
+        if not x.get("verification_research"):continue
+        old_name=_candidate_key(row.get("candidate_name"))
+        new_name=_candidate_key(x.get("candidate_name"))
+        if row.get("ambiguous_candidate_identity") or (old_name and new_name and old_name!=new_name):
+            row["ambiguous_candidate_identity"]=True
+            row["verification_research"]=False
+            continue
+        if new_name:
+            for field in ("candidate_name","candidate_discovery_urls","verification_research","verification_query","verification_intents"):
+                if field in x:row[field]=x[field]
+            # Preserve current independently retrieved source text for validation.
+            if x.get("page_text"):row["page_text"]=x["page_text"]
     return out
 
 def _extract_web_rows(payload):
@@ -386,6 +401,7 @@ def _smart_search(q,loc,runtime_budget=25):
         for item in discovery:
             names=names_by_url.get(item.get("url"),set())
             if len(names)==1:item["candidate_name"]=next(iter(names))
+            elif len(names)>1:item["ambiguous_candidate_identity"]=True
         # Reserve evaluator time; retrieval must not consume the entire budget.
         joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-12,10,max_queries=1) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
