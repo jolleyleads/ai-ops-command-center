@@ -27,6 +27,30 @@ if app.config["SQLALCHEMY_DATABASE_URI"].startswith(("postgresql", "postgres:"))
 
 db = SQLAlchemy(app)
 
+
+@app.before_request
+def protect_legacy_operator_surfaces():
+    """Keep the older workflow builder and its lead data behind operator auth."""
+    path=request.path
+    private_paths={
+        "/", "/workflows", "/api/workflows", "/api/runs",
+        "/api/credentials", "/api/credentials/status", "/api/ai/generate-workflow",
+        "/api/jobs", "/api/save-job", "/api/events", "/api/pipeline",
+        "/api/qualified-leads", "/api/permit-leads/save", "/api/prospect-intake",
+    }
+    private_prefixes=("/api/workflows/", "/api/qualified-leads/", "/api/operator/")
+    if path not in private_paths and not path.startswith(private_prefixes):
+        return None
+    from outreach_automation import _csrf_ok, _operator_authorized, _operator_session_authorized
+    session_authorized=_operator_session_authorized()
+    if not (session_authorized or _operator_authorized()):
+        if path.startswith("/api/"):
+            return jsonify({"ok":False,"error":"operator authentication required"}),401
+        return redirect(url_for("operator_login"),303)
+    if session_authorized and request.method in {"POST","PUT","PATCH","DELETE"} and not _csrf_ok():
+        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
+    return None
+
 class AutomationEvent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     event_type = db.Column(db.String(100))
@@ -763,6 +787,12 @@ def run_workflow(workflow, payload):
 def create_tables():
     db.create_all()
 
+
+@app.context_processor
+def inject_operator_csrf_token():
+    from outreach_automation import _csrf_token
+    return {"operator_csrf_token":_csrf_token()}
+
 @app.route("/")
 def index():
     events = AutomationEvent.query.order_by(
@@ -841,26 +871,11 @@ def workflows_page():
     methods=["GET", "POST"]
 )
 def login():
-    if request.method == "POST":
-        session["user"] = request.form.get(
-            "email"
-        )
-
-        return redirect(
-            url_for("index")
-        )
-
-    return render_template(
-        "login.html"
-    )
+    return redirect(url_for("operator_login"),303)
 
 @app.route("/logout")
 def logout():
-    session.clear()
-
-    return redirect(
-        url_for("login")
-    )
+    return redirect(url_for("operator_login"),303)
 
 @app.route(
     "/api/workflows",

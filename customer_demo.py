@@ -67,6 +67,8 @@ def _run_campaign(data):
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
+    if not (oa._operator_session_authorized() or oa._operator_authorized()):
+        return jsonify({"ok":False,"error":"operator authentication required"}),401
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
 @app.route("/api/operator/campaign-session",methods=["GET"])
 def campaign_operator_session():

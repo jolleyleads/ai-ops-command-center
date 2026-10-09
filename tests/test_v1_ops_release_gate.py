@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 import pytest
 import outreach_automation as oa
+import commercial_app
 import customer_demo
 import smart_search
 import v1_orchestration as v1
@@ -242,6 +243,42 @@ def test_campaign_launch_requires_operator_session_and_csrf(env, monkeypatch):
     response=client.post("/api/demo/campaigns/launch",json={},headers={"X-CSRF-Token":csrf})
     assert response.status_code==200
     assert len(calls)==1
+
+
+def test_saved_leads_and_outreach_actions_require_operator_access(env):
+    client=oa.app.test_client()
+    assert client.get("/api/outreach/leads").status_code==401
+    assert client.get("/api/outreach/needs-attention").status_code==401
+    assert client.get("/api/demo/leads").status_code==401
+    assert client.post("/api/outreach/leads",json={"company":"Injected"}).status_code==401
+    assert client.post("/api/outreach/leads/1/draft",json={}).status_code==401
+    assert client.post("/api/outreach/leads/1/send",json={}).status_code==401
+    assert client.post("/api/prospect-intake",json={"results":[]}).status_code==401
+    assert client.post("/api/permit-leads/save",json={}).status_code==401
+    assert client.post("/api/operator/v1-1-acceptance-once",json={}).status_code==401
+    login(client)
+    assert client.get("/api/outreach/leads").status_code==200
+    assert client.get("/api/outreach/needs-attention").status_code==200
+    assert client.get("/api/demo/leads").status_code==200
+    assert client.post("/api/outreach/leads",json={"company":"No CSRF"}).status_code==403
+
+
+def test_legacy_workflow_builder_is_operator_only_and_csrf_protected(env):
+    import app as legacy
+    client=legacy.app.test_client()
+    assert client.get("/").status_code==303
+    assert client.get("/workflows").status_code==303
+    assert client.get("/api/workflows").status_code==401
+    assert client.post("/api/workflows",json={"name":"Injected workflow"}).status_code==401
+    login(client)
+    assert client.get("/").status_code==200
+    assert client.get("/workflows").status_code==200
+    assert client.get("/api/workflows").status_code==200
+    assert client.post("/api/workflows",json={"name":"Missing CSRF"}).status_code==403
+    with client.session_transaction() as state:
+        csrf=state["csrf_token"]
+    created=client.post("/api/workflows",json={"name":"Protected workflow"},headers={"X-CSRF-Token":csrf})
+    assert created.status_code==201
 
 
 def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
