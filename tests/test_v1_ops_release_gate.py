@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 import pytest
 import outreach_automation as oa
+import customer_demo
 import smart_search
 import v1_orchestration as v1
 
@@ -213,6 +214,34 @@ def test_active_orchestration_uses_universal_outreach_gate(env):
     source = __import__("inspect").getsource(v1.orchestrate_discovery)
     assert "_outreach_search(payload)" in source
     assert "not_b2b_outreach_search" in source
+
+
+def test_question_search_does_not_start_outreach(env, monkeypatch):
+    import smart_search
+    calls=[]
+    monkeypatch.setattr(smart_search,"_smart_search",lambda *args,**kwargs:{"configured":True,"count":1,"results":[{"title":"Example company","url":"https://example.com"}]})
+    monkeypatch.setattr(v1,"orchestrate_discovery",lambda payload:calls.append(payload))
+    response=oa.app.test_client().post("/api/smart-search",json={"prompt":"Find local businesses"})
+    assert response.status_code==200
+    assert "outreach_automation" not in response.get_json()
+    assert calls==[]
+    assert oa.OutreachLead.query.count()==0
+
+
+def test_campaign_launch_requires_operator_session_and_csrf(env, monkeypatch):
+    calls=[]
+    monkeypatch.setattr(customer_demo,"_run_campaign",lambda data:calls.append(data) or ({"ok":True},None,None))
+    client=oa.app.test_client()
+    assert client.post("/api/demo/campaigns/launch",json={}).status_code==401
+    assert calls==[]
+    login(client)
+    assert client.post("/api/demo/campaigns/launch",json={}).status_code==403
+    assert calls==[]
+    with client.session_transaction() as state:
+        csrf=state["csrf_token"]
+    response=client.post("/api/demo/campaigns/launch",json={},headers={"X-CSRF-Token":csrf})
+    assert response.status_code==200
+    assert len(calls)==1
 
 
 def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
