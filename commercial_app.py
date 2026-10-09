@@ -28,6 +28,7 @@ import outreach_scheduler  # noqa: F401
 import db_diagnostic  # noqa: F401
 import provider_acceptance_ui  # noqa: F401
 import customer_demo  # noqa: F401
+import customer_prospect_ranking  # noqa: F401
 
 rag_research.init_rag_tables()
 
