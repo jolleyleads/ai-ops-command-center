@@ -13,6 +13,7 @@ from smart_search import _smart_search
 from v1_orchestration import orchestrate_discovery
 from v11_evidence_upgrade import enhance_discovery
 from prospect_ranking import Prospect, rank_prospects
+from customer_prospect_ranking import discover
 
 MAX_DEMO_SEND_LIMIT=100
 
@@ -53,12 +54,15 @@ def _run_campaign(data):
     visible=[]
     for result in discovery.get("results") or []:
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
-    ranking=rank_prospects([Prospect(company=x["company"]) for x in visible])
+    companies=list(dict.fromkeys(x["company"] for x in visible if x["company"]!="Unknown company"))[:5]
+    ranking,ranking_diagnostics=discover(companies,campaign["territory"]) if companies else ([],[])
+    unsearched=[Prospect(company=x["company"]) for x in visible if x["company"] not in companies]
+    ranking+=rank_prospects(unsearched)
     by_company={x["company"]:x for x in ranking}
     for x in visible:
         x["prospect_ranking"]=by_company.get(x["company"])
     visible.sort(key=lambda x:(x["prospect_ranking"]["tier"],-x["prospect_ranking"]["score"]))
-    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
+    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible,"ranking_diagnostics":ranking_diagnostics},"outreach":outreach},None,None
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
