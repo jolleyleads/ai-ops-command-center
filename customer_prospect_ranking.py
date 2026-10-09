@@ -10,7 +10,7 @@ from prospect_ranking import Evidence, Prospect, rank_prospects
 COMPLAINT=re.compile(r"no one answers|never answers?|unanswered calls?|missed calls?|never called back|no call.?back|poor communication|unresponsive",re.I)
 HIRING=re.compile(r"hiring|job opening|open position|careers|recruiting|apply now",re.I)
 ROLE=re.compile(r"receptionist|front desk|customer service|scheduler|appointment|inside sales|call center|outreach",re.I)
-DATE=re.compile(r"\\b20\\d{2}-\\d{2}-\\d{2}\\b")
+DATE=re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
 
 def _evidence(rows,company,kind):
     found=[]
