@@ -39,7 +39,7 @@ def _extract_web_rows(payload):
 def _web_search(query,location=""):
     key=os.getenv("OPENAI_API_KEY") or ""
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
-    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.6-luna","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.5","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
         r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=30)
         if not r.ok:
@@ -128,6 +128,7 @@ def _semantic_keep(evidence,evaluation):
 def _deterministic_route_intent(q):
     """Stable universal intent label when the semantic planner is unavailable."""
     ql=_clean(q,1200).lower()
+    if re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",ql):return "jobs"
     if any(x in ql for x in ("contractor","contractors")):return "contractors"
     if "master electrician" in ql and any(x in ql for x in ("lead","leads","pull permit","permit pulling")):return "permit_leads"
     if any(x in ql for x in ("permit","permits","inspection","inspections","license","licensing")):return "permits"
@@ -336,6 +337,10 @@ def _smart_search(q,loc,runtime_budget=25):
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
             plan=recover_tool_plan(q,loc) or plan
         calls=plan.get("tool_calls") or []
+        # Ensure job research has an independent live web discovery path even if
+        # a degraded planner returns only a generic business lookup.
+        if re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q.lower()) and not any(c.get("tool") in ("web_search","exa_search") for c in calls):
+            calls=[{"tool":"exa_search","query":q,"location":loc}]+calls[:2]
         if not calls:
             # Grounded web discovery is the universal safe baseline when the semantic planner is unavailable.
             # Evidence evaluation can still request specialized public-record/business/job follow-ups.
@@ -377,8 +382,14 @@ def _smart_search(q,loc,runtime_budget=25):
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
-        discovery_visible=_relevance_filter(discovery_visible,q,loc)
+        is_jobs=bool(re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q.lower()))
+        # Job queries must consider ALL discovered sources, not business-only rows.
+        # Filter before limiting so relevant web/job evidence is not silently dropped.
+        if is_jobs:
+            discovery_visible=_relevance_filter([x for x in discovery if not x.get("rag_retrieved")],q,loc)[:20]
+        else:
+            discovery_visible=([x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10])
+            discovery_visible=_relevance_filter(discovery_visible,q,loc)
         promoted=_relevance_filter(promoted,q,loc)
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
