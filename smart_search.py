@@ -81,7 +81,17 @@ def _run_tool(call):
     try:
         if tool=="exa_search":payload=_exa_search(q,loc)
         elif tool=="web_search":payload=_web_search(q,loc)
-        elif tool=="public_records":payload=_search_public_records(q,loc)
+        elif tool=="public_records":
+            payload=_search_public_records(q,loc)
+            if not payload.get("results") and (payload.get("configured") is False or payload.get("message")):
+                fallback=_exa_search(q+" official government public records",loc)
+                official=[x for x in fallback.get("results") or [] if (urlparse(x.get("url") or "").hostname or "").lower().endswith(".gov")]
+                if not official:
+                    fallback=_web_search("Find direct official .gov records for: "+q,loc)
+                    official=[x for x in fallback.get("results") or [] if (urlparse(x.get("url") or "").hostname or "").lower().endswith(".gov")]
+                payload={"results":official,"source":"Official government source discovery",
+                         "message":"Public-records search provider unavailable; used official-source web discovery. "+(fallback.get("message") or "")}
+
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
         else:return [],f"Unknown research tool: {tool}"
@@ -293,7 +303,7 @@ def _fallback_candidates(discovery,limit=10):
         if len(out)>=limit:break
     return out
 
-def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
+def _candidate_followups(q,loc,candidates,deadline,max_candidates=10,max_queries=None):
     evidence=[];messages=[];tools=[];intents=_verification_intent(q)
     for cand in (candidates or [])[:max_candidates]:
         if time.monotonic()>=deadline-6:break
@@ -301,6 +311,8 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         if not name:continue
         candidate_rows=[]
         queries=_verification_queries(name,q,intents)
+        if max_queries:
+            queries=(queries[1:] if "hiring" in intents and len(queries)>1 else queries)[:max_queries]
         for verify_query in queries:
             if time.monotonic()>=deadline-4:break
             rows,msg,used=_run_calls([{"tool":"exa_search","query":verify_query,"location":loc}],deadline,1);messages+=msg;tools+=used
@@ -375,7 +387,7 @@ def _smart_search(q,loc,runtime_budget=25):
             names=names_by_url.get(item.get("url"),set())
             if len(names)==1:item["candidate_name"]=next(iter(names))
         # Reserve evaluator time; retrieval must not consume the entire budget.
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-12,10) if candidates else ([],[],[])
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-12,10,max_queries=1) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
@@ -395,9 +407,9 @@ def _smart_search(q,loc,runtime_budget=25):
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q) if evaluation else []
-        deterministic_promoted=_deterministic_need_verification(evidence,q)
-        if deterministic_promoted:
-            promoted=_dedupe(promoted+deterministic_promoted)
+        # Keyword overlap alone cannot establish entity, location or current
+        # status. Promotion requires the evaluator's source-specific quote.
+
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
         is_jobs=bool(re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q.lower()))

@@ -74,3 +74,14 @@ def test_research_json_mode_names_json_in_the_input(monkeypatch):
     agent.evaluate_research('automation jobs', '', [{'url':'https://example.com','title':'Example'}])
     assert len(calls)==4
     assert all('json' in call['input'].lower() for call in calls)
+
+
+def test_unavailable_records_provider_uses_only_government_sources(monkeypatch):
+    import smart_search as search
+    monkeypatch.setattr(search, '_search_public_records', lambda *a: {'configured':False,'results':[]})
+    monkeypatch.setattr(search, '_exa_search', lambda *a: {'results':[
+        {'url':'https://www.example.gov/permits','title':'Permit records'},
+        {'url':'https://example.com/permits','title':'Unverified directory'}]})
+    rows, message = search._run_tool({'tool':'public_records','query':'permits','location':'Example'})
+    assert [x['url'] for x in rows] == ['https://www.example.gov/permits']
+    assert 'provider unavailable' in message

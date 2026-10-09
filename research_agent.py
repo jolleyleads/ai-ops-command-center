@@ -117,14 +117,20 @@ def evaluate_research(query,location,evidence):
     if not evidence:return _fallback_evaluation([])
     if not os.getenv("OPENAI_API_KEY"):return _fallback_evaluation(evidence,"OPENAI_API_KEY unavailable")
     compact=[]
-    ordered=sorted(evidence,key=lambda x:not x.get("verification_research"))
+    # Give each candidate evidence space before generic discovery rows.
+    groups={}
+    for item in evidence:
+        if item.get("verification_research"):
+            groups.setdefault(item.get("candidate_name") or "",[]).append(item)
+    ordered=[item for group in groups.values() for item in group[:3]]
+    ordered.extend(item for item in evidence if not item.get("verification_research"))
     for item in ordered[:12]:compact.append({"title":str(item.get("title") or "")[:220],"url":str(item.get("url") or "")[:600],"text":str(item.get("page_text") or item.get("subtitle") or "")[:900],"source":str(item.get("source") or "")[:100],"tool":str(item.get("research_tool") or "")[:50],"type":str(item.get("type") or "")[:50],"phone":str(item.get("phone") or "")[:80],"website":str(item.get("website") or "")[:600],"memory":bool(item.get("rag_retrieved")),"candidate_name":str(item.get("candidate_name") or "")[:300],"verification_research":bool(item.get("verification_research"))})
     instructions="""Judge evidence for a general-purpose AI research engine. Keep only sources that semantically support the exact request. Reject stale/unrelated RAG memory. Also audit evidence coverage: if the request requires a specialized evidence type and current evidence does not contain it, mark insufficient and request the appropriate capability. Never invent evidence or URLs.
 
 Available follow-up capabilities: web_search, public_records, business_search, job_search.
 Return ONLY compact JSON with sufficient, answer_summary, gaps, followup_tool_calls, ranked_urls, relevant_urls, verified_results. A verified_result must be {"url":"SUPPLIED_URL","entity_name":"EXACT candidate_name","claim":"specific supported requested fact","evidence_quote":"verbatim short quote from supplied text","supporting_urls":["SUPPLIED_URL"],"confidence":"high|medium"}. Only verify rows marked verification_research with a named candidate, where the supplied text names that exact entity and directly proves the requested claim. Reject filled/expired jobs, location mismatches and unsupported current status. Return an empty verified_results array whenever proof is missing. URLs may ONLY be supplied URLs. followup_tool_calls are {"tool":"...","query":"...","location":"..."} and use at most 2."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input="Return only JSON.\n"+json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),max_output_tokens=1000,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input="Return only JSON.\n"+json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),max_output_tokens=2000,text={"format":{"type":"json_object"}})
         parsed=_json_object(response.output_text)
         if not parsed:return _fallback_evaluation(evidence,"invalid evaluator response")
         parsed["followup_tool_calls"]=[c for c in (parsed.get("followup_tool_calls") or []) if isinstance(c,dict) and c.get("tool") in TOOLS][:2]
