@@ -36,3 +36,19 @@ def test_health_does_not_run_schema_creation(monkeypatch):
     response = commercial_app.app.test_client().get('/api/health')
     assert response.status_code == 200
     create.assert_not_called()
+
+
+def test_filled_jobs_do_not_surface_as_hiring_candidates():
+    rows = [{'title':'AI engineer', 'subtitle':'The job you are trying to apply for has been filled.'}]
+    assert _relevance_filter(rows, 'Find companies hiring AI engineers') == []
+
+
+def test_verification_requires_a_literal_source_quote():
+    from smart_search import _verified_results
+    evidence = [dict(url='https://example.com/job', candidate_name='Acme', verification_research=True,
+                     subtitle='Acme is hiring an AI automation engineer.')]
+    verdict = dict(url=evidence[0]['url'], entity_name='Acme', claim='Hiring AI automation engineer',
+                   supporting_urls=[evidence[0]['url']], evidence_quote='An invented quote')
+    assert _verified_results(evidence, {'verified_results':[verdict]}, 'AI jobs') == []
+    verdict['evidence_quote'] = evidence[0]['subtitle']
+    assert len(_verified_results(evidence, {'verified_results':[verdict]}, 'AI jobs')) == 1

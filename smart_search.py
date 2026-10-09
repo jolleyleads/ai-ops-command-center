@@ -242,7 +242,11 @@ def _verified_results(evidence,evaluation,q):
         if not item or url in seen or not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         entity=_clean(verdict.get("entity_name"),300);claim=_clean(verdict.get("claim"),1200)
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
-        if not entity or not claim or not supporting:continue
+        quote=_clean(verdict.get("evidence_quote"),1200)
+        source_text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text"))
+        if (not entity or not claim or not supporting or not quote
+                or " ".join(quote.lower().split()) not in " ".join(source_text.lower().split())
+                or _candidate_key(entity)!=_candidate_key(item.get("candidate_name"))):continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
     annotate_evidence(out,q)
     return out
@@ -326,6 +330,8 @@ def _relevance_filter(items,query,location=""):
     for item in items:
         if not isinstance(item,dict):continue
         evidence=" ".join(_clean(item.get(k),2500) for k in ("title","subtitle","page_text","verified_claim")).lower()
+        if re.search(r"(?:job|position|role).{0,100}(?:has been filled|no longer available|is closed|has expired)", evidence):
+            continue
         if any(re.search(r"(?<![a-z])"+re.escape(t)+r"(?![a-z])",evidence) for t in terms):
             result.append(item)
     return result
@@ -357,7 +363,17 @@ def _smart_search(q,loc,runtime_budget=25):
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
         if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,10) if candidates else ([],[],[])
+        # Join extracted entity names to their exact discovery URLs. Ambiguous
+        # multi-entity pages must remain candidates rather than inherit a name.
+        names_by_url={}
+        for candidate in candidates:
+            for url in candidate.get("discovery_urls") or []:
+                names_by_url.setdefault(url,set()).add(candidate["name"])
+        for item in discovery:
+            names=names_by_url.get(item.get("url"),set())
+            if len(names)==1:item["candidate_name"]=next(iter(names))
+        # Reserve evaluator time; retrieval must not consume the entire budget.
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-12,10) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
