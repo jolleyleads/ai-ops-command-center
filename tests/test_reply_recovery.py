@@ -22,6 +22,7 @@ def test_scheduling_question_and_mixed_question_remain_distinct():
     assert classify_reply("Can you schedule a meeting, and how much does it cost?")["classification"] == "question"
     assert classify_reply("Unsubscribe. Can you schedule a meeting?")["classification"] == "not_interested"
     assert routine_answer("How long is the call?")
+    assert classify_reply("How long is the call")["classification"] == "question"
     assert not routine_answer("How long is the call, and what is your price?")
 
 
@@ -115,3 +116,17 @@ def test_imported_booking_reply_is_not_routed_again(env,monkeypatch):
     monkeypatch.setattr(scanner,"_route_persisted_reply",lambda *a:pytest.fail("completed booking must not run again"))
     assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_booked"
     assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_processed"
+
+
+def test_supported_faq_resumes_prior_review_once(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company="Example",contact_email="owner@example.com",gmail_thread_id="thread",status="responded")
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa._audit_actor(lead.id,"inbound_processed",{"message_id":"faq"},{"stage":"unclear"},"scheduler")
+    oa.db.session.commit()
+    monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda _:{"ok":True,"replied":True,"reply_evidence":[{"message_id":"faq","from_email":lead.contact_email,"text":"How long is the call"}]})
+    calls=[]
+    monkeypatch.setattr(scanner,"_route_persisted_reply",lambda *a:calls.append(1) or {"ok":True,"stage":"question_answered"})
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="question_answered"
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_processed"
+    assert calls==[1]

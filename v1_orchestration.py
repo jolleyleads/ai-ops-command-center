@@ -4,6 +4,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from flask import jsonify, request
 from app import app, db
+from src.grounded_reply import routine_answer
+from src.automatic_reply_router import current_reply_text
 from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _outreach_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
 from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, OutreachBookingAttempt, OperatorAuditEvent, _audit_actor, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
 
@@ -123,8 +125,14 @@ def scan_real_inbound_replies():
             processed.append({"lead_id":lead.id,"ok":True,"stage":"no_prospect_reply"});continue
         latest=evidence[-1];message_id=_clean(latest.get("message_id"),255)
         handled=OperatorAuditEvent.query.filter_by(lead_id=lead.id,action="inbound_processed").all()
-        if message_id and any(json.loads(x.request_json).get("message_id")==message_id for x in handled):
-            processed.append({"lead_id":lead.id,"ok":True,"stage":"already_processed"});continue
+        markers=[x for x in handled if json.loads(x.request_json).get("message_id")==message_id]
+        if message_id and markers:
+            last=max(markers,key=lambda x:x.id)
+            previous_stage=json.loads(last.result_json).get("stage")
+            # A newly supported FAQ may resume a prior review-only route. Its
+            # persisted message identity still owns send idempotency.
+            if previous_stage not in {"unclear","question"} or not routine_answer(current_reply_text(latest.get("text"))):
+                processed.append({"lead_id":lead.id,"ok":True,"stage":"already_processed"});continue
         if not message_id:
             processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_message_id"});continue
         # Older manually imported conversations have a confirmed booking receipt
