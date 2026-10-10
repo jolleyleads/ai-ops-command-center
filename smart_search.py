@@ -81,7 +81,18 @@ def _run_tool(call):
     try:
         if tool=="exa_search":payload=_exa_search(q,loc)
         elif tool=="web_search":payload=_web_search(q,loc)
-        elif tool=="public_records":payload=_search_public_records(q,loc)
+        elif tool=="public_records":
+            payload=_search_public_records(q,loc)
+            if not payload.get("results") and (not payload.get("configured") or payload.get("message")):
+                # Retrieval remains deterministic when Google denies API access.
+                # Only government-hosted URLs enter this official-record route.
+                fallback=_exa_search(q+" site:gov",loc)
+                official=[x for x in fallback.get("results") or [] if (urlparse(x.get("url") or "").hostname or "").lower().endswith(".gov")]
+                if official:
+                    payload={"configured":True,"source":"Exa official government sources","results":official,"message":"Google records provider unavailable; retrieved government-source candidates through Exa. Record claims still require verification."}
+                else:
+                    payload=dict(payload)
+                    payload["message"]=_clean(payload.get("message") or "Records provider unavailable",350)+"; official-source fallback returned no evidence."
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
         else:return [],f"Unknown research tool: {tool}"

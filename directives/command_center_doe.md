@@ -28,3 +28,10 @@ A missing receipt or required evidence blocks advancement. Failure to prove a cl
 
 ## Audit rule
 Every state change records from/to stage, gate result, and reason. Side-effect stages require deterministic receipts.
+
+## Provider recovery and acceptance
+- Execution retries only transient OAuth transport/server failures within a bounded budget. Permanent authorization failures stay blocked. Unexpired access tokens may be reused only for the same credentials.
+- An unavailable records provider may use another configured retrieval provider, but the official-record route admits only government-hosted source URLs and never promotes discovery alone into a verified claim.
+- Calendar availability requires an explicit error-free busy list for the requested calendar and the exact booking window. Missing data never means available.
+- Controlled production acceptance runs require operator authentication and the allowlisted test recipient. Fixtures must pass the same qualification and recipient gates as ordinary outreach.
+- A simulated interested reply tests only booking execution. Real inbound detection is pending until a real provider message has been ingested and persisted.

@@ -3,7 +3,10 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 import requests
-from app import gmail_access_token
+def gmail_access_token():
+    # Resolve at execution time so direct cron imports use persisted OAuth too.
+    from gmail_connect import gmail_access_token as resolve_token
+    return resolve_token()
 
 BASE="https://www.googleapis.com/calendar/v3"
 
@@ -16,7 +19,10 @@ def check_availability(req:Dict[str,Any])->Dict[str,Any]:
     try:
         r=requests.post(f"{BASE}/freeBusy",headers=_headers(),json=payload,timeout=30)
         if not r.ok:return {"ok":False,"available":False,"error":f"Google Calendar freeBusy {r.status_code}: {r.text[:500]}"}
-        busy=((r.json().get("calendars") or {}).get(calendar_id) or {}).get("busy") or []
+        calendar=(r.json().get("calendars") or {}).get(calendar_id)
+        if not isinstance(calendar,dict) or calendar.get("errors") or not isinstance(calendar.get("busy"),list):
+            return {"ok":False,"available":False,"error":"Calendar availability could not be verified"}
+        busy=calendar["busy"]
         return {"ok":True,"available":len(busy)==0,"checked_start":req["start"],"checked_end":req["end"],"busy":busy}
     except Exception as exc:
         return {"ok":False,"available":False,"error":str(exc)[:500]}

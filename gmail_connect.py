@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import os
 import time
+import threading
 from urllib.parse import urlencode
 
 import requests
@@ -82,21 +83,46 @@ def _stored_refresh_token():
     return (row.refresh_token or "").strip() if row else ""
 
 
+_token_cache = {}
+_token_lock = threading.Lock()
+
+
 def _refresh_access_token(refresh_token):
     client_id, client_secret = _client_credentials()
     if not all([client_id, client_secret, refresh_token]):
         raise RuntimeError("Google OAuth is not configured.")
-    response = requests.post(GOOGLE_TOKEN_URL, data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"}, timeout=20)
-    if not response.ok:
-        try:
-            payload = response.json(); code = str(payload.get("error") or f"http_{response.status_code}"); description = str(payload.get("error_description") or "")[:200]
-        except Exception:
-            code = f"http_{response.status_code}"; description = ""
-        raise RuntimeError(f"Google token error {code}: {description}")
-    token = (response.json().get("access_token") or "").strip()
-    if not token:
-        raise RuntimeError("Google returned no access token.")
-    return token
+    identity = hashlib.sha256((client_id + "\0" + client_secret + "\0" + refresh_token).encode()).hexdigest()
+    # Share one unexpired grant across Gmail, inbound processing, and Calendar.
+    # Credential changes invalidate the cache; secrets never appear in receipts.
+    with _token_lock:
+        cached = _token_cache.get(identity)
+        if cached and time.monotonic() < cached[1]:
+            return cached[0]
+        for attempt in range(3):
+            try:
+                response = requests.post(GOOGLE_TOKEN_URL, data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"}, timeout=8)
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt < 2:
+                    time.sleep(0.25 * (2 ** attempt)); continue
+                raise RuntimeError("Google token refresh temporarily unavailable") from None
+            if not response.ok:
+                try:
+                    payload = response.json(); code = str(payload.get("error") or f"http_{response.status_code}"); description = str(payload.get("error_description") or "")[:200]
+                except Exception:
+                    code = f"http_{response.status_code}"; description = ""
+                transient = response.status_code in (429,500,502,503,504) or code in ("internal_failure","server_error","temporarily_unavailable")
+                if transient and attempt < 2:
+                    time.sleep(0.25 * (2 ** attempt)); continue
+                raise RuntimeError(f"Google token error {code}: {description}")
+            data = response.json()
+            token = (data.get("access_token") or "").strip()
+            if not token:
+                raise RuntimeError("Google returned no access token.")
+            try: lifetime = min(3600,max(0,int(data.get("expires_in",0))-60))
+            except (TypeError,ValueError): lifetime = 0
+            _token_cache.clear()
+            if lifetime: _token_cache[identity] = (token,time.monotonic()+lifetime)
+            return token
 
 
 def gmail_access_token():

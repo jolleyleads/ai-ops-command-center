@@ -54,6 +54,9 @@ def execute_booking(request:Dict[str,Any],availability_func:Callable,event_creat
     if not gate["ok"]:return {"ok":False,"stage":"blocked","request_gate":gate}
     raw_avail=availability_func(gate)
     avail=validate_availability_receipt(raw_avail)
+    if avail["checked_start"] != gate["start"] or avail["checked_end"] != gate["end"]:
+        avail.update(ok=False,validated=False,available=False)
+        avail["reasons"].append("CHECKED_WINDOW_MISMATCH")
     if not avail["ok"]:return {"ok":False,"stage":"unavailable","request_gate":gate,"availability":avail}
     # Creation follows the exact checked window. Provider should use an idempotency key.
     raw_event=event_create_func(gate)

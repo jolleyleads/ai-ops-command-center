@@ -19,6 +19,9 @@ def _json_object(text):
 
 def _client():return OpenAI(api_key=os.environ["OPENAI_API_KEY"],timeout=12,max_retries=0)
 def _model():return os.getenv("OPENAI_PLANNER_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
+def _json_input(payload):
+    # JSON mode requires an explicit JSON instruction in the input messages.
+    return "Return a JSON object using only this supplied evidence:\n" + json.dumps(payload,ensure_ascii=False)
 def _error(stage,exc):
     status=getattr(exc,"status_code",None)
     code=getattr(exc,"code",None)
@@ -43,7 +46,7 @@ Select up to 3. Specialized evidence requirements must select the matching speci
 {"intent":"...","tool_calls":[{"tool":"web_search|public_records|business_search|job_search","query":"retrieval query preserving user meaning","location":"user location"}]}
 No industry/city-specific rules."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=json.dumps({"query":query,"location":location},ensure_ascii=False),max_output_tokens=350,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location}),max_output_tokens=350,text={"format":{"type":"json_object"}})
         plan=_normalize_plan(_json_object(response.output_text),query,location)
         if plan.get("tool_calls"):
             plan["planning_degraded"]=False;plan["planning_recovered"]=True;plan["planning_error"]=""
@@ -87,7 +90,7 @@ Rules:
 Return ONLY compact JSON:
 {"goal":"...","intent":"...","tool_calls":[{"tool":"...","query":"...","location":"..."}],"verification_criteria":["..."],"sufficient":false,"gaps":[]}"""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=json.dumps({"query":query,"location":location,"prior_evidence":prior_evidence or []},ensure_ascii=False),max_output_tokens=500,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"prior_evidence":prior_evidence or []}),max_output_tokens=500,text={"format":{"type":"json_object"}})
         return _normalize_plan(_json_object(response.output_text),query,location)
     except Exception as exc:return _fallback_plan(query,location,_error("primary",exc))
 
@@ -103,7 +106,7 @@ Do not invent or infer a candidate that is not named in supplied evidence. Do no
 {"candidates":[{"name":"exact supported name","discovery_urls":["SUPPLIED_URL"],"reason":"what supplied evidence suggests, without overstating"}]}
 Use at most 5 candidates. Every discovery URL must be one of the supplied URLs."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),max_output_tokens=650,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=650,text={"format":{"type":"json_object"}})
         parsed=_json_object(response.output_text);allowed={x["url"] for x in compact if x.get("url")};out=[]
         for cand in parsed.get("candidates") or []:
             if not isinstance(cand,dict):continue
@@ -123,7 +126,7 @@ def evaluate_research(query,location,evidence):
 Available follow-up capabilities: web_search, public_records, business_search, job_search.
 Return ONLY compact JSON with sufficient, answer_summary, gaps, followup_tool_calls, ranked_urls, relevant_urls. URLs may ONLY be supplied URLs. followup_tool_calls are {"tool":"...","query":"...","location":"..."} and use at most 2."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=json.dumps({"query":query,"location":location,"evidence":compact},ensure_ascii=False),max_output_tokens=550,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=550,text={"format":{"type":"json_object"}})
         parsed=_json_object(response.output_text)
         if not parsed:return _fallback_evaluation(evidence,"invalid evaluator response")
         parsed["followup_tool_calls"]=[c for c in (parsed.get("followup_tool_calls") or []) if isinstance(c,dict) and c.get("tool") in TOOLS][:2]
