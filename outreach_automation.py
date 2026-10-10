@@ -20,7 +20,7 @@ from src.reply_booking_handoff import process_reply_to_booking
 from src.google_calendar_provider import check_availability, create_event, get_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
-from src.automatic_reply_router import classify_reply, extract_explicit_booking
+from src.automatic_reply_router import classify_reply, extract_explicit_booking, current_reply_text
 from src.booking_safety import booking_key, google_event_id, attempt_gate
 from src.qualification import qualify_lead, QUALIFIED
 from src.operational_state import state_snapshot
@@ -543,7 +543,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     if not evidence:
         return {"ok":False,"stage":"no_reply_evidence"}
     item=evidence[-1]
-    text=_clean(item.get("text"),20000)
+    text=current_reply_text(_clean(item.get("text"),20000))
     classification=classify_reply(text)
     label=classification.get("classification")
     if label=="not_interested":
@@ -617,6 +617,13 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     stage=result.get("stage")
     if stage=="booked":
         lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        start=datetime.fromisoformat(booking["start"])
+        end=datetime.fromisoformat(booking["end"])
+        subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
+        confirmation=_safe_send(lead,kind="booking_confirmation",sequence=0,subject=subject,
+            body=f"Confirmed for {start.strftime('%A, %B %d, %Y at %I:%M %p')} to {end.strftime('%I:%M %p')} ({booking['timezone']}). A calendar invitation has been sent. Looking forward to speaking with you.")
+        result["confirmation"]=confirmation
+        if not confirmation.get("ok"):lead.last_error="BOOKED_CONFIRMATION_REQUIRES_REVIEW"
         try:stored=json.loads(lead.evidence_json or "[]")
         except Exception:stored=[]
         if not isinstance(stored,dict):stored={"evidence":stored}
