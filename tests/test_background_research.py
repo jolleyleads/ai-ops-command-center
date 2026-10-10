@@ -78,3 +78,42 @@ def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch):
     assert calls==["initial","Fresh official careers page"]
     assert result["research_rounds"]==1
     assert result["verified_count"]==1 and result["target_met"] is False
+
+
+def test_company_search_replaces_broad_job_feed_with_claim_searches():
+    q="Find businesses hiring automation engineers or with unanswered call reviews"
+    calls=search._company_discovery_calls(q,"Norfolk Virginia",[{"tool":"job_search","query":q}])
+    assert {c["tool"] for c in calls}=={"web_search","exa_search"}
+    assert "automation engineers" in calls[0]["query"]
+    assert "unanswered calls" in calls[1]["query"]
+
+
+def test_discovery_url_can_be_reused_as_company_verification():
+    rows=search._dedupe([dict(url="https://acme.example/jobs",title="Jobs"),dict(url="https://acme.example/jobs",candidate_name="Acme",verification_research=True,page_text="Acme hiring engineers")])
+    assert len(rows)==1 and rows[0]["verification_research"]
+    display=search._company_discovery_rows([dict(name="Acme",discovery_urls=[rows[0]["url"]])],rows)
+    assert display[0]["title"]=="Acme"
+
+
+def test_evaluator_sees_company_proof_after_large_job_feed(monkeypatch):
+    import research_agent as agent
+    from types import SimpleNamespace
+    captured=[]
+    def respond(**kw):
+        captured.append(json.loads(kw["input"].split("\n",1)[1]))
+        return SimpleNamespace(output_text='{"sufficient":false}')
+    monkeypatch.setenv("OPENAI_API_KEY","test")
+    monkeypatch.setattr(agent,"_client",lambda:SimpleNamespace(responses=SimpleNamespace(create=respond)))
+    feed=[dict(title=f"Unrelated role {i}",url=f"https://jobs.example/{i}",research_tool="job_search") for i in range(60)]
+    proof=dict(title="Acme",url="https://acme.example/jobs",verification_research=True,candidate_name="Acme",page_text="Acme hiring automation engineers")
+    agent.evaluate_research("companies hiring automation engineers","Norfolk",feed+[proof])
+    assert captured[0]["evidence"][0]["candidate_name"]=="Acme"
+
+
+def test_contacts_require_company_bound_source_and_remain_unconfirmed():
+    rows=[dict(title="Acme",candidate_name="Acme")]
+    evidence=[dict(candidate_name="Acme",title="Other firm",page_text="Other firm email other@example.com",url="https://other.example"),dict(candidate_name="Acme",title="Acme contact",page_text="Acme email info@acme.example",url="https://acme.example/contact")]
+    result=search._attach_source_contacts(rows,evidence)[0]
+    assert [c["email"] for c in result["contacts"]]==["info@acme.example"]
+    assert result["contacts"][0]["source_url"]=="https://acme.example/contact"
+    assert "unconfirmed" in result["contacts"][0]["status"]

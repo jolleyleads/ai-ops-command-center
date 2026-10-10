@@ -11,11 +11,15 @@ from universal_app import _search_public_records,_search_businesses,_normalize_j
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
 def _dedupe(items):
-    out=[];seen=set()
+    out=[];seen={}
     for x in items:
         if not isinstance(x,dict):continue
         k=_clean(x.get("url"),1600).lower()
-        if k and k not in seen:seen.add(k);out.append(x)
+        if not k:continue
+        if k not in seen:seen[k]=len(out);out.append(x)
+        elif x.get("verification_research") and not out[seen[k]].get("verification_research"):
+            # Re-fetching the discovery URL is useful proof, not a duplicate to discard.
+            out[seen[k]]={**out[seen[k]],**x}
     return out
 
 def _extract_web_rows(payload):
@@ -202,8 +206,7 @@ def _requested_role_terms(q):
 def _verification_queries(name,q,intents=None):
     """Build candidate-specific research queries from the user's claim, never from an industry whitelist."""
     intents=tuple(intents or _verification_intent(q))
-    claim=_clean(q,700)
-    queries=[f'"{name}" "{claim}"']
+    queries=[]
     if "hiring" in intents:
         role=" ".join(_requested_role_terms(q))
         queries.extend([
@@ -216,7 +219,50 @@ def _verification_queries(name,q,intents=None):
         queries.append(f'"{name}" (project OR projects OR contract OR awarded OR bid OR expansion OR opening)')
     if "response_complaints" in intents:
         queries.append(f'"{name}" reviews ("unanswered calls" OR "never called back" OR "missed calls" OR "slow response")')
+    if not queries:queries=[f'"{name}" {_clean(q,700)}']
+    queries.append(f'"{name}" official website contact email phone')
     return list(dict.fromkeys(queries))
+
+
+def _company_discovery_calls(q,loc,calls):
+    """Company requests must discover employers rather than generic remote-job feeds."""
+    if not _needs_candidate_verification(q):return calls
+    kept=[c for c in calls if c.get("tool")!="job_search"]
+    if len(kept)==len(calls):return calls
+    intents=_verification_intent(q);role=" ".join(_requested_role_terms(q))
+    focused=[]
+    if "hiring" in intents:
+        focused.append({"tool":"web_search","query":f'{loc} employers hiring {role} careers apply current openings',"location":loc})
+    if "response_complaints" in intents:
+        focused.append({"tool":"exa_search","query":f'{loc} business reviews "never called back" "unanswered calls" dates',"location":loc})
+    return (focused+kept)[:3]
+
+
+def _company_discovery_rows(candidates,discovery):
+    by_url={x.get("url"):x for x in discovery}
+    rows=[]
+    for cand in candidates:
+        source=next((by_url[u] for u in cand.get("discovery_urls",[]) if u in by_url),None)
+        if source:
+            rows.append({**source,"title":cand["name"],"candidate_name":cand["name"]})
+    return rows
+
+
+def _attach_source_contacts(rows,evidence):
+    """Expose observed contact details with their source; never guess email addresses."""
+    for row in rows:
+        name=row.get("candidate_name") or row.get("title")
+        terms=[t for t in re.findall(r"[a-z0-9]+",str(name).lower()) if t not in {"inc","llc","ltd","the","company"}]
+        contacts=[]
+        for item in evidence:
+            if _candidate_key(item.get("candidate_name"))!=_candidate_key(name):continue
+            text=" ".join(str(item.get(k) or "") for k in ("title","subtitle","page_text"))
+            if not terms or not all(re.search(rf"\b{re.escape(t)}\b",text,re.I) for t in terms):continue
+            for email in dict.fromkeys(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",text)):
+                contacts.append({"email":email,"source_url":item.get("url"),"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed"})
+        row["contacts"]=contacts
+        row["contact_status"]="source_observed" if contacts else "not_found"
+    return rows
 
 
 def _deterministic_need_verification(evidence,q,location=""):
@@ -312,7 +358,7 @@ def rank_research_results(rows,limit=10,query=""):
         x["evidence_age_days"]=round(age,1) if age is not None else None
         x["freshness_note"]="Publication date unconfirmed; fetched now does not mean published now." if age is None else "Dated source; current status may still change."
         sources=list(dict.fromkeys(x.get("supporting_urls") or ([x["url"]] if x.get("url") else [])))
-        score=(70 if verified else 20)+(15 if age is not None and 0<=age<=30 else 5 if age is not None and 0<=age<=180 else 0)+min(10,len(sources)*3)
+        score=(70 if verified else 0 if x.get("promotion_status")=="rejected" else 20)+(15 if age is not None and 0<=age<=30 else 5 if age is not None and 0<=age<=180 else 0)+min(10,len(sources)*3)
         x["prospect_score"]=score;x["ranking_basis"]="Claim support, publication recency, and distinct supporting sources."
         old=by_company.get(key)
         if not old or score>old["prospect_score"]:by_company[key]=x
@@ -407,6 +453,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             plan["planning_degraded"]=True
             plan["planning_recovered"]=False
             plan["fallback_route"]="grounded_web_discovery"
+        calls=_company_discovery_calls(q,loc,calls)
         live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used
         discovery=_dedupe(live+_memory(q,loc))
         if time.monotonic()<deadline-9:_inspect(discovery,6)
@@ -415,7 +462,8 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
         if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,10) if candidates else ([],[],[])
+        # Reserve time to evaluate company-specific proof after retrieval.
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-25 if runtime_budget>25 else deadline,min(6,target_count*2)) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
@@ -455,10 +503,11 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
+        discovery_visible=_company_discovery_rows(candidates,discovery) if _needs_candidate_verification(q) else discovery[:10]
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q)
+        visible=_attach_source_contacts(visible,evidence)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
