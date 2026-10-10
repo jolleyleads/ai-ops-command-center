@@ -58,6 +58,21 @@ def test_valid_child_domain_and_boundary_matching():
     assert not identity_proof("IGT",evidence("IGT","https://igtsolutions.com","IGT Solutions"))
 
 
+@pytest.mark.parametrize("url",["https://acme.vendor.example/contact","https://acme.vendor.com/contact","https://acme.vendor.co.uk/contact"])
+def test_matching_subdomain_cannot_establish_an_unrelated_company(url):
+    row=evidence("Acme",url,"Acme info@"+url.split("/")[2])
+    assert identity_proof("Acme",row) is None
+    assert search._attach_source_contacts([dict(title="Acme",candidate_name="Acme")],[row])[0]["contacts"]==[]
+
+
+def test_company_domain_is_resolved_with_multi_label_public_suffix():
+    row=evidence("Acme","https://careers.acme.co.uk/contact","Acme info@acme.co.uk")
+    assert identity_proof("Acme",row)["official_host"]=="acme.co.uk"
+    result=search._attach_source_contacts([dict(title="Acme",candidate_name="Acme")],[row])[0]
+    assert result["website"]=="https://acme.co.uk"
+    assert result["contacts"][0]["email"]=="info@acme.co.uk"
+
+
 def test_conflicting_domains_stay_unresolved_instead_of_choosing_first():
     rows=[dict(candidate_name="Acme",title="Acme")]
     sources=[evidence("Acme","https://acme.com","Acme info@acme.com"),evidence("Acme","https://acme.net","Acme info@acme.net")]
@@ -142,6 +157,16 @@ def test_probe_preserves_local_cloudflare_contact_and_ignores_script_addresses(m
     monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=raw))
     rows,_=bridge._public_contact_evidence(dict(company="Acme",website="https://acme.com",location="Norfolk VA"))
     assert rows[0]["validated_emails"]==[email]
+
+
+def test_probe_and_enrichment_examine_later_local_phone_numbers(monkeypatch):
+    text="Acme Las Vegas NV (702) 555-1212. "+("Details. "*60)+"Acme Norfolk VA 757-555-3434"
+    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=text))
+    lead=dict(company="Acme",website="https://acme.com",location="Norfolk VA")
+    rows,_=bridge._public_contact_evidence(lead)
+    assert rows[0]["validated_phones"]==["757-555-3434"]
+    payload=validated_payload(enrich_lead(lead,[evidence("Acme","https://acme.com/locations",text)]))
+    assert payload["phone"]=="(757) 555-3434"
 
 
 def test_probe_rejects_redirect_to_parent_domain_and_wrong_location(monkeypatch):

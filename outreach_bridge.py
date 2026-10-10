@@ -124,12 +124,11 @@ def _public_contact_evidence(result):
         proof=identity_proof(company,page,website or owning_root)
         if proof:identities[owning_root]=proof
         proof=proof or identities.get(owning_root)
-        emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[final])]
+        emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[owning_root])]
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
-        phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible)
-        if phone and not contact_context_matches(visible,phone.group(0),location):phone=None
-        if proof and (emails or phone):
-            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":visible[:120000],"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phone.group(0) if phone else "","identity_version":"company-domain-v1"})
+        phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if contact_context_matches(visible,m.group(0),location)))
+        if proof and (emails or phones):
+            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
             # Email is the outreach requirement; stop once exact same-domain proof exists.
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the

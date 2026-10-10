@@ -79,8 +79,9 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
                 if email and email_on_domain(email,website) and contact_context_matches(text,email,location):
                     out["fields"]["email"]={"value":email,"source_url":u,"validated":True};break
         if "phone" not in out["fields"]:
-            phone=_phone(text)
-            if phone and contact_context_matches(text,phone,location):out["fields"]["phone"]={"value":phone,"source_url":u,"validated":True}
+            for match in PHONE_RE.finditer(text):
+                if contact_context_matches(text,match.group(0),location):
+                    out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True};break
         if "decision_maker" not in out["fields"]:
             # Require a title plus a nearby human-looking two-word name in the same source.
             tm=TITLE_RE.search(text)

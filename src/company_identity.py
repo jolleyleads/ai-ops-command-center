@@ -10,6 +10,10 @@ import html
 import json
 import re
 from urllib.parse import urlparse
+import tldextract
+
+# Use the packaged Public Suffix List; production checks never fetch a list.
+_extract_domain=tldextract.TLDExtract(suffix_list_urls=(),cache_dir=None,include_psl_private_domains=True)
 
 SHARED_HOSTS = frozenset({
     "linkedin.com", "facebook.com", "google.com", "maps.google.com", "yelp.com",
@@ -46,6 +50,17 @@ def host(url):
 
 def shared_host(value):
     return not value or any(value == h or value.endswith("." + h) for h in SHARED_HOSTS)
+
+
+def registrable_host(value):
+    extracted=_extract_domain(value)
+    if extracted.suffix and extracted.domain:
+        return extracted.domain+"."+extracted.suffix
+    # Reserved names are used only by isolated regression fixtures.
+    labels=value.split(".")
+    if len(labels)>=2 and labels[-1] in {"example","test"}:
+        return ".".join(labels[-2:])
+    return ""
 
 
 def owned_host(source, website):
@@ -138,12 +153,14 @@ def identity_proof(company, row, website=""):
         return None
     # A complete brand on the hostname is useful primary-source identity evidence.
     # Do not treat a prefix such as IGT in igtsolutions as the same legal entity.
-    domain_brand = re.sub(r"[^a-z0-9]", "", source_host.split(".")[0])
+    company_root=registrable_host(source_host)
+    if not company_root:return None
+    domain_brand = re.sub(r"[^a-z0-9]", "", _extract_domain(company_root).domain if not company_root.endswith((".example",".test")) else company_root.split(".")[0])
     basis = ""
     if domain_brand == key:
         basis = "exact_brand_domain"
     for organization in row.get("source_organizations") or []:
-        if isinstance(organization, dict) and name_key(organization.get("name")) == key and owned_host(url, organization.get("url")):
+        if isinstance(organization, dict) and name_key(organization.get("name")) == key and owned_host(url, organization.get("url")) and (website or host(organization.get("url"))==company_root):
             basis = "organization_named_on_owned_page"
             break
     # A previously established website still needs the company's name in the
@@ -157,7 +174,7 @@ def identity_proof(company, row, website=""):
             basis = "named_page_on_explicit_website"
     if not basis:
         return None
-    return {"company_name": str(company), "official_host": source_host, "source_url": str(url), "basis": basis,
+    return {"company_name": str(company), "official_host": host(website) if website else company_root, "source_url": str(url), "basis": basis,
             "content_sha256": hashlib.sha256(content.encode()).hexdigest()}
 
 
