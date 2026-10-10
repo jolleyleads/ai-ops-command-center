@@ -62,7 +62,9 @@ def run_scheduled_outreach_cycle():
     if not inbound.get("ok"):
         app.logger.warning("OUTREACH_INBOUND_SCHEDULER_ERROR %s", inbound.get("processed"))
 
-    followups = process_durable_followups()
+    # Never deliver follow-ups while inbox reads are failing.
+    followups = outreach_automation.process_due_followups() if inbound.get("ok") else {"ok":False,"processed":[],"error":"INBOUND_SCAN_FAILED"}
+    legacy_followups = process_durable_followups() if inbound.get("ok") else {"ok":False,"processed":[]}
     app.logger.info(
         "OUTREACH_FOLLOWUP_SCHEDULER ok=%s tracked_threads=%s processed=%s",
         followups.get("ok"),
@@ -72,7 +74,7 @@ def run_scheduled_outreach_cycle():
     if not followups.get("ok"):
         app.logger.warning("OUTREACH_FOLLOWUP_SCHEDULER_ERROR %s", followups.get("error"))
 
-    return {"ok": bool(inbound.get("ok")) and bool(followups.get("ok")), "inbound": inbound, "followups": followups}
+    return {"ok": bool(inbound.get("ok")) and bool(followups.get("ok")) and bool(legacy_followups.get("ok")), "inbound": inbound, "followups": followups, "legacy_followups":legacy_followups}
 
 
 def _loop():

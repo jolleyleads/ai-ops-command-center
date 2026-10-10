@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from flask import jsonify, request
 from app import app, db
 from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _outreach_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
-from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
+from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, OperatorAuditEvent, _audit_actor, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
 
 AUTOSEND_ENABLED = os.getenv("OUTREACH_AUTOSEND_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
@@ -35,16 +35,8 @@ def _verified_public_email(result):
         return "", ""
     company_urls = [website]
 
-    direct_rows = [result]
-    direct_rows.extend(x for x in (result.get("evidence") or []) if isinstance(x, dict))
-    for row in direct_rows:
-        row_url = _clean(row.get("url") or row.get("source_url") or row.get("website") or row.get("verification_source_url"), 1800)
-        text = " ".join([_clean(row.get("email"), 500), _clean(row.get("subtitle"), 5000), _clean(row.get("snippet"), 5000), _clean(row.get("text"), 120000)])
-        for raw in EMAIL_SCAN_RE.findall(text):
-            email = _valid_email(raw)
-            if email and _same_company_domain(email, company_urls) and _purpose_mailbox_allowed(email):
-                return email, row_url or website
-
+    # Search snippets and old stored emails are discovery hints, not current
+    # contact proof. Always re-fetch the company pages before qualification.
     contact_result = _public_contact_evidence(result)
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
     for row in rows or []:
@@ -116,7 +108,7 @@ def orchestrate_discovery(payload):
 
 def scan_real_inbound_replies():
     now=datetime.utcnow()
-    leads=OutreachLead.query.filter(OutreachLead.gmail_thread_id.isnot(None),OutreachLead.gmail_thread_id!="",OutreachLead.replied_at.is_(None),OutreachLead.status.in_(["sent","followup_sent"])).order_by(OutreachLead.id.asc()).all()
+    leads=OutreachLead.query.filter(OutreachLead.gmail_thread_id.isnot(None),OutreachLead.gmail_thread_id!="",OutreachLead.status.in_(["sent","followup_sent","interested","question","responded","booking_ready"])).order_by(OutreachLead.id.asc()).all()
     processed=[]
     for lead in leads:
         reply=_gmail_thread_reply_state(lead.gmail_thread_id)
@@ -124,7 +116,22 @@ def scan_real_inbound_replies():
             processed.append({"lead_id":lead.id,"ok":False,"stage":"reply_check_failed","reason":reply.get("reason"),"error":reply.get("error")}); continue
         if not reply.get("replied"):
             processed.append({"lead_id":lead.id,"ok":True,"stage":"no_reply"}); continue
-        _persist_reply_evidence(lead,reply); routed=_route_persisted_reply(lead,reply,now); lead.updated_at=now; db.session.commit()
+        # Only the known prospect's messages can advance their workflow.
+        evidence=[x for x in reply.get("reply_evidence") or [] if str(x.get("from_email") or "").strip().lower()==lead.contact_email.strip().lower()]
+        evidence.sort(key=lambda x:int(x.get("internal_date") or 0))
+        if not evidence:
+            processed.append({"lead_id":lead.id,"ok":True,"stage":"no_prospect_reply"});continue
+        latest=evidence[-1];message_id=_clean(latest.get("message_id"),255)
+        handled=OperatorAuditEvent.query.filter_by(lead_id=lead.id,action="inbound_processed").all()
+        if message_id and any(json.loads(x.request_json).get("message_id")==message_id for x in handled):
+            processed.append({"lead_id":lead.id,"ok":True,"stage":"already_processed"});continue
+        if not message_id:
+            processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_message_id"});continue
+        reply=dict(reply,reply_evidence=evidence)
+        _persist_reply_evidence(lead,reply); routed=_route_persisted_reply(lead,reply,now); lead.updated_at=now
+        if routed.get("ok"):
+            _audit_actor(lead.id,"inbound_processed",{"message_id":message_id},{"stage":routed.get("stage")},"scheduler")
+        db.session.commit()
         processed.append({"lead_id":lead.id,"ok":routed.get("ok") is True,"stage":routed.get("stage"),"classification":(routed.get("classification") or {}).get("classification"),"thread_id":lead.gmail_thread_id})
     return {"ok":all(x.get("ok") for x in processed) if processed else True,"checked":len(leads),"processed":processed}
 

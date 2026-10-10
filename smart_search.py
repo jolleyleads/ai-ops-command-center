@@ -1,5 +1,6 @@
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 import os,re,time,requests
 from flask import jsonify,request
 from app import app
@@ -72,7 +73,7 @@ def _exa_search(query,location=""):
             url=_clean(item.get("url"),1600)
             if not url.startswith(("http://","https://")):continue
             highlights=item.get("highlights") or []
-            rows.append({"title":_clean(item.get("title"),500) or urlparse(url).netloc,"url":url,"subtitle":_clean(" ".join(highlights),3000),"page_text":_clean(item.get("text"),8000),"source":"Exa","research_tool":"exa_search"})
+            rows.append({"title":_clean(item.get("title"),500) or urlparse(url).netloc,"url":url,"subtitle":_clean(" ".join(highlights),3000),"page_text":_clean(item.get("text"),8000),"published_at":item.get("publishedDate"),"observed_at":datetime.now(timezone.utc).isoformat(),"freshness":"live_retrieval_publication_date_unconfirmed" if not item.get("publishedDate") else "dated_source","source":"Exa","research_tool":"exa_search"})
         return {"results":_dedupe(rows),"message":"","source":"Exa"}
     except requests.RequestException as exc:return {"results":[],"message":f"Exa Search failed: {type(exc).__name__}.","source":"Exa"}
 
@@ -105,10 +106,17 @@ def _run_tool(call):
 
 def _run_calls(calls,deadline,max_calls=3):
     results=[];messages=[];used=[]
-    for call in (calls or [])[:max_calls]:
-        if time.monotonic()>=deadline:break
-        rows,msg=_run_tool(call);results.extend(rows);used.append(_clean(call.get("tool"),50))
-        if msg:messages.append(msg)
+    selected=(calls or [])[:max_calls]
+    if not selected or time.monotonic()>=deadline:return results,messages,used
+    # Independent providers run together, leaving time for candidate verification.
+    with ThreadPoolExecutor(max_workers=min(3,len(selected))) as pool:
+        futures=[pool.submit(_run_tool,call) for call in selected]
+        for call,future in zip(selected,futures):
+            rows,msg=future.result();results.extend(rows);used.append(_clean(call.get("tool"),50))
+            for row in rows:
+                row.setdefault("observed_at",datetime.now(timezone.utc).isoformat())
+                row.setdefault("freshness","live_retrieval_publication_date_unconfirmed")
+            if msg:messages.append(msg)
     return _dedupe(results),messages,used
 
 def _page(url):
@@ -164,6 +172,8 @@ def _verification_intent(q):
     intents=[]
     if re.search(r"\b(?:hiring|hire|jobs?|careers?|open(?:ing)?s?|seeking|recruiting)\b",ql):
         intents.append("hiring")
+    if re.search(r"\b(?:unanswered|callbacks?|call\s*backs?|missed calls?|slow responses?|reviews?)\b",ql):
+        intents.append("response_complaints")
     if re.search(r"\b(?:permit|permits|inspection|inspections|license|licenses|licensed|licensing)\b",ql):
         intents.append("permit_license")
     if re.search(r"\b(?:project|projects|contract|contracts|bid|bids|awarded|expanding|expansion|opening|launching)\b",ql):
@@ -185,7 +195,8 @@ def _requested_role_terms(q):
     m=re.search(r"\b(?:actively\s+)?(?:hiring|hire|seeking|recruiting)\b(.*)",ql)
     if not m:return []
     stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","now","today"}
-    return [x for x in re.findall(r"[a-z0-9]+",m.group(1)) if len(x)>=4 and x not in stop][:8]
+    role=re.split(r"\b(?:in|near|around|with|that|or|include|rank)\b",m.group(1),maxsplit=1)[0]
+    return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=4 or x=="ai") and x not in stop][:8]
 
 
 def _verification_queries(name,q,intents=None):
@@ -203,6 +214,8 @@ def _verification_queries(name,q,intents=None):
         queries.append(f'"{name}" (permit OR permits OR inspection OR inspections OR license OR licensing OR licensed)')
     if "projects" in intents:
         queries.append(f'"{name}" (project OR projects OR contract OR awarded OR bid OR expansion OR opening)')
+    if "response_complaints" in intents:
+        queries.append(f'"{name}" reviews ("unanswered calls" OR "never called back" OR "missed calls" OR "slow response")')
     return list(dict.fromkeys(queries))
 
 
@@ -214,6 +227,7 @@ def _deterministic_need_verification(evidence,q):
         "hiring":r"\b(?:hiring|hire|seeking|recruiting|looking for|job opening|open position|careers?|apply)\b",
         "permit_license":r"\b(?:permit|permits|inspection|inspections|license|licenses|licensed|licensing)\b",
         "projects":r"\b(?:project|projects|contract|contracts|bid|bids|awarded|expanding|expansion|opening|launching)\b",
+        "response_complaints":r"\b(?:unanswered calls?|never called (?:me |us )?back|did(?:n't| not) (?:answer|call back)|missed calls?|slow responses?|no (?:response|callback))\b",
     }
     if intents==("claim",):
         return []
@@ -223,6 +237,10 @@ def _deterministic_need_verification(evidence,q):
         text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text")).lower()
         candidate=_clean(item.get("candidate_name"),300)
         if not item.get("verification_research") or not candidate or not url or url in seen:
+            continue
+        # A search query's candidate label does not establish source identity.
+        identity_terms=[t for t in re.findall(r"[a-z0-9]+",candidate.lower()) if t not in {"inc","llc","ltd","the","company"}]
+        if not identity_terms or not all(re.search(rf"\b{re.escape(t)}\b",text) for t in identity_terms):
             continue
         matched=[]
         for intent in intents:
@@ -238,6 +256,7 @@ def _deterministic_need_verification(evidence,q):
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
         x["verified_claim"]="Candidate-specific source evidence supports the requested claim."
         x["supporting_urls"]=[url];x["confidence"]="high"
+        x["verified_channels"]=matched
         x["evidence_basis"]="candidate-specific evidence matched requested claim channel: "+",".join(matched)
         out.append(x);seen.add(url)
     return out
@@ -252,7 +271,8 @@ def _verified_results(evidence,evaluation,q):
         if not item or url in seen or not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         entity=_clean(verdict.get("entity_name"),300);claim=_clean(verdict.get("claim"),1200)
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
-        if not entity or not claim or not supporting:continue
+        if not entity or not claim or not supporting or item.get("rag_retrieved"):continue
+        if _candidate_key(entity)!=_candidate_key(item.get("candidate_name")):continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
     annotate_evidence(out,q)
     return out
@@ -281,7 +301,11 @@ def _verification_gate(items,promoted,evaluation):
             for v in verified_sources:
                 supporting.extend(v.get("supporting_urls") or ([_clean(v.get("url"),1600)] if _clean(v.get("url"),1600) else []))
                 if _clean(v.get("verified_claim"),1200):claims.append(_clean(v.get("verified_claim"),1200))
-            x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed";x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate.";x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u));x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity";out.append(x);continue
+            x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed";x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate.";x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u));x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity"
+            x["verified_channels"]=list(dict.fromkeys(c for v in verified_sources for c in v.get("verified_channels",[])))
+            x["evidence"]=[{"url":v.get("url"),"title":v.get("candidate_name"),"snippet":v.get("subtitle"),"observed_at":v.get("observed_at"),"published_at":v.get("published_at"),"verified_claim":v.get("verified_claim")} for v in verified_sources]
+            x["current_status_guaranteed"]=False
+            out.append(x);continue
         if url in rejected_urls or (relevant_urls and url not in relevant_urls):
             x["classification"]="Rejected";x["promotion_status"]="rejected";x["verification_gate"]="failed";x["evidence_basis"]="rejected: evidence does not support the requested lead claim";out.append(x);continue
         x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires candidate-specific supporting source evidence";out.append(x)

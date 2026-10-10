@@ -119,7 +119,7 @@ def test_hvac_hiring_requires_candidate_specific_source_evidence():
     q="Find HVAC companies in Virginia Beach that are currently hiring technicians."
     discovery_only=[{"title":"Coastal HVAC","url":"https://places.example/coastal","subtitle":"HVAC services in Virginia Beach"}]
     assert smart_search._deterministic_need_verification(discovery_only,q)==[]
-    evidence=[{"candidate_name":"Coastal HVAC","verification_research":True,"url":"https://coastal.example/careers","title":"Careers","subtitle":"We are hiring HVAC technicians now.","page_text":""}]
+    evidence=[{"candidate_name":"Coastal HVAC","verification_research":True,"url":"https://coastal.example/careers","title":"Coastal HVAC Careers","subtitle":"We are hiring HVAC technicians now.","page_text":""}]
     promoted=smart_search._deterministic_need_verification(evidence,q)
     assert len(promoted)==1
     assert promoted[0]["supporting_urls"]==["https://coastal.example/careers"]
