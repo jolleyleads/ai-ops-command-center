@@ -17,6 +17,7 @@ import permit_leads  # noqa: F401
 import local_jobs  # noqa: F401
 import rag_research  # noqa: F401
 import smart_search  # noqa: F401
+import background_research  # noqa: F401
 import provider_circuit_breaker  # noqa: F401
 import outreach_automation  # noqa: F401
 import production_e2e  # noqa: F401

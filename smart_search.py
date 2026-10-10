@@ -219,7 +219,7 @@ def _verification_queries(name,q,intents=None):
     return list(dict.fromkeys(queries))
 
 
-def _deterministic_need_verification(evidence,q):
+def _deterministic_need_verification(evidence,q,location=""):
     """Fail closed: candidate-specific evidence must support the exact requested claim channel."""
     intents=_verification_intent(q)
     role_terms=_requested_role_terms(q) if "hiring" in intents else []
@@ -242,12 +242,16 @@ def _deterministic_need_verification(evidence,q):
         identity_terms=[t for t in re.findall(r"[a-z0-9]+",candidate.lower()) if t not in {"inc","llc","ltd","the","company"}]
         if not identity_terms or not all(re.search(rf"\b{re.escape(t)}\b",text) for t in identity_terms):
             continue
+        location_terms=re.findall(r"[a-z0-9]+",location.lower())
+        if location_terms and not all(re.search(rf"\b{re.escape(t)}\b",text) for t in location_terms):
+            continue
         matched=[]
         for intent in intents:
             pattern=channel_patterns.get(intent)
             if pattern and re.search(pattern,text,re.I|re.S):
+                if intent=="hiring" and re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text):continue
                 if intent=="hiring" and role_terms:
-                    if not all(re.search(rf"\b{re.escape(term)}(?:s|es)?\b",text,re.I) for term in role_terms):
+                    if not all(re.search(rf"\b{re.escape(term[:-1] if term.endswith('s') else term)}(?:s|es)?\b",text,re.I) for term in role_terms):
                         continue
                 matched.append(intent)
         if not matched:
@@ -279,6 +283,37 @@ def _verified_results(evidence,evaluation,q):
 
 def _candidate_key(name):
     return re.sub(r"[^a-z0-9]+","",_clean(name,300).lower())
+
+
+def rank_research_results(rows,limit=10,query=""):
+    """Rank distinct companies by supported claims and dated evidence."""
+    by_company={}
+    now=datetime.now(timezone.utc)
+    for raw in rows:
+        x=dict(raw);key=_candidate_key(x.get("candidate_name") or x.get("title"))
+        if not key:continue
+        publication=x.get("published_at")
+        age=None
+        try:
+            stamp=datetime.fromisoformat(str(publication).replace("Z","+00:00"))
+            if not stamp.tzinfo:stamp=stamp.replace(tzinfo=timezone.utc)
+            age=(now-stamp).total_seconds()/86400
+        except (ValueError,TypeError):pass
+        verified=x.get("promotion_status")=="verified"
+        text=" ".join(str(x.get(k) or "") for k in ("subtitle","verified_claim"))
+        missing_review_date=age is None and "response_complaints" in x.get("verified_channels",[]) and bool(re.search(r"\b(?:recent|current|latest)\b",query,re.I))
+        if missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
+            verified=False;x.update(classification="Candidate",promotion_status="candidate",verification_gate="pending",evidence_basis="Requested current status requires fresh supporting evidence.")
+        if verified:
+            x.update(classification="Verified Lead",verification_gate="passed")
+        x["evidence_age_days"]=round(age,1) if age is not None else None
+        x["freshness_note"]="Publication date unconfirmed; fetched now does not mean published now." if age is None else "Dated source; current status may still change."
+        sources=list(dict.fromkeys(x.get("supporting_urls") or ([x["url"]] if x.get("url") else [])))
+        score=(70 if verified else 20)+(15 if age is not None and 0<=age<=30 else 5 if age is not None and 0<=age<=180 else 0)+min(10,len(sources)*3)
+        x["prospect_score"]=score;x["ranking_basis"]="Claim support, publication recency, and distinct supporting sources."
+        old=by_company.get(key)
+        if not old or score>old["prospect_score"]:by_company[key]=x
+    return sorted(by_company.values(),key=lambda x:x["prospect_score"],reverse=True)[:limit]
 
 def _promoted_by_candidate(promoted):
     out={}
@@ -344,8 +379,8 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
-def _smart_search(q,loc,runtime_budget=25):
-    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),25));messages=[];tools=[]
+def _smart_search(q,loc,runtime_budget=25,target_count=10):
+    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),180));messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {}
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
@@ -372,11 +407,26 @@ def _smart_search(q,loc,runtime_budget=25):
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
         evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {}
-        follow=evaluation.get("followup_tool_calls") or []
-        if not evaluation.get("sufficient") and follow and time.monotonic()<deadline-7:
-            extra,msg2,used2=_run_calls(follow,deadline,1);messages+=msg2;tools+=used2;_inspect(extra,3)
-            evidence=_dedupe(evidence+extra)
-            evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-4 else evaluation
+        research_rounds=0;seen_calls=set()
+        while runtime_budget>25 and research_rounds<3 and time.monotonic()<deadline-35:
+            promoted_so_far=_deterministic_need_verification(evidence,q,loc)
+            if len({_candidate_key(x.get("candidate_name")) for x in promoted_so_far})>=target_count:break
+            follow=evaluation.get("followup_tool_calls") or []
+            if not follow:
+                follow=[{"tool":"exa_search","query":q+" current official company sources","location":loc}]
+            follow=[c for c in follow if isinstance(c,dict) and (c.get("tool"),c.get("query")) not in seen_calls]
+            if not follow:break
+            seen_calls.update((c.get("tool"),c.get("query")) for c in follow)
+            extra,msg2,used2=_run_calls(follow,deadline,2);messages+=msg2;tools+=used2
+            discovery=_dedupe(discovery+extra);_inspect(extra,4)
+            new_candidates=extract_candidates(q,loc,extra) or _fallback_candidates(extra,target_count)
+            known={_candidate_key(x.get("name")) for x in candidates}
+            new_candidates=[x for x in new_candidates if _candidate_key(x.get("name")) not in known]
+            candidates+=new_candidates
+            verified_extra,msg3,used3=_candidate_followups(q,loc,new_candidates,deadline,target_count)
+            messages+=msg3;tools+=used3;evidence=_dedupe(evidence+extra+verified_extra)
+            evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-15 else evaluation
+            research_rounds+=1
         if evaluation:
             evidence=_semantic_keep(evidence,evaluation)
         else:
@@ -387,20 +437,22 @@ def _smart_search(q,loc,runtime_budget=25):
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q) if evaluation else []
-        deterministic_promoted=_deterministic_need_verification(evidence,q)
+        deterministic_promoted=_deterministic_need_verification(evidence,q,loc)
         if deterministic_promoted:
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
         discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
         visible=_verification_gate(discovery_visible,promoted,evaluation)
+        if runtime_budget>25:
+            visible=rank_research_results(visible+promoted,target_count,q)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
         provider_message=" ".join(dict.fromkeys(messages))
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":(_deterministic_route_intent(q) if plan.get("planning_degraded") or _clean(plan.get("intent"),80) in {"","planning_unavailable","unavailable"} else plan.get("intent")),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
+        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":(_deterministic_route_intent(q) if plan.get("planning_degraded") or _clean(plan.get("intent"),80) in {"","planning_unavailable","unavailable"} else plan.get("intent")),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 

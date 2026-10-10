@@ -98,35 +98,35 @@ def extract_candidates(query,location,evidence):
     """Extract target entities from discovery evidence without inventing candidates."""
     if not evidence or not os.getenv("OPENAI_API_KEY"):return []
     compact=[]
-    for item in evidence[:12]:
+    for item in evidence[:40]:
         compact.append({"title":str(item.get("title") or "")[:260],"url":str(item.get("url") or "")[:700],"text":str(item.get("page_text") or item.get("subtitle") or "")[:1400],"source":str(item.get("source") or "")[:120],"tool":str(item.get("research_tool") or "")[:50]})
     instructions="""Extract candidate TARGET ENTITIES from supplied discovery evidence for the user's request. A target entity is the person, business, organization, property, job, permit recipient, licensee, filer, or other subject the user actually asked to find. Agencies, record portals, directories, publishers and search-result hosts are evidence sources, not targets unless the user explicitly asked for them.
 
 Do not invent or infer a candidate that is not named in supplied evidence. Do not claim the requested fact is verified yet. Return ONLY compact JSON:
 {"candidates":[{"name":"exact supported name","discovery_urls":["SUPPLIED_URL"],"reason":"what supplied evidence suggests, without overstating"}]}
-Use at most 5 candidates. Every discovery URL must be one of the supplied URLs."""
+Use at most 20 candidates. Every discovery URL must be one of the supplied URLs."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=650,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=1800,text={"format":{"type":"json_object"}})
         parsed=_json_object(response.output_text);allowed={x["url"] for x in compact if x.get("url")};out=[]
         for cand in parsed.get("candidates") or []:
             if not isinstance(cand,dict):continue
             name=str(cand.get("name") or "").strip()[:300]
             urls=[str(u).strip()[:700] for u in (cand.get("discovery_urls") or []) if str(u).strip() in allowed]
             if name and urls:out.append({"name":name,"discovery_urls":urls,"reason":str(cand.get("reason") or "").strip()[:700]})
-        return out[:5]
+        return out[:20]
     except Exception:return []
 
 def evaluate_research(query,location,evidence):
     if not evidence:return _fallback_evaluation([])
     if not os.getenv("OPENAI_API_KEY"):return _fallback_evaluation(evidence,"OPENAI_API_KEY unavailable")
     compact=[]
-    for item in evidence[:12]:compact.append({"title":str(item.get("title") or "")[:220],"url":str(item.get("url") or "")[:600],"text":str(item.get("page_text") or item.get("subtitle") or "")[:900],"source":str(item.get("source") or "")[:100],"tool":str(item.get("research_tool") or "")[:50],"type":str(item.get("type") or "")[:50],"phone":str(item.get("phone") or "")[:80],"website":str(item.get("website") or "")[:600],"memory":bool(item.get("rag_retrieved"))})
+    for item in evidence[:40]:compact.append({"title":str(item.get("title") or "")[:220],"url":str(item.get("url") or "")[:600],"text":str(item.get("page_text") or item.get("subtitle") or "")[:900],"source":str(item.get("source") or "")[:100],"tool":str(item.get("research_tool") or "")[:50],"type":str(item.get("type") or "")[:50],"phone":str(item.get("phone") or "")[:80],"website":str(item.get("website") or "")[:600],"candidate_name":item.get("candidate_name"),"verification_research":bool(item.get("verification_research")),"published_at":item.get("published_at"),"observed_at":item.get("observed_at"),"memory":bool(item.get("rag_retrieved"))})
     instructions="""Judge evidence for a general-purpose AI research engine. Keep only sources that semantically support the exact request. Reject stale/unrelated RAG memory. Also audit evidence coverage: if the request requires a specialized evidence type and current evidence does not contain it, mark insufficient and request the appropriate capability. Never invent evidence or URLs.
 
 Available follow-up capabilities: web_search, public_records, business_search, job_search.
-Return ONLY compact JSON with sufficient, answer_summary, gaps, followup_tool_calls, ranked_urls, relevant_urls. URLs may ONLY be supplied URLs. followup_tool_calls are {"tool":"...","query":"...","location":"..."} and use at most 2."""
+Return ONLY compact JSON with sufficient, answer_summary, gaps, followup_tool_calls, ranked_urls, relevant_urls, verified_results. verified_results are {"entity_name":"exact candidate name","url":"supplied candidate-specific source URL","claim":"supported requested claim","supporting_urls":["supplied URLs"],"confidence":"high|medium"}. Only verify a company when its identity, requested location and exact requested condition are supported by candidate-specific source text. Company reviews must identify the location and complaint; do not turn an undated complaint into a recent one. An old job posting is not proof that applications remain open. Separate publication dates from retrieval dates. For missing evidence, propose specific searches for employer careers/application pages, dated local reviews, or company contact pages. Do not count a generic directory or an unrelated company as a match. URLs may ONLY be supplied URLs. followup_tool_calls are {"tool":"...","query":"...","location":"..."} and use at most 2."""
     try:
-        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=550,text={"format":{"type":"json_object"}})
+        response=_client().responses.create(model=_model(),instructions=instructions,input=_json_input({"query":query,"location":location,"evidence":compact}),max_output_tokens=2400,text={"format":{"type":"json_object"}})
         parsed=_json_object(response.output_text)
         if not parsed:return _fallback_evaluation(evidence,"invalid evaluator response")
         parsed["followup_tool_calls"]=[c for c in (parsed.get("followup_tool_calls") or []) if isinstance(c,dict) and c.get("tool") in TOOLS][:2]

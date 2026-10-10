@@ -10,6 +10,6 @@ def test_chat_operator_route_serves_connected_ui():
     body = response.get_data(as_text=True)
     assert "AutoMake AI" in body
     assert "Ask.Automate.Execute" in body
-    assert "/api/smart-search" in body
+    assert "/api/research/jobs" in body
     assert "/api/outreach/leads" in body
     assert "verification and safe-send checks" in body
