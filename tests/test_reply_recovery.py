@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 import pytest
 import commercial_app
 import outreach_automation as oa
@@ -91,3 +92,26 @@ def test_scheduled_worker_recovers_research_without_customer_poll(env,monkeypatc
     assert result["research"]["processed"] == 1
     assert jobs.db.session.get(jobs.ResearchJob,"restart").status == "completed"
     assert monitor.health_snapshot()["workers"][2]["status"] == "healthy"
+
+
+def test_booking_metadata_preserves_qualification_evidence(env):
+    evidence=[{"url":"https://example.com/contact","email":"owner@example.com","text":"Example hiring"}]
+    lead=oa.OutreachLead(company="Example",contact_email="owner@example.com",source_url="https://example.com",evidence_json=json.dumps(evidence))
+    oa.db.session.add(lead);oa.db.session.commit()
+    validated,context,_=oa._server_qualification_inputs(lead)
+    original=oa._qualification_evidence_digest(lead,validated,context)
+    lead.evidence_json=json.dumps({"evidence":evidence,"booking":{"event_id":"confirmed"}})
+    validated,context,_=oa._server_qualification_inputs(lead)
+    assert oa._qualification_evidence_digest(lead,validated,context)==original
+
+
+def test_imported_booking_reply_is_not_routed_again(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company="Example",contact_email="owner@example.com",gmail_thread_id="thread",status="booked")
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa.db.session.add(oa.OutreachBookingAttempt(lead_id=lead.id,reply_message_id="old",idempotency_key="confirmed-key",event_id="event",start="start",end="end",timezone="America/New_York",attendee_email=lead.contact_email,status="confirmed"))
+    oa.db.session.commit()
+    monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda _:{"ok":True,"replied":True,"reply_evidence":[{"message_id":"old","from_email":lead.contact_email,"text":"Yes, book a meeting"}]})
+    monkeypatch.setattr(scanner,"_route_persisted_reply",lambda *a:pytest.fail("completed booking must not run again"))
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_booked"
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_processed"

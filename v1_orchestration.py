@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from flask import jsonify, request
 from app import app, db
 from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _outreach_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
-from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, OperatorAuditEvent, _audit_actor, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
+from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, OutreachBookingAttempt, OperatorAuditEvent, _audit_actor, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
 
 AUTOSEND_ENABLED = os.getenv("OUTREACH_AUTOSEND_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 EMAIL_SCAN_RE = re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
@@ -127,6 +127,15 @@ def scan_real_inbound_replies():
             processed.append({"lead_id":lead.id,"ok":True,"stage":"already_processed"});continue
         if not message_id:
             processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_message_id"});continue
+        # Older manually imported conversations have a confirmed booking receipt
+        # but predate the scanner's per-message marker. Preserve their completion.
+        confirmed=OutreachBookingAttempt.query.filter_by(lead_id=lead.id,reply_message_id=message_id,status="confirmed").first()
+        if confirmed:
+            lead.status="booked";lead.follow_up_due_at=None
+            if lead.last_error=="QUALIFICATION_REQUIRED_FOR_BOOKING":lead.last_error=""
+            _audit_actor(lead.id,"inbound_processed",{"message_id":message_id},{"stage":"already_booked","event_id":confirmed.event_id},"scheduler")
+            db.session.commit()
+            processed.append({"lead_id":lead.id,"ok":True,"stage":"already_booked"});continue
         reply=dict(reply,reply_evidence=evidence)
         _persist_reply_evidence(lead,reply); routed=_route_persisted_reply(lead,reply,now); lead.updated_at=now
         if routed.get("ok"):

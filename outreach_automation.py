@@ -362,6 +362,9 @@ def _server_qualification_inputs(lead: OutreachLead) -> tuple[Dict[str,Any],Dict
     # Only persisted server state is authoritative. Request booleans/context are ignored.
     try: raw=json.loads(lead.evidence_json or "[]")
     except Exception: raw=[]
+    # Booking receipts wrap the original evidence list. They are operational
+    # metadata, not new qualification evidence, and must not invalidate its hash.
+    if isinstance(raw,dict):raw=raw.get("evidence",[])
     evidence=[x for x in raw if isinstance(x,dict)]
     validated={
         "company_name":_clean(lead.company,300),
