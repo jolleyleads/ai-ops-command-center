@@ -27,7 +27,7 @@ def test_background_job_returns_immediately_and_persists_result(env,monkeypatch)
     result=client.get(url)
     assert result.json["status"]=="completed"
     assert result.json["result"]["target_met"] is False
-    assert calls==[{"runtime_budget":180,"target_count":17}]
+    assert calls==[{"runtime_budget":540,"target_count":17}]
     assert result.headers["Cache-Control"]=="no-store"
 
 
@@ -75,8 +75,9 @@ def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch):
     monkeypatch.setattr(search,"_candidate_followups",verify)
     monkeypatch.setattr(search,"evaluate_research",lambda *a:{"sufficient":False,"followup_tool_calls":[dict(tool="web_search",query="Fresh official careers page")]})
     result=search._smart_search("Find companies hiring engineers","",runtime_budget=180,target_count=2)
-    assert calls==["initial","Fresh official careers page"]
-    assert result["research_rounds"]==1
+    assert calls[:2]==["initial","Fresh official careers page"]
+    assert len(calls)==7 and len(set(calls))==7
+    assert result["research_rounds"]==6
     assert result["verified_count"]==1 and result["target_met"] is False
 
 
@@ -117,3 +118,38 @@ def test_contacts_require_company_bound_source_and_remain_unconfirmed():
     assert [c["email"] for c in result["contacts"]]==["info@acme.example"]
     assert result["contacts"][0]["source_url"]=="https://acme.example/contact"
     assert "unconfirmed" in result["contacts"][0]["status"]
+
+
+def test_provider_deadline_keeps_fast_evidence_without_waiting_for_stalled_call(monkeypatch):
+    import time
+    def run(call):
+        if call["tool"]=="exa_search":time.sleep(.2);return [],"timeout"
+        return [dict(url="https://acme.example",title="Acme")],""
+    monkeypatch.setattr(search,"_run_tool",run)
+    started=time.monotonic()
+    rows,messages,used=search._run_calls([dict(tool="exa_search"),dict(tool="web_search")],started+.05)
+    assert rows[0]["title"]=="Acme" and used==["web_search"]
+    assert time.monotonic()-started<.15
+    assert any("deadline" in m for m in messages)
+
+
+def test_candidate_timeout_falls_back_to_web_and_retains_contact_source(monkeypatch):
+    monkeypatch.setattr(search,"_exa_search",lambda *a:{"results":[],"message":"Exa Search failed: ReadTimeout."})
+    monkeypatch.setattr(search,"_web_search",lambda *a:{"results":[dict(title="Acme contact",url="https://acme.example/contact",page_text="Acme hiring engineers. Apply now. Email info@acme.example or call (757) 555-1234.")],"message":""})
+    rows,msg,used=search._candidate_followups("Find companies hiring engineers","",[dict(name="Acme",discovery_urls=[])],10**12,1)
+    assert "web_search" in used
+    contact=search._attach_source_contacts([dict(title="Acme",candidate_name="Acme")],rows)[0]
+    assert {c.get("email") or c.get("phone") for c in contact["contacts"]}=={"info@acme.example","(757) 555-1234"}
+
+
+def test_search_only_acceptance_creates_job_without_mailbox_access(env,monkeypatch):
+    import production_smoke as smoke
+    import operator_conversation_import as importer
+    monkeypatch.setenv("AUTOMAKE_SMOKE_RUN_ID","search-only-regression")
+    monkeypatch.setenv("AUTOMAKE_SMOKE_SEARCH_ONLY","1")
+    monkeypatch.setattr(importer,"import_and_process",lambda *a:pytest.fail("search-only test must not use email"))
+    state=smoke.run_configured_smoke()
+    assert state["prepared"] and state["test_lead_id"] is None
+    job=jobs.db.session.get(jobs.ResearchJob,state["research_job_id"])
+    job.status="completed";job.result_json=json.dumps({"results":[],"verified_count":0,"target_met":False});jobs.db.session.commit()
+    assert smoke.run_configured_smoke()["completed"]

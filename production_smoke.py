@@ -33,6 +33,11 @@ def run_configured_smoke():
     if row is None:
         row=ProductionSmokeRun(id=run_id)
         db.session.add(row);db.session.commit()
+    if not row.prepared and os.getenv("AUTOMAKE_SMOKE_SEARCH_ONLY")=="1":
+        # Search acceptance must not require sending another controlled email.
+        row.research_job_id="smoke-"+hashlib.sha256(run_id.encode()).hexdigest()[:32]
+        db.session.add(ResearchJob(id=row.research_job_id,prompt_text="Find 3 businesses in Hampton Roads Virginia hiring automation engineers or with dated reviews about unanswered calls. Include direct supporting sources and distinguish confirmed evidence from candidates.",location="Hampton Roads Virginia",target_count=3,status="queued"))
+        row.prepared=True;row.followup_result_json=json.dumps({"skipped":"search_only"});db.session.commit()
     if not row.prepared:
         from operator_conversation_import import import_and_process
         result=import_and_process({"recipient":"neyolabs@gmail.com","company":"AutoMake controlled follow-up test","thread_id":os.getenv("AUTOMAKE_SMOKE_THREAD_ID",""),"message_id":os.getenv("AUTOMAKE_SMOKE_MESSAGE_ID","")})
@@ -49,7 +54,7 @@ def run_configured_smoke():
         if not db.session.get(ResearchJob,row.research_job_id):
             db.session.add(ResearchJob(id=row.research_job_id,prompt_text="Find 3 businesses in Hampton Roads Virginia hiring automation engineers or with dated reviews about unanswered calls. Include direct supporting sources and distinguish confirmed evidence from candidates.",location="Hampton Roads Virginia",target_count=3,status="queued"))
         row.prepared=True;db.session.commit()
-    lead=db.session.get(oa.OutreachLead,row.test_lead_id)
+    lead=db.session.get(oa.OutreachLead,row.test_lead_id) if row.test_lead_id else None
     if not row.followup_result_json and lead.follow_up_due_at and lead.follow_up_due_at<=datetime.utcnow():
         result=oa.process_due_followups(controlled_test_lead_id=lead.id)
         row.followup_result_json=json.dumps(result)
@@ -60,7 +65,7 @@ def run_configured_smoke():
     job=db.session.get(ResearchJob,row.research_job_id)
     if job.status in {"completed","failed"}:
         data=json.loads(job.result_json or "{}")
-        summary={"status":job.status,"verified_count":data.get("verified_count"),"target_met":data.get("target_met"),"results":[{k:x.get(k) for k in ("title","url","promotion_status","verified_claim","published_at","freshness_note")} for x in data.get("results",[])],"error":job.error}
+        summary={"status":job.status,"verified_count":data.get("verified_count"),"target_met":data.get("target_met"),"results":[{k:x.get(k) for k in ("title","url","promotion_status","verified_claim","published_at","freshness_note","contacts","contact_status","supporting_urls")} for x in data.get("results",[])],"error":job.error}
         app.logger.warning("PRODUCTION_SMOKE_SEARCH %s",json.dumps(summary))
         if row.followup_result_json:
             row.completed=True;db.session.commit()
