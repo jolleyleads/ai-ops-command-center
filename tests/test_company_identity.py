@@ -1,0 +1,146 @@
+"""Regression coverage for the real IGT/company-contact collision."""
+import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+import outreach_bridge as bridge
+import smart_search as search
+import v1_orchestration as orchestration
+from src.company_identity import identity_proof, owned_host, email_on_domain, location_matches, page_metadata
+from src.enrichment import enrich_lead, validated_payload
+
+
+def evidence(name, url, text, **extra):
+    return dict(candidate_name=name, url=url, title=name, page_text=text,
+                observed_at=datetime.now(timezone.utc).isoformat(), **extra)
+
+
+def test_igt_collision_cannot_attach_other_companies_or_infer_acronym_owner():
+    rows=[dict(candidate_name="IGT",title="IGT",supporting_urls=["https://www.career.com/job/howmet/process-engineer-igt"])]
+    sources=[
+        evidence("IGT","https://www.career.com/job/howmet/process-engineer-igt","Howmet Aerospace Process Engineer IGT. TalentAcquisitionCoE_Howmet@howmet.com"),
+        evidence("IGT","https://promallu.com/igt-solutions","IGT Solutions Inc. +1 865-851-9514"),
+        evidence("IGT","https://www.igt.com/contact","IGT gaming support@igt.com (702) 669-7777"),
+    ]
+    result=search._attach_source_contacts(rows,sources,"Hampton Roads Virginia")[0]
+    assert result["contacts"]==[]
+    assert result["contact_status"]=="identity_unresolved"
+    assert "website" not in result
+
+
+def test_official_claim_can_resolve_an_acronym_without_guessing():
+    rows=[dict(candidate_name="IGT",title="IGT",supporting_urls=["https://igt.com/careers"])]
+    result=search._attach_source_contacts(rows,[evidence("IGT","https://igt.com/contact","IGT Hampton VA support@igt.com (757) 555-1234")],"Hampton VA")[0]
+    assert {c.get("email") or c.get("phone") for c in result["contacts"]}=={"support@igt.com","(757) 555-1234"}
+    assert result["website"]=="https://igt.com"
+
+
+def test_directory_mentions_and_generated_search_answer_are_not_contact_proof():
+    rows=[dict(candidate_name="Sunridge Management Group",title="Sunridge Management Group")]
+    sources=[evidence("Sunridge Management Group","https://contactout.com/person","Previously Sunridge Management Group, now Regeneron jhafar.ali@regeneron.com"),
+             dict(candidate_name="Sunridge Management Group",url="https://sunridgemanagementgroup.com/contact",subtitle="Sunridge Management Group email guessed@sunridgemanagementgroup.com")]
+    assert search._attach_source_contacts(rows,sources)[0]["contacts"]==[]
+
+
+@pytest.mark.parametrize("url",["https://example.com.evil.test/contact","https://evil-example.com/contact","https://com/contact","https://other.example.com/contact"])
+def test_parent_sibling_and_lookalike_hosts_are_not_owned(url):
+    assert not owned_host(url,"https://sales.example.com")
+    assert not email_on_domain("owner@"+url.split("/")[2],"https://sales.example.com")
+
+
+def test_valid_child_domain_and_boundary_matching():
+    assert owned_host("https://www.acme.com/contact","https://acme.com")
+    assert owned_host("https://support.acme.com/contact","https://acme.com")
+    assert email_on_domain("owner@acme.com","https://acme.com")
+    assert not owned_host("https://acme.com.evil.test/contact","https://acme.com")
+    assert not identity_proof("IGT",evidence("IGT","https://igtsolutions.com","IGT Solutions"))
+
+
+def test_conflicting_domains_stay_unresolved_instead_of_choosing_first():
+    rows=[dict(candidate_name="Acme",title="Acme")]
+    sources=[evidence("Acme","https://acme.com","Acme info@acme.com"),evidence("Acme","https://acme.net","Acme info@acme.net")]
+    result=search._attach_source_contacts(rows,sources)[0]
+    assert result["company_identity_status"]=="ambiguous" and result["contacts"]==[]
+
+
+def test_explicit_website_resolves_conflicting_sources_and_blocks_off_domain_email():
+    rows=[dict(candidate_name="Acme",title="Acme",website="https://acme.com")]
+    sources=[evidence("Acme","https://acme.com/contact","Acme Norfolk VA owner@acme.com vendor@other.com (757) 555-1212"),
+             evidence("Acme","https://acme.net/contact","Acme Norfolk VA info@acme.net")]
+    result=search._attach_source_contacts(rows,sources,"Norfolk Virginia")[0]
+    assert [c["email"] for c in result["contacts"] if c.get("email")]==["owner@acme.com"]
+    assert all(c["source_url"]=="https://acme.com/contact" for c in result["contacts"])
+
+
+def test_other_branch_contact_does_not_inherit_a_distant_matching_city():
+    text="Acme Norfolk VA owner@acme.com (757) 555-1212 "+("Service details. "*50)+"Acme Las Vegas NV vegas@acme.com (702) 555-1212"
+    rows=[dict(candidate_name="Acme",title="Acme",website="https://acme.com")]
+    result=search._attach_source_contacts(rows,[evidence("Acme","https://acme.com/locations",text)],"Norfolk VA")[0]
+    assert {c.get("email") or c.get("phone") for c in result["contacts"]}=={"owner@acme.com","(757) 555-1212"}
+
+
+def test_adjacent_branches_do_not_share_location_proof():
+    text="Acme Norfolk VA owner@acme.com (757) 555-1212. Acme Las Vegas NV vegas@acme.com (702) 555-1212"
+    rows=[dict(candidate_name="Acme",title="Acme",website="https://acme.com")]
+    result=search._attach_source_contacts(rows,[evidence("Acme","https://acme.com/locations",text)],"Norfolk VA")[0]
+    assert {c.get("email") or c.get("phone") for c in result["contacts"]}=={"owner@acme.com","(757) 555-1212"}
+
+
+def test_region_and_state_abbreviations_require_actual_location_evidence():
+    assert location_matches("Virginia Beach, VA","Hampton Roads Virginia")
+    assert location_matches("Norfolk, Virginia","Norfolk VA")
+    assert not location_matches("Norfolk Nebraska","Norfolk VA")
+    assert not location_matches("Las Vegas NV","Hampton Roads Virginia")
+
+
+def test_current_company_page_metadata_resolves_non_matching_brand_domain():
+    raw='<title>Contact</title><script type="application/ld+json">'+json.dumps({"@type":"Organization","name":"Hampton Roads Automation","url":"https://hrautomation.us"})+'</script><h1>Hampton Roads Automation</h1>'
+    row=evidence("Hampton Roads Automation","https://hrautomation.us/contact","Hampton Roads Automation Norfolk VA contact@hrautomation.us",**page_metadata(raw))
+    proof=identity_proof("Hampton Roads Automation",row)
+    assert proof["basis"]=="organization_named_on_owned_page"
+    assert len(proof["content_sha256"])==64
+    assert not identity_proof("IGT",row)
+
+
+def test_enrichment_cannot_validate_a_third_party_phone_or_website():
+    lead=dict(company_name="Acme",email="person@contactout.com",phone="757-555-1212")
+    source=evidence("Acme","https://contactout.com/person","Acme person@contactout.com (757) 555-1212")
+    assert validated_payload(enrich_lead(lead,[source]))=={}
+
+
+def test_probe_only_fetches_explicit_company_domain_not_job_board_roots(monkeypatch):
+    seen=[]
+    def get(url,**kw):
+        seen.append(url)
+        return SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text='<title>Acme</title>Acme Norfolk VA owner@acme.com vendor@other.com')
+    monkeypatch.setattr(bridge.requests,"get",get)
+    rows,meta=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA",supporting_urls=["https://career.com/job/acme","https://contactout.com/person"]))
+    assert all(owned_host(url,"https://acme.com") for url in seen)
+    assert rows[0]["validated_emails"]==["owner@acme.com"]
+    assert rows[0]["identity_version"]=="company-domain-v1"
+
+
+def test_probe_rejects_redirect_to_parent_domain_and_wrong_location(monkeypatch):
+    def get(url,**kw):
+        return SimpleNamespace(url="https://other.com/contact",ok=True,headers={"content-type":"text/html"},text="Acme Norfolk VA owner@other.com")
+    monkeypatch.setattr(bridge.requests,"get",get)
+    rows,_=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA"))
+    assert rows==[]
+    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text="Acme Las Vegas NV owner@acme.com"))
+    rows,_=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA"))
+    assert rows==[]
+
+
+def test_outreach_uses_only_approved_local_emails_from_fetched_page(monkeypatch):
+    row=dict(url="https://acme.com/contact",text="vegas@acme.com owner@acme.com",validated_emails=["owner@acme.com"],identity_version="company-domain-v1",company_identity={"company_name":"Acme"},contact_location="Norfolk VA")
+    monkeypatch.setattr(orchestration,"_public_contact_evidence",lambda r:([row],{}))
+    result=dict(company="Acme",website="https://acme.com")
+    assert orchestration._verified_public_email(result)==("owner@acme.com","https://acme.com/contact")
+    stored=orchestration._evidence_with_contact(result,"owner@acme.com","https://acme.com/contact")
+    assert stored[-1]["company_identity"]["company_name"]=="Acme"
+
+
+def test_outreach_rejects_off_domain_source_even_if_email_matches(monkeypatch):
+    monkeypatch.setattr(orchestration,"_public_contact_evidence",lambda r:([dict(url="https://thirdparty.example/contact",text="owner@acme.com")],{}))
+    assert orchestration._verified_public_email(dict(company="Acme",website="https://acme.com"))==("", "")

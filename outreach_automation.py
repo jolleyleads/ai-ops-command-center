@@ -25,6 +25,7 @@ from src.booking_safety import booking_key, google_event_id, attempt_gate
 from src.qualification import qualify_lead, QUALIFIED
 from src.operational_state import state_snapshot
 from src.side_effect_outbox import command_key, lease_token, provider_outcome
+from src.company_identity import name_key, owned_host, email_on_domain
 
 AUTO_SEND_MIN_SCORE = int(os.getenv("OUTREACH_AUTO_SEND_MIN_SCORE", "75"))
 REVIEW_MIN_SCORE = int(os.getenv("OUTREACH_REVIEW_MIN_SCORE", "60"))
@@ -379,6 +380,10 @@ def _server_qualification_inputs(lead: OutreachLead) -> tuple[Dict[str,Any],Dict
     for item in evidence:
         candidate=normalize_email(item.get("email") or item.get("contact_email"))
         url=_clean(item.get("url") or item.get("source_url"),1800)
+        if item.get("identity_version")=="company-domain-v1":
+            proof=item.get("company_identity") or {}
+            if not isinstance(proof,dict) or name_key(proof.get("company_name"))!=name_key(lead.company):continue
+            if not owned_host(url,proof.get("source_url")) or not re.fullmatch(r"[a-f0-9]{64}",str(proof.get("content_sha256") or "")):continue
         if email and candidate==email and url.startswith(("http://","https://")):
             contact_source=url;break
     validated["email_source_url"]=contact_source
@@ -478,14 +483,7 @@ def _recipient_mailbox_allowed(address: str) -> bool:
 def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
     """Fail closed unless recipient belongs to the prospect's persisted company source domain."""
     address=normalize_email(lead.contact_email)
-    try:
-        source_host=(urlparse(_clean(lead.source_url,1800)).hostname or "").lower().removeprefix("www.")
-    except Exception:
-        source_host=""
-    if not address or not source_host or "@" not in address:
-        return False
-    email_host=address.rsplit("@",1)[-1].lower().removeprefix("www.")
-    return email_host==source_host or email_host.endswith("."+source_host) or source_host.endswith("."+email_host)
+    return email_on_domain(address,_clean(lead.source_url,1800))
 
 
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
