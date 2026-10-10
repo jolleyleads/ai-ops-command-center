@@ -16,11 +16,14 @@ def import_and_process(data):
     message_id=oa._clean(data.get("message_id"),255)
     if recipient not in CONTROLLED_RECIPIENTS or not thread_id or not message_id:
         return {"ok":False,"error":"controlled_recipient_and_provider_ids_required"}
-    sender=oa.normalize_email(os.getenv("GMAIL_FROM_EMAIL"))
-    if not sender:return {"ok":False,"error":"sender_identity_required"}
     # Verify the original message with the app's own Google credentials.
     try:
-        r=requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",headers={"Authorization":f"Bearer {gmail_connect.gmail_access_token()}"},params={"format":"full"},timeout=20)
+        auth={"Authorization":f"Bearer {gmail_connect.gmail_access_token()}"}
+        profile=requests.get("https://gmail.googleapis.com/gmail/v1/users/me/profile",headers=auth,timeout=20)
+        if not profile.ok:return {"ok":False,"error":"sender_identity_required"}
+        sender=oa.normalize_email(profile.json().get("emailAddress"))
+        if not sender:return {"ok":False,"error":"sender_identity_required"}
+        r=requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",headers=auth,params={"format":"full"},timeout=20)
         if not r.ok:return {"ok":False,"error":"gmail_thread_read_failed"}
         messages=r.json().get("messages") or []
     except Exception:
@@ -44,7 +47,7 @@ def import_and_process(data):
         qualified=oa._store_qualification(lead,{})
         if not qualified.get("ok"):return {"ok":False,"stage":"qualification_blocked","qualification":qualified,"lead_id":lead.id}
         lead.status="sent";db.session.commit()
-    reply=oa._gmail_thread_reply_state(thread_id)
+    reply=oa.classify_inbound([oa.message_to_evidence(m) for m in messages],sender_email=sender)
     if not reply.get("ok"):return {"ok":False,"stage":"reply_check_failed","lead_id":lead.id}
     # Only the identified recipient's actual incoming messages may route booking.
     reply["reply_evidence"]=[x for x in reply.get("reply_evidence") or [] if oa.normalize_email(x.get("from_email"))==recipient]

@@ -39,7 +39,8 @@ def gmail_thread(sender="jolleyleads@gmail.com"):
 def setup_provider(monkeypatch,oa):
     import operator_conversation_import as imported
     monkeypatch.setattr(imported.gmail_connect,"gmail_access_token",lambda:"test-grant")
-    monkeypatch.setattr(imported.requests,"get",lambda *a,**k:Mock(ok=True,json=lambda:gmail_thread()))
+    monkeypatch.setattr(imported.requests,"get",lambda url,**k:Mock(ok=True,json=lambda:{"emailAddress":"jolleyleads@gmail.com"} if url.endswith("/profile") else gmail_thread()))
+    monkeypatch.setattr(oa,"classify_inbound",lambda *a,**k:oa._gmail_thread_reply_state("thread"))
     monkeypatch.setattr(oa,"_gmail_thread_reply_state",lambda _:{"ok":True,"replied":True,"reply_evidence":[{"message_id":"reply","thread_id":"thread","from_email":"neyolabs@gmail.com","text":"Yes I am. Are you free October 11th 2030 at 2 pm On Sat, Oct 10, 2030 Matthew wrote: Are you looking for an automation engineer?"}]})
     monkeypatch.setattr(oa,"check_availability",lambda req:dict(ok=True,available=True,checked_start=req["start"],checked_end=req["end"]))
     monkeypatch.setattr(oa,"create_event",lambda req,**kw:dict(ok=True,event_id=kw["idempotency_key"],start=req["start"],end=req["end"]))
@@ -65,7 +66,7 @@ def test_provider_reply_books_and_confirms_once(env,monkeypatch):
 def test_import_rejects_wrong_provider_sender_and_unapproved_recipient(env,monkeypatch):
     imported,sent=setup_provider(monkeypatch,env)
     data=dict(recipient="neyolabs@gmail.com",company="Neo Labs",thread_id="thread",message_id="original")
-    monkeypatch.setattr(imported.requests,"get",lambda *a,**k:Mock(ok=True,json=lambda:gmail_thread("other@example.com")))
+    monkeypatch.setattr(imported.requests,"get",lambda url,**k:Mock(ok=True,json=lambda:{"emailAddress":"jolleyleads@gmail.com"} if url.endswith("/profile") else gmail_thread("other@example.com")))
     assert imported.import_and_process(data)["error"]=="provider_envelope_mismatch"
     assert imported.import_and_process({**data,"recipient":"other@example.com"})["ok"] is False
     assert env.OutreachLead.query.count()==0 and sent==[]
