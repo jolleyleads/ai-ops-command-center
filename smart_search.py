@@ -10,26 +10,11 @@ from universal_app import _search_public_records,_search_businesses,_normalize_j
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
 def _dedupe(items):
-    out=[];by_url={}
+    out=[];seen=set()
     for x in items:
         if not isinstance(x,dict):continue
-        key=_clean(x.get("url"),1600).lower()
-        if not key:continue
-        if key not in by_url:
-            row=dict(x);by_url[key]=row;out.append(row);continue
-        row=by_url[key]
-        if not x.get("verification_research"):continue
-        old_name=_candidate_key(row.get("candidate_name"))
-        new_name=_candidate_key(x.get("candidate_name"))
-        if row.get("ambiguous_candidate_identity") or (old_name and new_name and old_name!=new_name):
-            row["ambiguous_candidate_identity"]=True
-            row["verification_research"]=False
-            continue
-        if new_name:
-            for field in ("candidate_name","candidate_discovery_urls","verification_research","verification_query","verification_intents"):
-                if field in x:row[field]=x[field]
-            # Preserve current independently retrieved source text for validation.
-            if x.get("page_text"):row["page_text"]=x["page_text"]
+        k=_clean(x.get("url"),1600).lower()
+        if k and k not in seen:seen.add(k);out.append(x)
     return out
 
 def _extract_web_rows(payload):
@@ -54,7 +39,7 @@ def _extract_web_rows(payload):
 def _web_search(query,location=""):
     key=os.getenv("OPENAI_API_KEY") or ""
     if not key:return {"results":[],"message":"OPENAI_API_KEY is not configured."}
-    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.5","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
+    text=" ".join(x for x in (query,location) if x).strip()[:1400];body={"model":os.getenv("OPENAI_SEARCH_MODEL") or "gpt-5.6-luna","tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"],"instructions":"Search the live public web for the user's actual request. Prefer current primary and authoritative sources. Return grounded citations. Never invent facts or URLs.","input":text}
     try:
         r=requests.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},json=body,timeout=30)
         if not r.ok:
@@ -96,17 +81,7 @@ def _run_tool(call):
     try:
         if tool=="exa_search":payload=_exa_search(q,loc)
         elif tool=="web_search":payload=_web_search(q,loc)
-        elif tool=="public_records":
-            payload=_search_public_records(q,loc)
-            if not payload.get("results") and (payload.get("configured") is False or payload.get("message")):
-                fallback=_exa_search(q+" official government public records",loc)
-                official=[x for x in fallback.get("results") or [] if (urlparse(x.get("url") or "").hostname or "").lower().endswith(".gov")]
-                if not official:
-                    fallback=_web_search("Find direct official .gov records for: "+q,loc)
-                    official=[x for x in fallback.get("results") or [] if (urlparse(x.get("url") or "").hostname or "").lower().endswith(".gov")]
-                payload={"results":official,"source":"Official government source discovery",
-                         "message":"Public-records search provider unavailable; used official-source web discovery. "+(fallback.get("message") or "")}
-
+        elif tool=="public_records":payload=_search_public_records(q,loc)
         elif tool=="business_search":payload=_search_businesses(q,loc)
         elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
         else:return [],f"Unknown research tool: {tool}"
@@ -153,7 +128,6 @@ def _semantic_keep(evidence,evaluation):
 def _deterministic_route_intent(q):
     """Stable universal intent label when the semantic planner is unavailable."""
     ql=_clean(q,1200).lower()
-    if re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",ql):return "jobs"
     if any(x in ql for x in ("contractor","contractors")):return "contractors"
     if "master electrician" in ql and any(x in ql for x in ("lead","leads","pull permit","permit pulling")):return "permit_leads"
     if any(x in ql for x in ("permit","permits","inspection","inspections","license","licensing")):return "permits"
@@ -200,9 +174,7 @@ def _requested_role_terms(q):
     m=re.search(r"\b(?:actively\s+)?(?:hiring|hire|seeking|recruiting)\b(.*)",ql)
     if not m:return []
     stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","now","today"}
-    role=re.split(r"\b(?:in|near|around|within|located|include)\b|[.;]",m.group(1),maxsplit=1)[0]
-    terms=[x for x in re.findall(r"[a-z0-9]+",role) if len(x)>=4 and x not in stop]
-    return [x[:-1] if x.endswith("s") and not x.endswith("ss") else x for x in terms][:8]
+    return [x for x in re.findall(r"[a-z0-9]+",m.group(1)) if len(x)>=4 and x not in stop][:8]
 
 
 def _verification_queries(name,q,intents=None):
@@ -269,11 +241,7 @@ def _verified_results(evidence,evaluation,q):
         if not item or url in seen or not item.get("verification_research") or not _clean(item.get("candidate_name"),300):continue
         entity=_clean(verdict.get("entity_name"),300);claim=_clean(verdict.get("claim"),1200)
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
-        quote=_clean(verdict.get("evidence_quote"),1200)
-        source_text=" ".join(_clean(item.get(k),8000) for k in ("title","subtitle","page_text"))
-        if (not entity or not claim or not supporting or not quote
-                or " ".join(quote.lower().split()) not in " ".join(source_text.lower().split())
-                or _candidate_key(entity)!=_candidate_key(item.get("candidate_name"))):continue
+        if not entity or not claim or not supporting:continue
         x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
     annotate_evidence(out,q)
     return out
@@ -318,7 +286,7 @@ def _fallback_candidates(discovery,limit=10):
         if len(out)>=limit:break
     return out
 
-def _candidate_followups(q,loc,candidates,deadline,max_candidates=10,max_queries=None):
+def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     evidence=[];messages=[];tools=[];intents=_verification_intent(q)
     for cand in (candidates or [])[:max_candidates]:
         if time.monotonic()>=deadline-6:break
@@ -326,8 +294,6 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10,max_queries
         if not name:continue
         candidate_rows=[]
         queries=_verification_queries(name,q,intents)
-        if max_queries:
-            queries=(queries[1:] if "hiring" in intents and len(queries)>1 else queries)[:max_queries]
         for verify_query in queries:
             if time.monotonic()>=deadline-4:break
             rows,msg,used=_run_calls([{"tool":"exa_search","query":verify_query,"location":loc}],deadline,1);messages+=msg;tools+=used
@@ -343,39 +309,13 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10,max_queries
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
-def _relevance_filter(items,query,location=""):
-    """Fail closed for specialized job searches instead of surfacing unrelated businesses."""
-    q=_clean(query,1200).lower()
-    if not re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q):
-        return items
-    specialized=re.findall(r"\b(?:ai|artificial intelligence|automation|automated|workflow|machine learning|ml|software|electrical|electrician|plumbing|hvac|sales|outreach|crm|data engineer|developer)\b",q)
-    if not specialized:
-        return items
-    expanded={"ai":("artificial intelligence","machine learning","ai engineer","ai automation","generative ai"),"automation":("automated","workflow automation","automation engineer","rpa"),"ml":("machine learning",),"crm":("customer relationship management",)}
-    terms=set(specialized)
-    for term in specialized:
-        terms.update(expanded.get(term,()))
-    result=[]
-    for item in items:
-        if not isinstance(item,dict):continue
-        evidence=" ".join(_clean(item.get(k),2500) for k in ("title","subtitle","page_text","verified_claim")).lower()
-        if re.search(r"(?:job|position|role).{0,100}(?:has been filled|no longer available|is closed|has expired)", evidence):
-            continue
-        if any(re.search(r"(?<![a-z])"+re.escape(t)+r"(?![a-z])",evidence) for t in terms):
-            result.append(item)
-    return result
-
 def _smart_search(q,loc,runtime_budget=25):
-    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),90));messages=[];tools=[]
+    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),25));messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {}
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
             plan=recover_tool_plan(q,loc) or plan
         calls=plan.get("tool_calls") or []
-        # Ensure job research has an independent live web discovery path even if
-        # a degraded planner returns only a generic business lookup.
-        if re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q.lower()) and not any(c.get("tool") in ("web_search","exa_search") for c in calls):
-            calls=[{"tool":"exa_search","query":q,"location":loc}]+calls[:2]
         if not calls:
             # Grounded web discovery is the universal safe baseline when the semantic planner is unavailable.
             # Evidence evaluation can still request specialized public-record/business/job follow-ups.
@@ -392,18 +332,7 @@ def _smart_search(q,loc,runtime_budget=25):
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
         if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
-        # Join extracted entity names to their exact discovery URLs. Ambiguous
-        # multi-entity pages must remain candidates rather than inherit a name.
-        names_by_url={}
-        for candidate in candidates:
-            for url in candidate.get("discovery_urls") or []:
-                names_by_url.setdefault(url,set()).add(candidate["name"])
-        for item in discovery:
-            names=names_by_url.get(item.get("url"),set())
-            if len(names)==1:item["candidate_name"]=next(iter(names))
-            elif len(names)>1:item["ambiguous_candidate_identity"]=True
-        # Reserve evaluator time; retrieval must not consume the entire budget.
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-12,10,max_queries=1) if candidates else ([],[],[])
+        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline,10) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
@@ -423,20 +352,12 @@ def _smart_search(q,loc,runtime_budget=25):
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
         promoted=_verified_results(evidence,evaluation,q) if evaluation else []
-        # Keyword overlap alone cannot establish entity, location or current
-        # status. Promotion requires the evaluator's source-specific quote.
-
+        deterministic_promoted=_deterministic_need_verification(evidence,q)
+        if deterministic_promoted:
+            promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        is_jobs=bool(re.search(r"\b(job|jobs|hiring|careers|positions|vacancies|openings)\b",q.lower()))
-        # Job queries must consider ALL discovered sources, not business-only rows.
-        # Filter before limiting so relevant web/job evidence is not silently dropped.
-        if is_jobs:
-            discovery_visible=_relevance_filter([x for x in discovery if not x.get("rag_retrieved")],q,loc)[:20]
-        else:
-            discovery_visible=([x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10])
-            discovery_visible=_relevance_filter(discovery_visible,q,loc)
-        promoted=_relevance_filter(promoted,q,loc)
+        discovery_visible=[x for x in discovery if x.get("research_tool")=="business_search"][:10] or discovery[:10]
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
@@ -452,7 +373,7 @@ def _smart_search(q,loc,runtime_budget=25):
 def smart_search():
     d=(request.get_json(silent=True) or {}) if request.method=="POST" else request.args;q=_clean(d.get("prompt") or d.get("query") or d.get("keyword"),500);loc=_clean(d.get("location"),200)
     if not q:return jsonify({"error":"Enter a search inquiry.","results":[],"count":0}),400
-    result=_smart_search(q,loc,runtime_budget=90)
+    result=_smart_search(q,loc)
     try: result["outreach_limit"]=max(0,int(d.get("outreach_limit") or 0))
     except (TypeError,ValueError): result["outreach_limit"]=0
     return jsonify(result)

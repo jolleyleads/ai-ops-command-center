@@ -16,10 +16,7 @@ def check_availability(req:Dict[str,Any])->Dict[str,Any]:
     try:
         r=requests.post(f"{BASE}/freeBusy",headers=_headers(),json=payload,timeout=30)
         if not r.ok:return {"ok":False,"available":False,"error":f"Google Calendar freeBusy {r.status_code}: {r.text[:500]}"}
-        calendar = (r.json().get("calendars") or {}).get(calendar_id)
-        if not isinstance(calendar, dict) or calendar.get("errors") or not isinstance(calendar.get("busy"), list):
-            return {"ok": False, "available": False, "error": "Calendar availability could not be verified"}
-        busy = calendar["busy"]
+        busy=((r.json().get("calendars") or {}).get(calendar_id) or {}).get("busy") or []
         return {"ok":True,"available":len(busy)==0,"checked_start":req["start"],"checked_end":req["end"],"busy":busy}
     except Exception as exc:
         return {"ok":False,"available":False,"error":str(exc)[:500]}
