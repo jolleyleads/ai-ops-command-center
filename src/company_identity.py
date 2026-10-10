@@ -74,9 +74,18 @@ def page_text(row):
     return str(row.get("page_text") or row.get("text") or "")
 
 
+def visible_page_text(raw):
+    """Keep explicit mailto/tel values beside their visible source context."""
+    raw=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",raw)
+    raw=re.sub(r'''(?is)<a\b[^>]*href=["'](?:mailto|tel):([^"']+)["'][^>]*>''',
+               lambda m:" "+html.unescape(m.group(1)).split("?",1)[0]+" ",raw)
+    return re.sub(r"\s+"," ",html.unescape(re.sub(r"(?s)<[^>]+>"," ",raw))).strip()
+
+
 def location_matches(text, location):
     def normalized(value):
         value = re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+        value=re.sub(r"\bwashington\s+(?:dc|district of columbia)\b","district of columbia",value)
         for state, code in sorted(STATES.items(), key=lambda p: -len(p[0])):
             value = re.sub(r"\b" + re.escape(state) + r"\b", code, value)
         return " " + value + " "
@@ -95,17 +104,20 @@ def page_metadata(raw):
     for script in re.findall(r'(?is)<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', raw):
         try:
             value = json.loads(html.unescape(script))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         stack = [value]
-        while stack:
+        visited=0
+        while stack and visited<1000:
+            visited+=1
             node = stack.pop()
             if isinstance(node, list):
                 stack.extend(node)
             elif isinstance(node, dict):
                 types = node.get("@type", [])
                 types = [types] if isinstance(types, str) else types
-                if any(t in {"Organization", "Corporation", "LocalBusiness", "ProfessionalService"} for t in types):
+                if not isinstance(types,list):types=[]
+                if any(isinstance(t,str) and t in {"Organization", "Corporation", "LocalBusiness", "ProfessionalService"} for t in types):
                     organizations.append({"name": node.get("name"), "url": node.get("url"), "address": node.get("address")})
                 stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
     title = re.search(r"(?is)<title\b[^>]*>(.*?)</title>", raw)

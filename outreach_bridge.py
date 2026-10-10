@@ -5,7 +5,7 @@ import time
 from urllib.parse import urljoin,urlparse
 import requests
 from datetime import datetime, timezone
-from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, contact_context_matches, shared_host
+from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, visible_page_text, contact_context_matches, shared_host
 from app import db
 from outreach_automation import OutreachLead, _draft_email
 from src.enrichment import enrich_lead, validated_payload
@@ -117,15 +117,16 @@ def _public_contact_evidence(result):
         if not owning_root:continue
         text=r.text[:500000]
         metadata=page_metadata(text)
-        visible=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",text)
-        visible=re.sub(r"\s+"," ",re.sub(r"(?s)<[^>]+>"," ",visible)).strip()
+        contact_html=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",text)
+        contact_html=re.sub(r'''(?is)<[^>]*\bdata-cfemail=["']([0-9a-f]{6,})["'][^>]*>''',lambda m:" "+_decode_cfemail(m.group(1))+" ",contact_html)
+        visible=visible_page_text(contact_html)
         page={**metadata,"url":final,"page_text":visible}
         proof=identity_proof(company,page,website or owning_root)
         if proof:identities[owning_root]=proof
         proof=proof or identities.get(owning_root)
-        emails=[e for e in _page_emails(text) if _same_company_domain(e,[final])]
+        emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[final])]
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
-        phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
+        phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible)
         if phone and not contact_context_matches(visible,phone.group(0),location):phone=None
         if proof and (emails or phone):
             rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":visible[:120000],"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phone.group(0) if phone else "","identity_version":"company-domain-v1"})

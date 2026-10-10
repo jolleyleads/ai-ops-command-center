@@ -7,7 +7,7 @@ from app import app
 from research_agent import plan_research,recover_tool_plan,evaluate_research,extract_candidates
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
-from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, contact_context_matches, shared_host
+from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -136,8 +136,7 @@ def _page_snapshot(url):
         r=requests.get(url,timeout=2,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/11.0"},allow_redirects=True)
         if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
         raw=r.text[:100000];metadata=page_metadata(raw)
-        raw=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",raw)
-        return {**metadata,"page_text":re.sub(r"\s+"," ",re.sub(r"(?s)<[^>]+>"," ",raw)).strip()[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True}
+        return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True}
     except Exception:return {}
 def _page(url):
     return _page_snapshot(url).get("page_text","")

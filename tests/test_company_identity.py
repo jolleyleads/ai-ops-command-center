@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+import commercial_app  # Register production routes before any test client request.
 import outreach_bridge as bridge
 import smart_search as search
 import v1_orchestration as orchestration
-from src.company_identity import identity_proof, owned_host, email_on_domain, location_matches, page_metadata
+from src.company_identity import identity_proof, owned_host, email_on_domain, location_matches, page_metadata, visible_page_text, contact_context_matches
 from src.enrichment import enrich_lead, validated_payload
 
 
@@ -92,6 +93,19 @@ def test_region_and_state_abbreviations_require_actual_location_evidence():
     assert location_matches("Norfolk, Virginia","Norfolk VA")
     assert not location_matches("Norfolk Nebraska","Norfolk VA")
     assert not location_matches("Las Vegas NV","Hampton Roads Virginia")
+    assert contact_context_matches("Washington, DC owner@acme.com","owner@acme.com","Washington DC")
+
+
+def test_mailto_contacts_keep_local_context_without_using_scripts_as_contact_proof():
+    text=visible_page_text('<script>wrong@other.com</script>Acme Norfolk VA <a href="mailto:owner@acme.com?subject=Hello">Email us</a>')
+    assert "wrong@other.com" not in text
+    assert contact_context_matches(text,"owner@acme.com","Norfolk Virginia")
+
+
+@pytest.mark.parametrize("types",[None,3,{"bad":"value"},[{}]])
+def test_malformed_source_metadata_does_not_crash_research(types):
+    raw='<script type="application/ld+json">'+json.dumps({"@type":types})+'</script>'
+    assert page_metadata(raw)["source_organizations"]==[]
 
 
 def test_current_company_page_metadata_resolves_non_matching_brand_domain():
@@ -119,6 +133,15 @@ def test_probe_only_fetches_explicit_company_domain_not_job_board_roots(monkeypa
     assert all(owned_host(url,"https://acme.com") for url in seen)
     assert rows[0]["validated_emails"]==["owner@acme.com"]
     assert rows[0]["identity_version"]=="company-domain-v1"
+
+
+def test_probe_preserves_local_cloudflare_contact_and_ignores_script_addresses(monkeypatch):
+    email="owner@acme.com";key=0x42
+    encoded=bytes([key]+[ord(c)^key for c in email]).hex()
+    raw=f'<title>Acme</title><script>fake@acme.com</script>Acme Norfolk VA <span data-cfemail="{encoded}">protected</span>'
+    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=raw))
+    rows,_=bridge._public_contact_evidence(dict(company="Acme",website="https://acme.com",location="Norfolk VA"))
+    assert rows[0]["validated_emails"]==[email]
 
 
 def test_probe_rejects_redirect_to_parent_domain_and_wrong_location(monkeypatch):
