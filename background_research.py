@@ -41,7 +41,8 @@ def process_next_research_job():
     db.session.commit()
     if not claimed:return {"ok":True,"processed":0}
     try:
-        result=_smart_search(job.prompt_text,job.location,runtime_budget=180,target_count=job.target_count)
+        budget=max(240,min(540,180+job.target_count*24))
+        result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
         job.result_json=json.dumps(result)
         job.status="failed" if result.get("agent_error") else "completed"
         job.error="Research could not finish. Please try again." if job.status=="failed" else ""

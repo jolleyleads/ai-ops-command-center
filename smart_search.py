@@ -1,5 +1,5 @@
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 import os,re,time,requests
 from flask import jsonify,request
@@ -113,14 +113,19 @@ def _run_calls(calls,deadline,max_calls=3):
     selected=(calls or [])[:max_calls]
     if not selected or time.monotonic()>=deadline:return results,messages,used
     # Independent providers run together, leaving time for candidate verification.
-    with ThreadPoolExecutor(max_workers=min(3,len(selected))) as pool:
-        futures=[pool.submit(_run_tool,call) for call in selected]
-        for call,future in zip(selected,futures):
+    pool=ThreadPoolExecutor(max_workers=min(3,len(selected)))
+    futures={pool.submit(_run_tool,call):call for call in selected}
+    try:
+        for future in as_completed(futures,timeout=max(0.01,deadline-time.monotonic())):
+            call=futures[future]
             rows,msg=future.result();results.extend(rows);used.append(_clean(call.get("tool"),50))
             for row in rows:
                 row.setdefault("observed_at",datetime.now(timezone.utc).isoformat())
                 row.setdefault("freshness","live_retrieval_publication_date_unconfirmed")
             if msg:messages.append(msg)
+    except FutureTimeout:
+        messages.append("Research deadline reached; unfinished provider calls were skipped.")
+    finally:pool.shutdown(wait=False,cancel_futures=True)
     return _dedupe(results),messages,used
 
 def _page(url):
@@ -248,6 +253,17 @@ def _company_discovery_rows(candidates,discovery):
     return rows
 
 
+def _additional_discovery(q,loc,round_number):
+    intents=_verification_intent(q)
+    if "response_complaints" in intents and ("hiring" not in intents or round_number%2):
+        topic='business reviews "never called back" OR "unanswered calls" dated local branch'
+    elif "hiring" in intents:
+        topic='employers "'+" ".join(_requested_role_terms(q))+'" hiring careers application current openings'
+    else:topic=q
+    detail=("official company sources","recent postings and contact pages","additional employers and direct sources","company application and service pages","current company locations and contact details","dated evidence and primary sources")[round_number%6]
+    return {"tool":"web_search" if round_number%2 else "exa_search","query":f"{loc} {topic} {detail}","location":loc}
+
+
 def _attach_source_contacts(rows,evidence):
     """Expose observed contact details with their source; never guess email addresses."""
     for row in rows:
@@ -260,7 +276,9 @@ def _attach_source_contacts(rows,evidence):
             if not terms or not all(re.search(rf"\b{re.escape(t)}\b",text,re.I) for t in terms):continue
             for email in dict.fromkeys(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",text)):
                 contacts.append({"email":email,"source_url":item.get("url"),"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed"})
-        row["contacts"]=contacts
+            for phone in dict.fromkeys(re.findall(r"(?<!\d)(?:\+1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)",text)):
+                contacts.append({"phone":phone,"source_url":item.get("url"),"observed_at":item.get("observed_at"),"status":"source_observed_reachability_unconfirmed"})
+        row["contacts"]=list({(c.get("email") or c.get("phone"),c["source_url"]):c for c in contacts}.values())
         row["contact_status"]="source_observed" if contacts else "not_found"
     return rows
 
@@ -426,12 +444,16 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         for verify_query in queries:
             if time.monotonic()>=deadline-4:break
             rows,msg,used=_run_calls([{"tool":"exa_search","query":verify_query,"location":loc}],deadline,1);messages+=msg;tools+=used
+            if not rows and time.monotonic()<deadline-20:
+                fallback,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc}],deadline,1)
+                rows.extend(fallback);messages+=msg2;tools+=used2
             for x in rows:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows)
-        if not candidate_rows and time.monotonic()<deadline-4:
+        # Irrelevant Exa hits are not success. Try the other provider for missing proof.
+        if not _deterministic_need_verification(candidate_rows,q,loc) and time.monotonic()<deadline-20:
             verify_query=queries[0]
-            rows2,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc},{"tool":"public_records","query":verify_query,"location":loc}],deadline,2);messages+=msg2;tools+=used2
+            rows2,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc}],deadline,1);messages+=msg2;tools+=used2
             for x in rows2:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows2)
@@ -439,7 +461,7 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     return _dedupe(evidence),messages,tools
 
 def _smart_search(q,loc,runtime_budget=25,target_count=10):
-    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),180));messages=[];tools=[]
+    started=time.monotonic();deadline=started+max(8,min(int(runtime_budget or 25),540));messages=[];tools=[]
     try:
         plan=plan_research(q,loc,[]) or {}
         if plan.get("planning_degraded") or not plan.get("tool_calls"):
@@ -469,14 +491,17 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         if time.monotonic()<deadline-5:_inspect(evidence,8)
         evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {}
         research_rounds=0;seen_calls=set()
-        while runtime_budget>25 and research_rounds<3 and time.monotonic()<deadline-35:
+        while runtime_budget>25 and research_rounds<6 and time.monotonic()<deadline-35:
             promoted_so_far=_deterministic_need_verification(evidence,q,loc)
             if len({_candidate_key(x.get("candidate_name")) for x in promoted_so_far})>=target_count:break
             follow=evaluation.get("followup_tool_calls") or []
             if not follow:
                 follow=[{"tool":"exa_search","query":q+" current official company sources","location":loc}]
             follow=[c for c in follow if isinstance(c,dict) and (c.get("tool"),c.get("query")) not in seen_calls]
-            if not follow:break
+            if not follow:
+                # Repeated model suggestions must not terminate a short search early.
+                follow=[_additional_discovery(q,loc,research_rounds)]
+            follow=_company_discovery_calls(q,loc,follow)
             seen_calls.update((c.get("tool"),c.get("query")) for c in follow)
             extra,msg2,used2=_run_calls(follow,deadline,2);messages+=msg2;tools+=used2
             discovery=_dedupe(discovery+extra);_inspect(extra,4)
@@ -488,6 +513,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             messages+=msg3;tools+=used3;evidence=_dedupe(evidence+extra+verified_extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-15 else evaluation
             research_rounds+=1
+        contact_evidence=list(evidence)
         if evaluation:
             evidence=_semantic_keep(evidence,evaluation)
         else:
@@ -507,7 +533,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q)
-        visible=_attach_source_contacts(visible,evidence)
+        visible=_attach_source_contacts(visible,contact_evidence)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
