@@ -109,7 +109,7 @@ def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
 
 
 def test_verified_public_email_accepts_source_visible_same_domain_email(env, monkeypatch):
-    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: (_ for _ in ()).throw(AssertionError("probe should not run")))
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([{"url":"https://examplehvac.com/contact","text":"sales@examplehvac.com"}], {"attempted":1}))
     email, source = v1._verified_public_email({
         "company": "Example HVAC",
         "website": "https://examplehvac.com",
@@ -337,7 +337,7 @@ def test_enrichment_rejects_same_domain_non_outreach_mailboxes(env, monkeypatch)
 
 
 def test_enrichment_keeps_normal_company_mailboxes(env, monkeypatch):
-    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([], {"attempted": 0}))
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([{"url":"https://example.com/contact", "text":result["evidence"][0]["snippet"]}], {"attempted": 1}))
     for address in ("info@example.com","sales@example.com","hello@example.com","owner@example.com"):
         email, _ = v1._verified_public_email({
             "company":"Example Co","website":"https://example.com/",

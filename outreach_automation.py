@@ -1147,6 +1147,13 @@ def process_followups():
     if not cron_token or not supplied or not hmac.compare_digest(cron_token,supplied):
         return jsonify({"ok":False,"error":"unauthorized"}),401
 
+    result = process_due_followups()
+    return jsonify(result), 200 if result.get("ok") else 502
+
+
+def process_due_followups():
+    """Shared durable processor for the HTTP worker and scheduled inbound cycle."""
+
     now = datetime.utcnow()
     window_key=now.strftime("%Y%m%d%H")
     run=FollowupSchedulerRun(window_key=window_key,status="running",started_at=now)
@@ -1155,7 +1162,7 @@ def process_followups():
     except IntegrityError:
         db.session.rollback()
         existing=FollowupSchedulerRun.query.filter_by(window_key=window_key).first()
-        return jsonify({"ok":True,"duplicate_run_suppressed":True,"window_key":window_key,"status":existing.status if existing else "unknown","processed_count":0,"processed":[]})
+        return {"ok":bool(existing and existing.status=="succeeded"),"duplicate_run_suppressed":True,"window_key":window_key,"status":existing.status if existing else "unknown","processed_count":0,"processed":[]}
     leads = OutreachLead.query.filter(
         OutreachLead.status.in_(["sent", "followup_sent"]),
         OutreachLead.follow_up_due_at.isnot(None),
@@ -1231,9 +1238,10 @@ def process_followups():
         lead.status="followup_sent";lead.last_error="";lead.updated_at=now
         processed.append({"id":lead.id,"status":"followup_sent","follow_up_count":next_number})
 
-    run.status="succeeded";run.processed_json=_canonical_json(processed);run.completed_at=datetime.utcnow()
+    ok=not any(x.get("status")=="error" for x in processed)
+    run.status="succeeded" if ok else "failed";run.processed_json=_canonical_json(processed);run.completed_at=datetime.utcnow()
     db.session.commit()
-    return jsonify({"ok":True,"duplicate_run_suppressed":False,"window_key":window_key,"processed_count":len(processed),"processed":processed})
+    return {"ok":ok,"duplicate_run_suppressed":False,"window_key":window_key,"processed_count":len(processed),"processed":processed}
 
 
 @app.route("/api/outreach/leads/<int:lead_id>/process-reply-booking", methods=["POST"])
