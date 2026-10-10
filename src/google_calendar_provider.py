@@ -1,6 +1,8 @@
 """Google Calendar provider for deterministic booking execution."""
 from __future__ import annotations
 import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict
 import requests
 def gmail_access_token():
@@ -59,6 +61,43 @@ def get_event(event_id:str)->Dict[str,Any]:
         if r.status_code==404:return {"ok":False,"found":False,"event_id":str(event_id)}
         if not r.ok:return {"ok":False,"found":False,"error":f"Google Calendar get {r.status_code}: {r.text[:500]}"}
         data=r.json()
-        return {"ok":True,"found":True,"event_id":data.get("id") or "","event_url":data.get("htmlLink") or "","start":((data.get("start") or {}).get("dateTime") or ""),"end":((data.get("end") or {}).get("dateTime") or "")}
+        return {"ok":True,"found":True,"event_id":data.get("id") or "","event_url":data.get("htmlLink") or "","start":((data.get("start") or {}).get("dateTime") or ""),"end":((data.get("end") or {}).get("dateTime") or ""),"etag":data.get("etag"),"status":data.get("status"),"attendees":data.get("attendees") or []}
     except Exception as exc:
         return {"ok":False,"found":False,"error":str(exc)[:500]}
+
+
+def reschedule_event(event_id, req):
+    """Update the known appointment conditionally; never insert another event."""
+    try:
+        start=datetime.fromisoformat(req["start"].replace("Z","+00:00"))
+        end=datetime.fromisoformat(req["end"].replace("Z","+00:00"))
+        ZoneInfo(req["timezone"])
+        if start.tzinfo is None or end.tzinfo is None or end<=start or start<=datetime.now(timezone.utc):
+            raise ValueError("invalid window")
+    except (ValueError,KeyError,TypeError):
+        return {"ok":False,"error":"INVALID_RESCHEDULE_WINDOW","definitely_not_executed":True}
+    existing=get_event(event_id)
+    if not existing.get("ok") or existing.get("status")=="cancelled" or not existing.get("etag"):
+        return {"ok":False,"error":"EXISTING_EVENT_UNVERIFIED","definitely_not_executed":True}
+    attendees={str(x.get("email") or "").lower() for x in existing.get("attendees",[])}
+    if str(req.get("attendee_email") or "").lower() not in attendees:
+        return {"ok":False,"error":"EVENT_ATTENDEE_MISMATCH","definitely_not_executed":True}
+    # Repeating an already completed update is a read-only reconciliation.
+    if existing.get("start")==req["start"] and existing.get("end")==req["end"]:
+        return existing
+    availability=check_availability(req)
+    if not availability.get("ok") or not availability.get("available"):
+        return {"ok":False,"error":"RESCHEDULE_TIME_UNAVAILABLE","definitely_not_executed":True}
+    calendar_id=os.environ.get("GOOGLE_CALENDAR_ID","primary").strip() or "primary"
+    headers=_headers();headers["If-Match"]=existing["etag"]
+    body={"start":{"dateTime":req["start"],"timeZone":req["timezone"]},"end":{"dateTime":req["end"],"timeZone":req["timezone"]}}
+    try:
+        response=requests.patch(f"{BASE}/calendars/{requests.utils.quote(calendar_id,safe='')}/events/{requests.utils.quote(event_id,safe='')}",headers=headers,json=body,params={"sendUpdates":"all"},timeout=30)
+        if not response.ok:
+            return {"ok":False,"error":f"RESCHEDULE_HTTP_{response.status_code}","definitely_not_executed":response.status_code in (400,401,403,404,409,412)}
+        proof=get_event(event_id)
+        if proof.get("ok") and proof.get("start")==req["start"] and proof.get("end")==req["end"]:
+            return proof
+        return {"ok":False,"error":"RESCHEDULE_READBACK_UNCONFIRMED"}
+    except Exception:
+        return {"ok":False,"error":"RESCHEDULE_OUTCOME_UNCERTAIN"}

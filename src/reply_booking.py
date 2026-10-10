@@ -6,6 +6,7 @@ against reply text and decides whether booking is allowed.
 from __future__ import annotations
 import re
 from typing import Any, Dict
+from src.grounded_reply import scheduling_request
 
 OPT_OUT=re.compile(r"(?i)\b(unsubscribe|opt[ -]?out|remove me|do not contact|don't contact|stop emailing|stop contacting|take me off)\b")
 NEGATIVE=re.compile(r"(?i)\b(not interested|no thanks|no thank you|not now|don't need|do not need|we're good|we are good)\b")
@@ -23,6 +24,7 @@ def deterministic_signals(reply_text:Any)->Dict[str,bool]:
         "opt_out":bool(OPT_OUT.search(text)),
         "negative":bool(NEGATIVE.search(text)),
         "question":bool(QUESTION.search(text)),
+        "scheduling":scheduling_request(text),
         "interest":bool(INTEREST.search(text)),
         "time_signal":bool(TIME_SIGNAL.search(text)),
     }
@@ -39,6 +41,8 @@ def validate_reply_classification(reply_text:Any, proposed:Dict[str,Any])->Dict[
         final="not_interested"
     elif signals["negative"]:
         final="not_interested"
+    elif signals["scheduling"]:
+        final="interested"
     elif signals["question"]:
         final="question"
     elif signals["interest"]:
