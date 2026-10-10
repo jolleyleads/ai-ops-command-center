@@ -1211,11 +1211,18 @@ def process_followups():
     return jsonify(result), 200 if result.get("ok") else 502
 
 
-def process_due_followups():
+def process_due_followups(*, controlled_test_lead_id=None):
     """Shared durable processor for the HTTP worker and scheduled inbound cycle."""
 
     now = datetime.utcnow()
     window_key=now.strftime("%Y%m%d%H")
+    if controlled_test_lead_id is not None:
+        test_lead=db.session.get(OutreachLead,controlled_test_lead_id)
+        if not test_lead or test_lead.verification!="controlled_followup_test" or normalize_email(test_lead.contact_email)!="neyolabs@gmail.com":
+            return {"ok":False,"error":"CONTROLLED_TEST_LEAD_REQUIRED","processed":[]}
+        # Isolate the acceptance run's scheduler claim; qualification, reply
+        # checks, due time, suppression and send idempotency still apply.
+        window_key="T"+str(controlled_test_lead_id)+":"+now.strftime("%Y%m%d")
     run=FollowupSchedulerRun(window_key=window_key,status="running",started_at=now)
     db.session.add(run)
     try: db.session.commit()
@@ -1223,12 +1230,14 @@ def process_due_followups():
         db.session.rollback()
         existing=FollowupSchedulerRun.query.filter_by(window_key=window_key).first()
         return {"ok":bool(existing and existing.status=="succeeded"),"duplicate_run_suppressed":True,"window_key":window_key,"status":existing.status if existing else "unknown","processed_count":0,"processed":[]}
-    leads = OutreachLead.query.filter(
+    due_query = OutreachLead.query.filter(
         OutreachLead.status.in_(["sent", "followup_sent"]),
         OutreachLead.follow_up_due_at.isnot(None),
         OutreachLead.follow_up_due_at <= now,
         OutreachLead.replied_at.is_(None),
-    ).all()
+    )
+    if controlled_test_lead_id is not None:due_query=due_query.filter(OutreachLead.id==controlled_test_lead_id)
+    leads=due_query.all()
 
     processed=[]
     for lead in leads:

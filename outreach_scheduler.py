@@ -68,9 +68,13 @@ def run_scheduled_outreach_cycle():
     # This durable cron also resumes searches after a web process restart,
     # even when the customer has closed the page. Research never sends mail.
     from background_research import process_next_research_job
+    from production_smoke import run_configured_smoke
+    smoke=run_configured_smoke()
     research = process_next_research_job()
     from automation_monitor import record_cycle
     record_cycle(inbound, followups, research)
+    if smoke.get("enabled"):
+        app.logger.warning("PRODUCTION_SMOKE_STATE %s",smoke)
     app.logger.info(
         "OUTREACH_FOLLOWUP_SCHEDULER ok=%s tracked_threads=%s processed=%s",
         followups.get("ok"),

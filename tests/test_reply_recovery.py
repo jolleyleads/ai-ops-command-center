@@ -130,3 +130,30 @@ def test_supported_faq_resumes_prior_review_once(env,monkeypatch):
     assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="question_answered"
     assert scanner.scan_real_inbound_replies()["processed"][0]["stage"]=="already_processed"
     assert calls==[1]
+
+
+def test_controlled_followup_cannot_target_a_prospect(env):
+    lead=oa.OutreachLead(company="Prospect",contact_email="owner@example.com",verification="verified")
+    oa.db.session.add(lead);oa.db.session.commit()
+    result=oa.process_due_followups(controlled_test_lead_id=lead.id)
+    assert not result["ok"] and result["error"]=="CONTROLLED_TEST_LEAD_REQUIRED"
+    assert oa.FollowupSchedulerRun.query.count()==0
+
+
+def test_controlled_followup_uses_real_processor_but_only_test_lead(env,monkeypatch):
+    rows=[oa.OutreachLead(company="Test",contact_email="neyolabs@gmail.com",verification="controlled_followup_test",gmail_thread_id="test-thread",status="sent",follow_up_due_at=datetime.utcnow()-timedelta(minutes=1)),oa.OutreachLead(company="Prospect",contact_email="owner@example.com",gmail_thread_id="prospect-thread",status="sent",follow_up_due_at=datetime.utcnow()-timedelta(minutes=1))]
+    oa.db.session.add_all(rows);oa.db.session.commit()
+    monkeypatch.setattr(oa,"_gmail_thread_reply_state",lambda _:{"ok":True,"stop":False})
+    monkeypatch.setattr(oa,"_draft_email",lambda *a,**k:{"ok":True,"subject":"Test","body":"Checking in"})
+    sent=[]
+    monkeypatch.setattr(oa,"_safe_send",lambda lead,**kw:sent.append(lead.id) or {"ok":True,"send_receipt":{"message_id":"sent","thread_id":"test-thread"}})
+    first=oa.process_due_followups(controlled_test_lead_id=rows[0].id)
+    second=oa.process_due_followups(controlled_test_lead_id=rows[0].id)
+    assert first["ok"] and second["duplicate_run_suppressed"]
+    assert sent==[rows[0].id] and rows[1].follow_up_count==0
+
+
+def test_smoke_disabled_without_explicit_configuration(env,monkeypatch):
+    from production_smoke import run_configured_smoke
+    monkeypatch.delenv("AUTOMAKE_SMOKE_RUN_ID",raising=False)
+    assert run_configured_smoke()=={"enabled":False}
