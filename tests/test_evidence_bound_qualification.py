@@ -42,6 +42,31 @@ def test_signed_receipt_is_accepted_while_evidence_is_unchanged(env):
     assert gate["ok"] is True
 
 
+@pytest.mark.parametrize("company,source,content_hash",[
+    ("Other Electric","https://example.com/contact","a"*64),
+    ("Example Electric","https://other.example/contact","a"*64),
+    ("Example Electric","https://example.com/contact","missing"),
+])
+def test_new_contact_identity_proof_must_bind_signed_qualification(env,company,source,content_hash):
+    row=make_lead()
+    evidence=json.loads(row.evidence_json)
+    evidence[0].update(identity_version="company-domain-v1",company_identity={"company_name":company,"source_url":source,"content_sha256":content_hash})
+    row.evidence_json=json.dumps(evidence);oa.db.session.commit()
+    receipt=oa._store_qualification(row)
+    assert not receipt["ok"]
+    assert "MISSING_VALIDATED_CONTACT" in receipt["reason_codes"]
+    assert not oa._qualification_gate(row)["ok"]
+
+
+def test_source_bound_contact_proof_survives_qualification_roundtrip(env):
+    row=make_lead()
+    evidence=json.loads(row.evidence_json)
+    evidence[0].update(identity_version="company-domain-v1",company_identity={"company_name":"Example Electric","source_url":"https://example.com/contact","content_sha256":"a"*64})
+    row.evidence_json=json.dumps(evidence);oa.db.session.commit()
+    assert oa._store_qualification(row)["ok"]
+    assert oa._qualification_gate(row)["ok"]
+
+
 def test_tampered_receipt_fails_closed(env):
     row=make_lead();oa._store_qualification(row,{})
     dbrow=oa.OutreachQualificationReceipt.query.filter_by(lead_id=row.id).one()

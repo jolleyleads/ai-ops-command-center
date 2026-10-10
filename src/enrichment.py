@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable
 from urllib.parse import urlparse
+from src.company_identity import identity_proof, host, owned_host, email_on_domain, contact_context_matches
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 PHONE_RE=re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
@@ -52,35 +53,35 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
     out={"company_name":company,"fields":{},"evidence":[],"validated":False}
     if not company:return out
     rows=list(_evidence_rows(evidence_rows,company))
-    discovery_urls=[_url(x) for x in (lead.get("discovery_urls") or []) if _url(x)]
-    known_urls=discovery_urls+[_url(lead.get(k)) for k in ("website","url","source_url") if _url(lead.get(k))]
-
-    # Website: source-bound company domain. Prefer an explicit website field from evidence,
-    # otherwise a candidate-specific page whose host is not a search/social aggregator.
-    blocked=("google.","facebook.","linkedin.","yelp.","yellowpages.","indeed.","ziprecruiter.","glassdoor.")
-    website=""
-    for row,u,text in rows:
-        explicit=_url(row.get("website"))
-        candidates=[explicit,u] if explicit else [u]
-        for c in candidates:
-            h=_host(c)
-            if h and not any(b in h for b in blocked):
-                website=f"{urlparse(c).scheme}://{h}";break
-        if website:break
+    # A candidate label or arbitrary discovery URL cannot establish ownership.
+    explicit=_url(lead.get("website"))
+    if not explicit and re.fullmatch(r"[A-Z0-9]{2,4}",company):
+        out["identity_status"]="unproven"
+        return out
+    proofs=[(row,u,text,identity_proof(company,row,explicit)) for row,u,text in rows]
+    proofs=[x for x in proofs if x[3]]
+    domains={host(explicit)} if explicit and proofs else {x[3]["official_host"] for x in proofs}
+    if len(domains)!=1:
+        out["identity_status"]="ambiguous" if domains else "unproven"
+        return out
+    website=explicit or "https://"+next(iter(domains))
+    rows=[(row,u,text) for row,u,text,proof in proofs if owned_host(proof["source_url"],website)]
+    out["identity_status"]="source_bound"
+    location=_clean(lead.get("location") or lead.get("target_location"),300)
     if website:
         out["fields"]["website"]={"value":website,"source_url":website,"validated":True}
 
-    company_domain=_host(website)
     # Contacts are accepted only when found in candidate-specific source text.
     for row,u,text in rows:
         if "email" not in out["fields"]:
             for e in EMAIL_RE.findall(text):
                 email=_email(e)
-                if email and company_domain and (email.rsplit("@",1)[-1]==company_domain or email.rsplit("@",1)[-1].endswith("."+company_domain)):
+                if email and email_on_domain(email,website) and contact_context_matches(text,email,location):
                     out["fields"]["email"]={"value":email,"source_url":u,"validated":True};break
         if "phone" not in out["fields"]:
-            phone=_phone(text)
-            if phone:out["fields"]["phone"]={"value":phone,"source_url":u,"validated":True}
+            for match in PHONE_RE.finditer(text):
+                if contact_context_matches(text,match.group(0),location):
+                    out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True};break
         if "decision_maker" not in out["fields"]:
             # Require a title plus a nearby human-looking two-word name in the same source.
             tm=TITLE_RE.search(text)
@@ -97,12 +98,12 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
     if existing_phone and "phone" not in out["fields"]:
         digits=re.sub(r"\D","",existing_phone)[-10:]
         for row,u,text in rows:
-            if digits and digits in re.sub(r"\D","",text):
+            if digits and digits in re.sub(r"\D","",text) and not location:
                 out["fields"]["phone"]={"value":existing_phone,"source_url":u,"validated":True};break
     existing_email=_email(lead.get("email") or lead.get("contact_email"))
     if existing_email and "email" not in out["fields"]:
         for row,u,text in rows:
-            if existing_email.lower() in text.lower() and (not company_domain or existing_email.rsplit("@",1)[-1]==company_domain):
+            if existing_email.lower() in text.lower() and email_on_domain(existing_email,website) and contact_context_matches(text,existing_email,location):
                 out["fields"]["email"]={"value":existing_email,"source_url":u,"validated":True};break
 
     out["evidence"]=list({x["url"]:x for x in out["evidence"]}.values())

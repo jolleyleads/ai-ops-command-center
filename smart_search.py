@@ -7,6 +7,7 @@ from app import app
 from research_agent import plan_research,recover_tool_plan,evaluate_research,extract_candidates
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
+from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -128,23 +129,26 @@ def _run_calls(calls,deadline,max_calls=3):
     finally:pool.shutdown(wait=False,cancel_futures=True)
     return _dedupe(results),messages,used
 
-def _page(url):
+def _page_snapshot(url):
     try:
         p=urlparse(_clean(url,1600));host=(p.hostname or "").lower()
-        if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return ""
+        if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return {}
         r=requests.get(url,timeout=2,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/11.0"},allow_redirects=True)
-        if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return ""
-        raw=r.text[:100000];raw=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",raw);return re.sub(r"\s+"," ",re.sub(r"(?s)<[^>]+>"," ",raw)).strip()[:8000]
-    except Exception:return ""
+        if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
+        raw=r.text[:100000];metadata=page_metadata(raw)
+        return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True}
+    except Exception:return {}
+def _page(url):
+    return _page_snapshot(url).get("page_text","")
 def _inspect(items,limit=5):
-    targets=[x for x in items if x.get("url") and not x.get("page_text")][:limit]
+    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (x.get("verification_research") and not x.get("directly_fetched") and not shared_host(host(x["url"]))))][:limit]
     if not targets:return
     with ThreadPoolExecutor(max_workers=min(5,len(targets))) as pool:
-        fs={pool.submit(_page,x["url"]):x for x in targets}
+        fs={pool.submit(_page_snapshot,x["url"]):x for x in targets}
         for f in as_completed(fs):
-            try:text=f.result()
-            except Exception:text=""
-            if text:fs[f]["page_text"]=text
+            try:snapshot=f.result()
+            except Exception:snapshot={}
+            if snapshot.get("page_text"):fs[f].update(snapshot)
 
 def _memory(q,loc):
     try:return [{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True,"research_tool":"rag"} for x in retrieve_context(q,loc,limit=4)]
@@ -264,20 +268,41 @@ def _additional_discovery(q,loc,round_number):
     return {"tool":"web_search" if round_number%2 else "exa_search","query":f"{loc} {topic} {detail}","location":loc}
 
 
-def _attach_source_contacts(rows,evidence):
-    """Expose observed contact details with their source; never guess email addresses."""
+def _attach_source_contacts(rows,evidence,location=""):
+    """Contacts require one resolved company domain and source-local evidence."""
     for row in rows:
         name=row.get("candidate_name") or row.get("title")
-        terms=[t for t in re.findall(r"[a-z0-9]+",str(name).lower()) if t not in {"inc","llc","ltd","the","company"}]
-        contacts=[]
+        website=row.get("website") or ""
+        proofs=[]
         for item in evidence:
             if _candidate_key(item.get("candidate_name"))!=_candidate_key(name):continue
-            text=" ".join(str(item.get(k) or "") for k in ("title","subtitle","page_text"))
-            if not terms or not all(re.search(rf"\b{re.escape(t)}\b",text,re.I) for t in terms):continue
+            proof=identity_proof(name,item,website)
+            if proof:proofs.append((item,proof))
+        domains={p["official_host"] for _,p in proofs}
+        # Normalize child hosts to an explicit company anchor, never to a guessed suffix.
+        if website:domains={host(website)} if proofs else set()
+        acronym=bool(re.fullmatch(r"[A-Z0-9]{2,4}",str(name or "")))
+        primary_claim=any(host(u) in domains for u in row.get("supporting_urls") or [])
+        unresolved=len(domains)!=1 or (acronym and not website and not primary_claim)
+        contacts=[]
+        if unresolved:
+            row.update(contacts=[],contact_status="identity_unresolved",company_identity_status="ambiguous" if len(domains)>1 else "unproven",contact_reason="Company ownership must be resolved before attaching contacts.")
+            continue
+        official_host=next(iter(domains));official_site=website or "https://"+official_host
+        row["website"]=official_site
+        row["contact_location"]=location
+        row["company_identity_status"]="source_bound"
+        row["company_identity_sources"]=list(dict.fromkeys(p["source_url"] for _,p in proofs))
+        for item,proof in proofs:
+            if not owned_host(proof["source_url"],official_site):continue
+            text=page_text(item)
             for email in dict.fromkeys(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",text)):
-                contacts.append({"email":email,"source_url":item.get("url"),"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed"})
+                if not email_on_domain(email,official_site) or email.lower().endswith((".png",".jpg",".svg")):continue
+                if not contact_context_matches(text,email,location):continue
+                contacts.append({"email":email.lower(),"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
             for phone in dict.fromkeys(re.findall(r"(?<!\d)(?:\+1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)",text)):
-                contacts.append({"phone":phone,"source_url":item.get("url"),"observed_at":item.get("observed_at"),"status":"source_observed_reachability_unconfirmed"})
+                if not contact_context_matches(text,phone,location):continue
+                contacts.append({"phone":phone,"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_reachability_unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
         row["contacts"]=list({(c.get("email") or c.get("phone"),c["source_url"]):c for c in contacts}.values())
         row["contact_status"]="source_observed" if contacts else "not_found"
     return rows
@@ -533,7 +558,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         visible=_verification_gate(discovery_visible,promoted,evaluation)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q)
-        visible=_attach_source_contacts(visible,contact_evidence)
+        visible=_attach_source_contacts(visible,contact_evidence,loc)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")

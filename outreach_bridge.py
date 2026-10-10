@@ -4,6 +4,8 @@ import re
 import time
 from urllib.parse import urljoin,urlparse
 import requests
+from datetime import datetime, timezone
+from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, visible_page_text, contact_context_matches, shared_host
 from app import db
 from outreach_automation import OutreachLead, _draft_email
 from src.enrichment import enrich_lead, validated_payload
@@ -49,8 +51,7 @@ def _host(url):
     try:return (urlparse(url).hostname or "").lower().removeprefix("www.")
     except Exception:return ""
 def _same_company_domain(email,urls):
-    d=email.rsplit("@",1)[-1].lower()
-    return any(d==_host(u) or d.endswith("."+_host(u)) or _host(u).endswith("."+d) for u in urls if _host(u))
+    return any(email_on_domain(email,u) for u in urls)
 def _candidate_urls(result):
     vals=[]
     for k in ("website","direct_url","source_url","url","verification_source_url"):
@@ -67,20 +68,22 @@ def _candidate_urls(result):
 def _public_contact_evidence(result):
     """Fetch bounded candidate-owned pages and retain exact public contact evidence."""
     started=time.monotonic();urls=_candidate_urls(result);rows=[];attempted=0
+    company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title"),300)
+    location=_clean(result.get("contact_location") or result.get("location"),300)
+    website=_clean(result.get("website"),1800)
     headers={"User-Agent":"Mozilla/5.0 AI-Ops-Contact-Verification/2.3"}
     blocked_hosts=("indeed.","ziprecruiter.","glassdoor.","linkedin.","facebook.","google.","yelp.")
     roots=[]
-    for u in urls:
+    for u in ([website] if website else urls):
         h=_host(u)
-        if h and not any(x in h for x in blocked_hosts):
+        if h and not shared_host(h) and not any(x in h for x in blocked_hosts):
+            if not website and not identity_proof(company,{**result,"url":u}):continue
             root=f"{urlparse(u).scheme}://{h}/"
             if root not in roots:roots.append(root)
-    # Search more than one candidate-owned domain when discovery provides them,
-    # but remain tightly bounded and never follow third-party/aggregator hosts.
-    roots=roots[:2]
-    # Spend the bounded fetch budget on the pages most likely to publish a real
-    # business contact. Interleave roots so a second candidate-owned domain is
-    # not starved by the first domain's fallback list.
+    # Multiple unbound domains indicate conflicting identities, not more contacts.
+    roots=roots if len(roots)==1 else []
+    identities={}
+    # Spend the bounded fetch budget on the resolved company's contact pages.
     priority_paths=("", "contact", "contact-us", "about", "about-us", "team", "staff", "leadership", "our-team", "locations", "careers", "privacy")
     # Keep these explicit probes as release-gate invariants while the loop below
     # interleaves all roots fairly: urljoin(root,"staff") urljoin(root,"locations") urljoin(root,"team")
@@ -109,14 +112,23 @@ def _public_contact_evidence(result):
         if not r.ok:continue
         ct=(r.headers.get("content-type") or "").lower()
         if "text/html" not in ct and "text/plain" not in ct:continue
-        final=r.url;final_host=_host(final)
-        owning_root=next((root for root in roots if final_host and (final_host==_host(root) or final_host.endswith("."+_host(root)) or _host(root).endswith("."+final_host))),"")
+        final=r.url
+        owning_root=next((root for root in roots if owned_host(final,root)),"")
         if not owning_root:continue
         text=r.text[:500000]
-        emails=[e for e in _page_emails(text) if _same_company_domain(e,[final])]
-        phone=re.search(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",text)
-        if emails or phone:
-            rows.append({"candidate_name":_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300),"title":"Public company contact page","subtitle":" ".join(emails[:3])+(" "+phone.group(0) if phone else ""),"text":text[:120000],"url":final,"source":"public_company_contact_page"})
+        metadata=page_metadata(text)
+        contact_html=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",text)
+        contact_html=re.sub(r'''(?is)<[^>]*\bdata-cfemail=["']([0-9a-f]{6,})["'][^>]*>''',lambda m:" "+_decode_cfemail(m.group(1))+" ",contact_html)
+        visible=visible_page_text(contact_html)
+        page={**metadata,"url":final,"page_text":visible}
+        proof=identity_proof(company,page,website or owning_root)
+        if proof:identities[owning_root]=proof
+        proof=proof or identities.get(owning_root)
+        emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[owning_root])]
+        emails=[e for e in emails if contact_context_matches(visible,e,location)]
+        phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if contact_context_matches(visible,m.group(0),location)))
+        if proof and (emails or phones):
+            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
             # Email is the outreach requirement; stop once exact same-domain proof exists.
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the
@@ -128,7 +140,7 @@ def _public_contact_evidence(result):
             if not href or href.startswith(("mailto:","tel:","#","javascript:")):continue
             absolute=urljoin(final,href)
             ah=_host(absolute)
-            if not ah or not (ah==_host(owning_root) or ah.endswith("."+_host(owning_root)) or _host(owning_root).endswith("."+ah)):continue
+            if not ah or not owned_host(absolute,owning_root):continue
             path=(urlparse(absolute).path or "").lower()
             label_text=re.sub(r"<[^>]+>"," ",anchor).lower()
             contactish=("contact","about","team","staff","people","leadership","career","location","reach","get in touch","connect","privacy")
