@@ -1,6 +1,5 @@
-# Gunicorn automatically loads gunicorn.conf.py from the working directory.
-# Keep this in-repo because the existing Render service has a dashboard-level
-# start command (`gunicorn commercial_app:app`) that overrides render.yaml.
-timeout = 300
-graceful_timeout = 30
+"""Keep customer requests responsive while provider operations wait on I/O."""
 workers = 1
+worker_class = "gthread"
+threads = 4
+timeout = 120

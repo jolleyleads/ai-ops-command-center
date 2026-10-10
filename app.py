@@ -15,6 +15,12 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///ai_ops.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+if app.config["SQLALCHEMY_DATABASE_URI"].startswith(("postgresql", "postgres:")):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True, "pool_recycle": 240, "pool_timeout": 5,
+        "connect_args": {"connect_timeout": 5,
+                         "options": "-c statement_timeout=10000 -c lock_timeout=3000"},
+    }
 
 db = SQLAlchemy(app)
 
@@ -751,7 +757,6 @@ def run_workflow(workflow, payload):
 
     return True, context, logs
 
-@app.before_request
 def create_tables():
     db.create_all()
 
@@ -1665,6 +1670,9 @@ def health():
         "credential_status": "/api/credentials/status",
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", "")
     })
+
+with app.app_context():
+    create_tables()
 
 if __name__ == "__main__":
     app.run(debug=True)

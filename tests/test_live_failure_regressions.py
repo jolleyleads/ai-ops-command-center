@@ -19,6 +19,17 @@ def test_every_json_mode_research_input_requests_json(monkeypatch):
     assert len(calls)==4
 
 
+def test_health_and_customer_page_do_not_run_schema_creation(monkeypatch):
+    import commercial_app
+    create=Mock(side_effect=AssertionError("request attempted schema creation"))
+    monkeypatch.setattr(commercial_app.app,"testing",True)
+    monkeypatch.setattr(commercial_app.db_resilience.db,"create_all",create)
+    client=commercial_app.app.test_client()
+    assert client.get("/api/health").status_code==200
+    assert client.get("/chat-operator").status_code==200
+    create.assert_not_called()
+
+
 @pytest.fixture()
 def oauth(monkeypatch):
     import gmail_connect as google
