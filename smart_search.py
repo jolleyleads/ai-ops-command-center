@@ -293,6 +293,9 @@ def rank_research_results(rows,limit=10,query=""):
         x=dict(raw);key=_candidate_key(x.get("candidate_name") or x.get("title"))
         if not key:continue
         publication=x.get("published_at")
+        if not publication:
+            dates=[str(e.get("published_at")) for e in x.get("evidence",[]) if isinstance(e,dict) and e.get("published_at")]
+            if dates:publication=max(dates);x["published_at"]=publication
         age=None
         try:
             stamp=datetime.fromisoformat(str(publication).replace("Z","+00:00"))
@@ -301,7 +304,7 @@ def rank_research_results(rows,limit=10,query=""):
         except (ValueError,TypeError):pass
         verified=x.get("promotion_status")=="verified"
         text=" ".join(str(x.get(k) or "") for k in ("subtitle","verified_claim"))
-        missing_review_date=age is None and "response_complaints" in x.get("verified_channels",[]) and bool(re.search(r"\b(?:recent|current|latest)\b",query,re.I))
+        missing_review_date=age is None and "response_complaints" in x.get("verified_channels",[])
         if missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
             verified=False;x.update(classification="Candidate",promotion_status="candidate",verification_gate="pending",evidence_basis="Requested current status requires fresh supporting evidence.")
         if verified:
@@ -357,6 +360,16 @@ def _fallback_candidates(discovery,limit=10):
     return out
 
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
+    # Verify three companies together rather than spending the whole budget
+    # on the first company's sources. Child calls preserve candidate identity.
+    selected=(candidates or [])[:max_candidates]
+    if len(selected)>1:
+        evidence=[];messages=[];tools=[]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures=[pool.submit(_candidate_followups,q,loc,[cand],deadline,1) for cand in selected]
+            for future in futures:
+                rows,msg,used=future.result();evidence.extend(rows);messages.extend(msg);tools.extend(used)
+        return _dedupe(evidence),messages,tools
     evidence=[];messages=[];tools=[];intents=_verification_intent(q)
     for cand in (candidates or [])[:max_candidates]:
         if time.monotonic()>=deadline-6:break

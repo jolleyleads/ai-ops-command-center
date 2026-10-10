@@ -65,6 +65,12 @@ def run_scheduled_outreach_cycle():
     # Never deliver follow-ups while inbox reads are failing.
     followups = outreach_automation.process_due_followups() if inbound.get("ok") else {"ok":False,"processed":[],"error":"INBOUND_SCAN_FAILED"}
     legacy_followups = process_durable_followups() if inbound.get("ok") else {"ok":False,"processed":[]}
+    # This durable cron also resumes searches after a web process restart,
+    # even when the customer has closed the page. Research never sends mail.
+    from background_research import process_next_research_job
+    research = process_next_research_job()
+    from automation_monitor import record_cycle
+    record_cycle(inbound, followups, research)
     app.logger.info(
         "OUTREACH_FOLLOWUP_SCHEDULER ok=%s tracked_threads=%s processed=%s",
         followups.get("ok"),
@@ -74,7 +80,7 @@ def run_scheduled_outreach_cycle():
     if not followups.get("ok"):
         app.logger.warning("OUTREACH_FOLLOWUP_SCHEDULER_ERROR %s", followups.get("error"))
 
-    return {"ok": bool(inbound.get("ok")) and bool(followups.get("ok")) and bool(legacy_followups.get("ok")), "inbound": inbound, "followups": followups, "legacy_followups":legacy_followups}
+    return {"ok": bool(inbound.get("ok")) and bool(followups.get("ok")) and bool(legacy_followups.get("ok")) and bool(research.get("ok")), "inbound": inbound, "followups": followups, "legacy_followups":legacy_followups, "research":research}
 
 
 def _loop():

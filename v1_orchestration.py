@@ -108,7 +108,7 @@ def orchestrate_discovery(payload):
 
 def scan_real_inbound_replies():
     now=datetime.utcnow()
-    leads=OutreachLead.query.filter(OutreachLead.gmail_thread_id.isnot(None),OutreachLead.gmail_thread_id!="",OutreachLead.status.in_(["sent","followup_sent","interested","question","responded","booking_ready"])).order_by(OutreachLead.id.asc()).all()
+    leads=OutreachLead.query.filter(OutreachLead.gmail_thread_id.isnot(None),OutreachLead.gmail_thread_id!="",OutreachLead.status.in_(["sent","followup_sent","interested","question","responded","booking_ready","booked"])).order_by(OutreachLead.id.asc()).all()
     processed=[]
     for lead in leads:
         reply=_gmail_thread_reply_state(lead.gmail_thread_id)

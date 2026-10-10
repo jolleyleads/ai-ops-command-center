@@ -17,7 +17,7 @@ from src.services import run_ai
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
-from src.google_calendar_provider import check_availability, create_event, get_event
+from src.google_calendar_provider import check_availability, create_event, get_event, reschedule_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
 from src.automatic_reply_router import classify_reply, extract_explicit_booking, current_reply_text
@@ -537,6 +537,15 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     return execution
 
 
+def _send_reply_for_message(lead, item, body):
+    message_id=_clean(item.get("message_id"),255)
+    if not message_id:return {"ok":False,"error":"MISSING_REPLY_MESSAGE_ID"}
+    evidence=OutreachReplyEvidence.query.filter_by(lead_id=lead.id,message_id=message_id).first()
+    if not evidence:return {"ok":False,"error":"REPLY_EVIDENCE_NOT_PERSISTED"}
+    subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
+    return _safe_send(lead,kind="automatic_reply",sequence=evidence.id,subject=subject,body=body)
+
+
 def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     """Route newest persisted inbound evidence. No invented scheduling fields."""
     evidence=(reply.get("reply_evidence") or [])
@@ -553,7 +562,14 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
             _suppress(lead.contact_email,"opt_out",message_id=_clean(item.get("message_id"),255),thread_id=lead.gmail_thread_id)
         return {"ok":True,"stage":lead.status,"classification":classification}
     if label=="question":
-        lead.status="question";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        from src.grounded_reply import routine_answer
+        answer=routine_answer(text)
+        lead.status="question";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now
+        lead.last_error="UNSUPPORTED_QUESTION_REQUIRES_REVIEW"
+        if answer:
+            sent=_send_reply_for_message(lead,item,answer)
+            lead.last_error="" if sent.get("ok") else "AUTOMATIC_REPLY_REQUIRES_REVIEW"
+            return {"ok":sent.get("ok") is True,"stage":"question_answered","classification":classification,"reply":sent}
         return {"ok":True,"stage":"question","classification":classification}
     if label!="interested":
         lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="REPLY_REQUIRES_REVIEW"
@@ -568,9 +584,35 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
     if not booking.get("start") or not booking.get("end") or not booking.get("timezone"):
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
-        return {"ok":True,"stage":"interested","classification":classification,"booking_attempted":False}
+        sent=_send_reply_for_message(lead,item,"Happy to schedule a call. Please send the full date (including year), start time with AM/PM, and timezone you prefer. I'll check availability before confirming.")
+        if not sent.get("ok"):lead.last_error="AUTOMATIC_REPLY_REQUIRES_REVIEW"
+        return {"ok":sent.get("ok") is True,"stage":"interested","classification":classification,"booking_attempted":False,"reply":sent}
 
     reply_message_id=_clean(item.get("message_id"),255)
+    previous=OutreachBookingAttempt.query.filter_by(lead_id=lead.id,status="confirmed").order_by(OutreachBookingAttempt.updated_at.desc()).first()
+    if previous and previous.reply_message_id!=reply_message_id:
+        # A later scheduling request changes this lead's existing appointment.
+        # Durable intent + lease prevents two inbox scans from updating it twice.
+        payload={"event_id":previous.event_id,"booking":booking,"reply_message_id":reply_message_id}
+        cmd=_enqueue_external_command(lead,"calendar_reschedule",payload)
+        if cmd.status=="succeeded":
+            result=json.loads(cmd.provider_receipt_json or "{}")
+        else:
+            token=_claim_external_command(cmd)
+            if not token:
+                lead.last_error="RESCHEDULE_REQUIRES_RECONCILIATION"
+                return {"ok":False,"stage":"reschedule_blocked"}
+            result=reschedule_event(previous.event_id,booking)
+            _finish_external_command(cmd.id,token,result)
+        if not result.get("ok"):
+            lead.last_error=result.get("error") or "RESCHEDULE_REQUIRES_REVIEW"
+            return {"ok":False,"stage":"reschedule_blocked","error":lead.last_error}
+        previous.start=booking["start"];previous.end=booking["end"];previous.timezone=booking["timezone"];previous.updated_at=now
+        lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now
+        confirmation=_send_reply_for_message(lead,item,f"Your existing appointment has been moved to {booking['start']} ({booking['timezone']}). The calendar invitation has been updated.")
+        lead.last_error="" if confirmation.get("ok") else "BOOKED_CONFIRMATION_REQUIRES_REVIEW"
+        db.session.commit()
+        return {"ok":confirmation.get("ok") is True,"stage":"rescheduled","event_id":previous.event_id,"reply":confirmation}
     key=booking_key(lead_id=lead.id,reply_message_id=reply_message_id,start=booking["start"],end=booking["end"],attendee=lead.contact_email)
     event_id=google_event_id(key)
     attempt=OutreachBookingAttempt.query.filter_by(idempotency_key=key).first()
@@ -630,6 +672,17 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         stored["booking"]=result.get("booking_execution") or {};lead.evidence_json=json.dumps(stored)
     elif stage=="unavailable":
         lead.status="booking_ready";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="TIME_NOT_AVAILABLE"
+        alternatives=[]
+        start=datetime.fromisoformat(booking["start"]);end=datetime.fromisoformat(booking["end"])
+        for offset in (timedelta(hours=1),timedelta(days=1),timedelta(days=2)):
+            candidate=dict(booking,start=(start+offset).isoformat(),end=(end+offset).isoformat())
+            availability=check_availability(candidate)
+            if availability.get("ok") and availability.get("available"):
+                alternatives.append((start+offset).strftime("%B %d, %Y at %I:%M %p"))
+            if len(alternatives)==2:break
+        body="That time is unavailable. "
+        body+=("These alternatives are currently open: "+"; ".join(alternatives)+f" ({booking['timezone']}). Which do you prefer? I'll recheck before confirming.") if alternatives else "Please send another full date, start time, and timezone, and I'll check it."
+        result["reply"]=_send_reply_for_message(lead,item,body)
     else:
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=_clean(result,2000)
     return {"ok":result.get("ok") is True,"stage":stage,"classification":classification,"booking_result":result}
@@ -955,7 +1008,8 @@ def operator_dashboard_data():
         stage=(record["lead"].get("operational") or {}).get("stage") or "unknown"
         counts[stage]=counts.get(stage,0)+1
     attention=[x for x in records if (x["lead"].get("operational") or {}).get("needs_attention")]
-    return jsonify({"ok":True,"counts":counts,"attention_count":len(attention),"records":records})
+    from automation_monitor import health_snapshot
+    return jsonify({"ok":True,"counts":counts,"attention_count":len(attention),"records":records,"automation_health":health_snapshot()})
 
 
 @app.route("/operator", methods=["GET"])
@@ -966,6 +1020,9 @@ def operator_dashboard():
     records=[_dashboard_record(x) for x in rows]
     attention=sum(1 for x in records if (x["lead"].get("operational") or {}).get("needs_attention"))
     recovery=_recovery_queue();recovery_count=len(recovery)
+    from automation_monitor import health_snapshot
+    health=health_snapshot()
+    health_text="; ".join(x["name"]+": "+x["status"] for x in health["workers"])
     def h(v):
         import html
         return html.escape(str(v if v is not None else ""))
@@ -976,7 +1033,7 @@ def operator_dashboard():
         buttons="".join(f'<button name="action" value="{a}">{a.title()}</button>' for a in ("review","approve","reject","retry","reconcile","suppress","close"))
         lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control"><input type="hidden" name="csrf_token" value="{_csrf_token()}">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
     body="".join(lead_html) or '<p class="muted">No lead records yet.</p>'
-    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div><div class="stat"><div class="n">{recovery_count}</div><div class="muted">Recovery queue</div></div></div>{body}</main></body></html>""",mimetype="text/html")
+    return Response(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ops Operator</title><style>body{{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1020;color:#e8ecf5}}header,.wrap{{padding:20px}}header{{border-bottom:1px solid #27304a}}article,.stat{{background:#141b2d;border:1px solid #27304a;border-radius:12px;padding:14px;margin:10px 0}}.stats{{display:flex;gap:10px}}.stat{{flex:1}}.n{{font-size:26px;font-weight:800}}.muted{{color:#9aa7c2;font-size:12px}}.top{{display:flex;justify-content:space-between;gap:10px}}form{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}button{{background:#202a43;color:#fff;border:1px solid #394563;border-radius:8px;padding:10px 12px}}pre{{white-space:pre-wrap;word-break:break-word;background:#0b1020;padding:10px;border-radius:8px;max-height:280px;overflow:auto}}a{{color:#9ec5ff}}</style></head><body><header><b>AI Ops Command Center</b><div class="muted">Server-side authenticated operator controls</div><form method="post" action="/operator/logout"><input type="hidden" name="csrf_token" value="{_csrf_token()}"><button type="submit">Sign out</button></form></header><main class="wrap"><div class="stats"><div class="stat"><div class="n">{len(records)}</div><div class="muted">Total leads</div></div><div class="stat"><div class="n">{attention}</div><div class="muted">Needs attention</div></div><div class="stat"><div class="n">{recovery_count}</div><div class="muted">Recovery queue</div></div></div><article><b>Automation health</b><p>{health_text}</p><p>Stalled searches: {health["stalled_searches"]} · Uncertain deliveries: {health["uncertain_deliveries"]}</p><a href="/api/operator/automation-health">Detailed status</a></article>{body}</main></body></html>""",mimetype="text/html")
 
 
 @app.route("/operator/leads/<int:lead_id>/control",methods=["POST"])
