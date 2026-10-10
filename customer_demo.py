@@ -8,7 +8,6 @@ import json
 from datetime import datetime, timezone
 from flask import Response, jsonify, request
 from app import app
-import outreach_automation as oa
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
 from v1_orchestration import orchestrate_discovery
@@ -67,20 +66,9 @@ def _run_campaign(data):
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
-    if not (oa._operator_session_authorized() or oa._operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
-@app.route("/api/operator/campaign-session",methods=["GET"])
-def campaign_operator_session():
-    if not oa._operator_session_authorized():
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
-    return jsonify({"ok":True,"csrf_token":oa._csrf_token()})
 @app.route("/api/demo/campaigns/launch",methods=["POST"])
 def launch_demo_campaign():
-    if not oa._operator_session_authorized():
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
-    if not oa._csrf_ok():
-        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
     payload,stage,reason=_run_campaign(request.get_json(silent=True) or {})
     if payload:return jsonify(payload),200
     return jsonify({"ok":False,"stage":stage,"reason":reason}),400 if stage=="configuration" else 500

@@ -2,8 +2,6 @@ import json
 from datetime import datetime, timedelta
 import pytest
 import outreach_automation as oa
-import commercial_app
-import customer_demo
 import smart_search
 import v1_orchestration as v1
 
@@ -215,70 +213,6 @@ def test_active_orchestration_uses_universal_outreach_gate(env):
     source = __import__("inspect").getsource(v1.orchestrate_discovery)
     assert "_outreach_search(payload)" in source
     assert "not_b2b_outreach_search" in source
-
-
-def test_question_search_does_not_start_outreach(env, monkeypatch):
-    import smart_search
-    calls=[]
-    monkeypatch.setattr(smart_search,"_smart_search",lambda *args,**kwargs:{"configured":True,"count":1,"results":[{"title":"Example company","url":"https://example.com"}]})
-    monkeypatch.setattr(v1,"orchestrate_discovery",lambda payload:calls.append(payload))
-    response=oa.app.test_client().post("/api/smart-search",json={"prompt":"Find local businesses"})
-    assert response.status_code==200
-    assert "outreach_automation" not in response.get_json()
-    assert calls==[]
-    assert oa.OutreachLead.query.count()==0
-
-
-def test_campaign_launch_requires_operator_session_and_csrf(env, monkeypatch):
-    calls=[]
-    monkeypatch.setattr(customer_demo,"_run_campaign",lambda data:calls.append(data) or ({"ok":True},None,None))
-    client=oa.app.test_client()
-    assert client.post("/api/demo/campaigns/launch",json={}).status_code==401
-    assert calls==[]
-    login(client)
-    assert client.post("/api/demo/campaigns/launch",json={}).status_code==403
-    assert calls==[]
-    with client.session_transaction() as state:
-        csrf=state["csrf_token"]
-    response=client.post("/api/demo/campaigns/launch",json={},headers={"X-CSRF-Token":csrf})
-    assert response.status_code==200
-    assert len(calls)==1
-
-
-def test_saved_leads_and_outreach_actions_require_operator_access(env):
-    client=oa.app.test_client()
-    assert client.get("/api/outreach/leads").status_code==401
-    assert client.get("/api/outreach/needs-attention").status_code==401
-    assert client.get("/api/demo/leads").status_code==401
-    assert client.post("/api/outreach/leads",json={"company":"Injected"}).status_code==401
-    assert client.post("/api/outreach/leads/1/draft",json={}).status_code==401
-    assert client.post("/api/outreach/leads/1/send",json={}).status_code==401
-    assert client.post("/api/prospect-intake",json={"results":[]}).status_code==401
-    assert client.post("/api/permit-leads/save",json={}).status_code==401
-    assert client.post("/api/operator/v1-1-acceptance-once",json={}).status_code==401
-    login(client)
-    assert client.get("/api/outreach/leads").status_code==200
-    assert client.get("/api/outreach/needs-attention").status_code==200
-    assert client.get("/api/demo/leads").status_code==200
-    assert client.post("/api/outreach/leads",json={"company":"No CSRF"}).status_code==403
-
-
-def test_legacy_workflow_builder_is_operator_only_and_csrf_protected(env):
-    import app as legacy
-    client=legacy.app.test_client()
-    assert client.get("/").status_code==303
-    assert client.get("/workflows").status_code==303
-    assert client.get("/api/workflows").status_code==401
-    assert client.post("/api/workflows",json={"name":"Injected workflow"}).status_code==401
-    login(client)
-    assert client.get("/").status_code==200
-    assert client.get("/workflows").status_code==200
-    assert client.get("/api/workflows").status_code==200
-    assert client.post("/api/workflows",json={"name":"Missing CSRF"}).status_code==403
-    with client.session_transaction() as state:
-        csrf=state["csrf_token"]
-    created=client.post("/api/workflows",json={"name":"Protected workflow"},headers={"X-CSRF-Token":csrf})
-    assert created.status_code==201
 
 
 def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):

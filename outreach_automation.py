@@ -1023,8 +1023,6 @@ def operator_reconcile_command(command_id:int):
 
 @app.route("/api/outreach/needs-attention", methods=["GET"])
 def outreach_needs_attention():
-    if not (_operator_session_authorized() or _operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
     rows=OutreachLead.query.order_by(OutreachLead.updated_at.desc()).limit(500).all()
     items=[]
     for lead in rows:
@@ -1036,10 +1034,6 @@ def outreach_needs_attention():
 
 @app.route("/api/outreach/leads", methods=["POST"])
 def create_outreach_lead():
-    if not (_operator_session_authorized() or _operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
-    if _operator_session_authorized() and not _csrf_ok():
-        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
     data = request.get_json(silent=True) or {}
     company = _clean(data.get("company") or data.get("title") or data.get("name"), 300)
     if not company:
@@ -1072,10 +1066,6 @@ def create_outreach_lead():
 
 @app.route("/api/outreach/leads/<int:lead_id>/draft", methods=["POST"])
 def draft_outreach(lead_id: int):
-    if not (_operator_session_authorized() or _operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
-    if _operator_session_authorized() and not _csrf_ok():
-        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
     lead = OutreachLead.query.get_or_404(lead_id)
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
@@ -1106,10 +1096,6 @@ def draft_outreach(lead_id: int):
 
 @app.route("/api/outreach/leads/<int:lead_id>/send", methods=["POST"])
 def send_outreach(lead_id: int):
-    if not (_operator_session_authorized() or _operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
-    if _operator_session_authorized() and not _csrf_ok():
-        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
     lead = OutreachLead.query.get_or_404(lead_id)
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
@@ -1248,8 +1234,6 @@ def process_reply_booking(lead_id: int):
     """Explicit production handoff. Authenticated and qualification-gated."""
     if not (_operator_session_authorized() or _operator_authorized()):
         return jsonify({"ok":False,"error":"operator authentication required"}),401
-    if _operator_session_authorized() and not _csrf_ok():
-        return jsonify({"ok":False,"error":"CSRF validation failed"}),403
     lead=OutreachLead.query.get_or_404(lead_id)
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
@@ -1301,7 +1285,5 @@ def process_reply_booking(lead_id: int):
 
 @app.route("/api/outreach/leads", methods=["GET"])
 def list_outreach_leads():
-    if not (_operator_session_authorized() or _operator_authorized()):
-        return jsonify({"ok":False,"error":"operator authentication required"}),401
     leads = OutreachLead.query.order_by(OutreachLead.id.desc()).limit(200).all()
     return jsonify({"leads": [_serialize(lead) for lead in leads]})

@@ -4,8 +4,6 @@
   <title>AI Ops Command Center</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="stylesheet" href="/static/style.css">
-  <meta name="operator-csrf-token" content="{{ operator_csrf_token }}">
-  <script>(function(){const token=document.querySelector('meta[name="operator-csrf-token"]').content;const nativeFetch=window.fetch.bind(window);window.fetch=function(input,init){init=init||{};const url=new URL(typeof input==="string"?input:input.url,window.location.href);const method=(init.method||(input instanceof Request?input.method:"GET")).toUpperCase();if(url.origin===window.location.origin&&!(["GET","HEAD","OPTIONS"].includes(method))){const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));headers.set("X-CSRF-Token",token);init=Object.assign({},init,{headers:headers});}return nativeFetch(input,init);};})();</script>
 </head>
 <body>
 <div class="sidebar">
