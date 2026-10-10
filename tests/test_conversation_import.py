@@ -6,7 +6,7 @@ import pytest
 
 def test_explicit_human_date_and_quoted_history():
     from src.automatic_reply_router import extract_explicit_booking,current_reply_text,classify_reply
-    text="Yes I am. Are you free October 11th 2030 at 2 pm On Sat, Oct 10, 2030 Matthew wrote: Hey, are you looking for an automation engineer?"
+    text="Yes I am. Are you free October 11th 2030 at 2 pm On Sat, Oct 10, 2030 Matthew <sender@example.com>\r\nwrote: Hey, are you looking for an automation engineer?"
     clean=current_reply_text(text)
     assert classify_reply(clean)["classification"]=="interested"
     result=extract_explicit_booking(clean)

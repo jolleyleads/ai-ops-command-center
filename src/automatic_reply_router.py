@@ -3,7 +3,7 @@
 Deterministic text rules own hard stops and clear intents. Ambiguous text may be
 proposed by an LLM, but the existing validator owns the final classification.
 Scheduling details are never invented here; automatic booking requires explicit
-machine-parseable ISO timestamps in the reply.
+full dates and times in the reply.
 """
 from __future__ import annotations
 import json,re,os
@@ -55,7 +55,7 @@ def extract_explicit_booking(text:Any)->Dict[str,str]:
 
 def current_reply_text(text):
     # Quoted outbound questions must not become the customer's intent.
-    return re.split(r"\s+On\s+.{0,500}?wrote:\s*",str(text or ""),maxsplit=1,flags=re.I)[0].strip()
+    return re.split(r"\s+On\s+.{0,500}?wrote:\s*",str(text or ""),maxsplit=1,flags=re.I|re.S)[0].strip()
 
 def classify_reply(text:Any,llm_func:Callable|None=None)->Dict[str,Any]:
     proposal=deterministic_proposal(text)
