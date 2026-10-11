@@ -10,6 +10,8 @@ from flask import Response, jsonify, request
 from app import app
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
+from src.research_policy import research_budget_seconds, research_target_count
+from campaign_jobs import enqueue_execution, execution_status
 from v1_orchestration import orchestrate_discovery
 from v11_evidence_upgrade import enhance_discovery
 
@@ -30,9 +32,11 @@ def _campaign_payload(data):
     try:send_limit=int(data.get("sending_limit") or 25)
     except Exception:send_limit=25
     send_limit=max(1,min(send_limit,MAX_DEMO_SEND_LIMIT))
+    try:target_count=research_target_count(data.get("target_count"))
+    except (TypeError,ValueError):return None,{"ok":False,"error":"target_count_must_be_a_number"}
     if not target:return None,{"ok":False,"error":"target_customer_required"}
     if not territory:return None,{"ok":False,"error":"territory_required"}
-    return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"query":target},None
+    return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"target_count":target_count,"business_type":_text(data.get("business_type"),300),"query":target},None
 def _orchestration_payload(discovery,campaign):
     payload=dict(discovery);target=campaign["target_customer"]
     payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"]})
@@ -40,9 +44,10 @@ def _orchestration_payload(discovery,campaign):
 def _run_campaign(data):
     campaign,error=_campaign_payload(data)
     if error:return None,"configuration",error["error"]
-    try:discovery=_smart_search(campaign["query"],campaign["territory"])
+    try:discovery=_smart_search(campaign["query"],campaign["territory"],runtime_budget=research_budget_seconds(campaign["target_count"]),target_count=campaign["target_count"])
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
     if not isinstance(discovery,dict):return None,"discovery","DISCOVERY_NOT_OBJECT"
+    if discovery.get("agent_error"):return None,"discovery","RESEARCH_AGENT_FAILED"
     if not isinstance(discovery.get("results",[]),list):return None,"discovery","DISCOVERY_RESULTS_NOT_LIST"
     try:discovery=enhance_discovery(discovery,campaign["query"],campaign["territory"])
     except Exception as exc:app.logger.exception("V11_EVIDENCE_UPGRADE_ERROR");return None,"verification",f"{type(exc).__name__}: {exc}"
@@ -52,18 +57,27 @@ def _run_campaign(data):
     visible=[]
     for result in discovery.get("results") or []:
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
-    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
+    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
 @app.route("/api/demo/campaigns/launch",methods=["POST"])
 def launch_demo_campaign():
-    payload,stage,reason=_run_campaign(request.get_json(silent=True) or {})
-    if payload:return jsonify(payload),200
-    return jsonify({"ok":False,"stage":stage,"reason":reason}),400 if stage=="configuration" else 500
+    campaign,error=_campaign_payload(request.get_json(silent=True) or {})
+    if error:return jsonify(error),400
+    return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
+
+@app.route("/api/demo/campaigns/jobs/<job_id>",methods=["GET"])
+def campaign_execution_status(job_id):
+    return execution_status(job_id)
+
 @app.route("/api/operator/v1-1-acceptance-once",methods=["POST"])
 def v11_acceptance_once():
+    return enqueue_execution("acceptance",{},request.headers.get("Idempotency-Key"))
+
+
+def _run_acceptance():
     started=datetime.now(timezone.utc).isoformat()
     # Search a bounded set of distinct discovery pools. A pool that only
     # rediscovers already-queued companies remains a truthful non-pass; the
@@ -130,4 +144,4 @@ def v11_acceptance_once():
     except Exception as exc:app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR");return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started,"attempts":attempts}),500
 @app.route("/demo",methods=["GET"])
 def customer_demo():
-    return Response('''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Automation AI — Customer Demo</title><style>:root{--panel:#0d1b2d;--line:#213653;--text:#f5f8ff;--muted:#9fb0c8;--accent:#66e3b4}*{box-sizing:border-box}body{margin:0;background:#07111f;color:var(--text);font-family:Inter,system-ui,sans-serif}.wrap{max-width:1100px;margin:auto;padding:32px 20px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:block;color:var(--muted);font-size:12px;font-weight:800;margin-bottom:6px}input,textarea{width:100%;background:#071321;border:1px solid #29415f;color:white;border-radius:11px;padding:12px}.wide{grid-column:1/-1}button{background:var(--accent);border:0;border-radius:11px;padding:13px 18px;font-weight:900}.muted{color:var(--muted)}@media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}</style></head><body><main class="wrap"><h1>Automation AI · V1.1</h1><p class="muted">Real campaign launch through the existing V1 verification, qualification and safe-send gates.</p><section class="card"><div class="grid"><div><label>TARGET CUSTOMER</label><input id="target" placeholder="e.g. law firms actively hiring paralegals"></div><div><label>TERRITORY</label><input id="territory" placeholder="Norfolk, Virginia"></div><div class="wide"><label>OFFER</label><textarea id="offer"></textarea></div><div><label>DAILY SENDING LIMIT</label><input id="limit" type="number" min="1" max="100" value="25"></div></div><p><button id="launch">LAUNCH CAMPAIGN</button></p><pre id="result" class="muted">Ready.</pre></section></main><script>const $=x=>document.getElementById(x);$('launch').onclick=async()=>{const b=$('launch');b.disabled=true;$('result').textContent='Running V1 pipeline…';try{const r=await fetch('/api/demo/campaigns/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_customer:$('target').value,territory:$('territory').value,offer:$('offer').value,sending_limit:$('limit').value})});$('result').textContent=JSON.stringify(await r.json(),null,2)}catch(e){$('result').textContent='Stopped safely: '+e.message}finally{b.disabled=false}}</script></body></html>''',mimetype="text/html")
+    return Response('''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Automation AI — Customer Demo</title><style>:root{--panel:#0d1b2d;--line:#213653;--text:#f5f8ff;--muted:#9fb0c8;--accent:#66e3b4}*{box-sizing:border-box}body{margin:0;background:#07111f;color:var(--text);font-family:Inter,system-ui,sans-serif}.wrap{max-width:1100px;margin:auto;padding:32px 20px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:block;color:var(--muted);font-size:12px;font-weight:800;margin-bottom:6px}input,textarea{width:100%;background:#071321;border:1px solid #29415f;color:white;border-radius:11px;padding:12px}.wide{grid-column:1/-1}button{background:var(--accent);border:0;border-radius:11px;padding:13px 18px;font-weight:900}.muted{color:var(--muted)}@media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}</style></head><body><main class="wrap"><h1>Automation AI · V1.1</h1><p class="muted">Real campaign launch through the existing V1 verification, qualification and safe-send gates.</p><section class="card"><div class="grid"><div><label>TARGET CUSTOMER</label><input id="target" placeholder="e.g. law firms actively hiring paralegals"></div><div><label>TERRITORY</label><input id="territory" placeholder="Norfolk, Virginia"></div><div class="wide"><label>OFFER</label><textarea id="offer"></textarea></div><div><label>DAILY SENDING LIMIT</label><input id="limit" type="number" min="1" max="100" value="25"></div></div><p><button id="launch">LAUNCH CAMPAIGN</button></p><pre id="result" class="muted">Ready.</pre></section></main><script>const $=x=>document.getElementById(x);$('launch').onclick=async()=>{const b=$('launch');b.disabled=true;$('result').textContent='Running V1 pipeline…';try{const r=await fetch('/api/demo/campaigns/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_customer:$('target').value,territory:$('territory').value,offer:$('offer').value,sending_limit:$('limit').value})});let data=await r.json();if(!r.ok)throw new Error(data.error||data.reason||'Campaign launch failed');while(data.status==='queued'||data.status==='running'){$('result').textContent='Researching and verifying prospects… '+data.status;await new Promise(resolve=>setTimeout(resolve,5000));const poll=await fetch(data.poll_url);if(!poll.ok)throw new Error('Could not read campaign status');data=await poll.json()}$('result').textContent=JSON.stringify(data.result||data,null,2)}catch(e){$('result').textContent='Stopped safely: '+e.message}finally{b.disabled=false}}</script></body></html>''',mimetype="text/html")

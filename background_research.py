@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from flask import jsonify, request
 from app import app, db
 from smart_search import _smart_search
+from src.research_policy import research_budget_seconds, research_target_count
 
 
 class ResearchJob(db.Model):
@@ -41,7 +42,7 @@ def process_next_research_job():
     db.session.commit()
     if not claimed:return {"ok":True,"processed":0}
     try:
-        budget=max(240,min(540,180+job.target_count*24))
+        budget=research_budget_seconds(job.target_count)
         result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
         job.result_json=json.dumps(result)
         job.status="failed" if result.get("agent_error") else "completed"
@@ -72,7 +73,7 @@ def create_research_job():
     data=request.get_json(silent=True) or {}
     query=str(data.get("query") or data.get("prompt") or "").strip()[:1000]
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
-    try:target=max(1,min(int(data.get("target_count") or 10),20))
+    try:target=research_target_count(data.get("target_count"))
     except (TypeError,ValueError):return jsonify({"error":"Result count must be a number."}),400
     if ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429
