@@ -123,3 +123,8 @@ def test_duration_crossing_clock_change_uses_real_elapsed_minutes(monkeypatch):
     monkeypatch.setenv("BOOKING_DURATION_MINUTES","30")
     proof=interpret_booking("March 10 2030 at 1:45 am America/New_York",NOW)
     assert proof["ready"] and proof["end"]=="2030-03-10T03:15:00-04:00"
+
+
+@pytest.mark.parametrize("zone",["america/los_angeles","UTC+3","HST"])
+def test_explicit_unresolved_timezone_never_falls_back_to_business_zone(zone):
+    assert not interpret_booking("January 10 2030 at 2 pm "+zone,NOW)["ready"]

@@ -4,7 +4,7 @@ from datetime import datetime,timedelta,timezone
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 
 ISO=re.compile(r"\b(20\d\d-\d\d-\d\dT\d\d:\d\d(?::\d\d)?(?:Z|[+-]\d\d:\d\d))\b")
-ZONE=re.compile(r"\b((?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?)\b")
+ZONE=re.compile(r"\b((?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc|US|Canada|Brazil|Mexico|Chile)/[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)?)\b",re.I)
 MONTHS="January February March April May June July August September October November December".split()
 BASE="Please send one full date including year (YYYY-MM-DD), one start time with AM/PM, and a timezone such as America/New_York. I'll check availability before confirming."
 
@@ -18,10 +18,12 @@ def interpret_booking(text,now=None):
         return {**empty,"ready":False,"reason":reason,"clarification":explanations.get(reason,"")+BASE}
     now=now or datetime.now(timezone.utc)
     zones=set(ZONE.findall(raw))
-    if re.search(r"\b(?:UTC|GMT)\b",raw):zones.add("UTC")
-    if re.search(r"\b(?:ET|Eastern(?: time)?)\b",raw,re.I):zones.add("America/New_York")
+    unscoped=ZONE.sub("",raw)
+    if re.search(r"\b(?:UTC|GMT)\s*[+-]\s*\d",unscoped,re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
+    if re.search(r"\b(?:UTC|GMT)\b",unscoped,re.I):zones.add("UTC")
+    if re.search(r"\b(?:ET|Eastern(?: time)?)\b",unscoped,re.I):zones.add("America/New_York")
     if len(zones)>1:return fail("MULTIPLE_TIMEZONES")
-    if re.search(r"\b(?:EST|EDT|PST|PDT|CST|CDT|MST|MDT|Pacific|Central|Mountain)\b(?!/)",raw,re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
+    if re.search(r"\b(?:EST|EDT|PST|PDT|CST|CDT|MST|MDT|HST|AKST|AKDT|BST|IST|CET|CEST|EET|JST|AST|ADT|Pacific|Central|Mountain)\b(?!/)",ZONE.sub("",raw),re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
     zone=next(iter(zones),os.getenv("BOOKING_TIMEZONE","America/New_York"))
     try:tz=ZoneInfo(zone)
     except (ValueError,ZoneInfoNotFoundError):return fail("INVALID_TIMEZONE")
