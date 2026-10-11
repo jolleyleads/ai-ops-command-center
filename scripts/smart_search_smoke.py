@@ -4,6 +4,11 @@ import os
 import time
 import urllib.parse
 import urllib.request
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.job_evidence import receipt_is_current, is_hiring_query, alternative_claim_allowed
+from src.record_evidence import record_receipt_is_current
 
 ORIGIN = "https://ai-ops-command-center.onrender.com"
 CASES = [
@@ -35,10 +40,12 @@ def wait_for_commit(expected, timeout=300):
     raise RuntimeError("Exact deployed commit was not ready")
 
 
-def validate_payload(payload, expected_intent):
+def validate_payload(payload, expected_intent, query="", location=""):
     errors = []
     if not isinstance(payload, dict):
         return ["response is not an object"]
+    query=query or payload.get("query") or ""
+    location=location or payload.get("location") or ""
     for field, expected in (("intent",expected_intent),("configured",True),("agent_mode",True),("verification_gate",True)):
         if payload.get(field) != expected:
             errors.append(f"{field}: expected {expected!r}, got {payload.get(field)!r}")
@@ -58,6 +65,12 @@ def validate_payload(payload, expected_intent):
             continue
         if not (row.get("title") or row.get("name") or row.get("company")):
             errors.append(f"result {i} has no display name")
+        company=row.get("candidate_name") or row.get("title") or row.get("company")
+        needs_job=expected_intent=="jobs" or row.get("classification")=="Verified Lead" and is_hiring_query(query) and not alternative_claim_allowed(query,row.get("verified_channels"))
+        if needs_job and not receipt_is_current(row.get("job_validation"),query,location,company=company):
+            errors.append(f"result {i} lacks current job evidence matching role, city and employer")
+        if (expected_intent=="permits" or "permit_license" in row.get("verified_channels",[])) and not record_receipt_is_current(row.get("record_validation"),query,location):
+            errors.append(f"result {i} lacks current record evidence matching city")
         if row.get("classification") == "Verified Lead":
             verified += 1
             urls = [row.get(k) for k in ("url","website","direct_url","source_url")]+list(row.get("supporting_urls") or [])
@@ -81,7 +94,7 @@ def main():
     for intent, query, location in CASES:
         try:
             payload = get_json(ORIGIN+"/api/test-smart-search?"+urllib.parse.urlencode({"query":query,"location":location}))
-            errors = validate_payload(payload, intent)
+            errors = validate_payload(payload, intent, query, location)
             print(json.dumps({"expected_intent":intent,"intent":payload.get("intent"),"count":payload.get("count"),"verified_count":payload.get("verified_count"),"provider_message":payload.get("provider_message"),"errors":errors}),flush=True)
             failed |= bool(errors)
         except Exception as exc:

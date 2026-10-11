@@ -27,7 +27,9 @@ def main():
     Path("acceptance.json").write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
     if state.get("status") != "completed" or result.get("ok") is not True or result.get("pass") is not True or result.get("stage") != "complete":
-        raise SystemExit("FAIL: no completed fresh-lead acceptance receipt")
+        reason=result.get("reason") or state.get("error") or "INCOMPLETE_ACCEPTANCE_RECEIPT"
+        stage=result.get("stage") or state.get("stage") or state.get("status") or "unknown"
+        raise SystemExit(f"FAIL: production acceptance stage={stage} reason={reason}; no completed fresh-lead receipt")
     print("PASS: V1.1 production acceptance complete")
 
 

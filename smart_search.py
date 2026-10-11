@@ -9,6 +9,7 @@ from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
 from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host, location_matches
 from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_current, requested_role_terms, is_hiring_query, requested_location, alternative_claim_allowed
+from src.record_evidence import check_record_evidence, record_receipt_is_current
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -147,7 +148,7 @@ def _page_snapshot(url):
 def _page(url):
     return _page_snapshot(url).get("page_text","")
 def _inspect(items,limit=5):
-    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (x.get("verification_research") and not x.get("directly_fetched") and (not shared_host(host(x["url"])) or x.get("verification_intents") and "hiring" in x["verification_intents"])))][:limit]
+    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (not x.get("directly_fetched") and (x.get("research_tool")=="public_records" or "permit_license" in (x.get("verification_intents") or []) or x.get("verification_research") and (not shared_host(host(x["url"])) or "hiring" in (x.get("verification_intents") or [])))))][:limit]
     if not targets:return
     with ThreadPoolExecutor(max_workers=min(5,len(targets))) as pool:
         fs={pool.submit(_page_snapshot,x["url"]):x for x in targets}
@@ -336,12 +337,15 @@ def _deterministic_need_verification(evidence,q,location=""):
         if "hiring" not in intents and not location_matches(text,location):continue
         job_check=check_job_evidence(item,q,location,candidate) if "hiring" in intents else None
         if job_check is not None:item["job_validation"]=job_check
+        record_check=check_record_evidence(item,q,location) if "permit_license" in intents else None
+        if record_check is not None:item["record_validation"]=record_check
         matched=[]
         for intent in intents:
             if intent=="hiring":
                 if job_check.get("ok"):matched.append(intent)
                 continue
             pattern=channel_patterns.get(intent)
+            if intent=="permit_license" and not record_check.get("ok"):continue
             if pattern and re.search(pattern,text,re.I|re.S):
                 if intent=="hiring" and not job_check.get("ok"):continue
                 if intent!="hiring" and (not plain_identity_supported or not location_matches(text,location)):continue
@@ -354,6 +358,7 @@ def _deterministic_need_verification(evidence,q,location=""):
         x["supporting_urls"]=[url];x["confidence"]="high"
         x["verified_channels"]=matched
         if job_check and "hiring" in matched:x["job_validation"]=job_check;x["job_title"]=job_check["job_title"];x["job_location"]=job_check["job_locations"];x["job_status"]=job_check["open_status"];x["published_at"]=job_check["date_posted"]
+        if record_check and "permit_license" in matched:x["record_validation"]=record_check;x["record_location"]=record_check["record_locations"];x["published_at"]=record_check["record_date"]
         x["evidence_basis"]="candidate-specific evidence matched requested claim channel: "+",".join(matched)
         out.append(x);seen.add(url)
     return out
@@ -370,7 +375,7 @@ def _verified_results(evidence,evaluation,q,location=""):
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
         if not entity or not claim or not supporting or item.get("rag_retrieved"):continue
         if _candidate_key(entity)!=_candidate_key(item.get("candidate_name")):continue
-        if is_hiring_query(q):
+        if is_hiring_query(q) or "permit_license" in _verification_intent(q):
             supported=_deterministic_need_verification([item],q,location)
             if not supported:continue
             # Model confidence cannot replace current job, role, city, or closure proof.
@@ -404,7 +409,8 @@ def rank_research_results(rows,limit=10,query="",location=""):
         text=" ".join(str(x.get(k) or "") for k in ("subtitle","verified_claim"))
         missing_review_date=age is None and "response_complaints" in x.get("verified_channels",[])
         invalid_job=is_hiring_query(query) and ("hiring" in x.get("verified_channels",[]) or not alternative_claim_allowed(query,x.get("verified_channels"))) and not receipt_is_current(x.get("job_validation"),query,location,company=x.get("candidate_name") or x.get("title"))
-        if invalid_job or missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
+        invalid_record="permit_license" in x.get("verified_channels",[]) and not record_receipt_is_current(x.get("record_validation"),query,location)
+        if invalid_job or invalid_record or missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
             verified=False;x.update(classification="Candidate",promotion_status="candidate",verification_gate="pending",evidence_basis="Requested current status requires fresh supporting evidence.")
         if verified:
             x.update(classification="Verified Lead",verification_gate="passed")
@@ -425,6 +431,7 @@ def _promoted_by_candidate(promoted):
     return out
 
 def _verification_gate(items,promoted,evaluation,query="",location="",evidence=None):
+    promoted=[v for v in promoted if "permit_license" not in v.get("verified_channels",[]) or record_receipt_is_current(v.get("record_validation"),query,location)]
     if is_hiring_query(query):
         promoted=[v for v in promoted if ("hiring" not in v.get("verified_channels",[]) and alternative_claim_allowed(query,v.get("verified_channels"))) or receipt_is_current(v.get("job_validation"),query,location,company=v.get("candidate_name") or v.get("title"))]
     promoted_candidates=_promoted_by_candidate(promoted)
@@ -444,6 +451,8 @@ def _verification_gate(items,promoted,evaluation,query="",location="",evidence=N
             x["verified_channels"]=list(dict.fromkeys(c for v in verified_sources for c in v.get("verified_channels",[])))
             job_checks=[v["job_validation"] for v in verified_sources if receipt_is_current(v.get("job_validation"),query,location,company=v.get("candidate_name") or v.get("title"))]
             if job_checks:x.update(job_validation=job_checks[0],job_title=job_checks[0]["job_title"],job_location=job_checks[0]["job_locations"],job_status=job_checks[0]["open_status"],published_at=job_checks[0]["date_posted"])
+            records=[v["record_validation"] for v in verified_sources if record_receipt_is_current(v.get("record_validation"),query,location)]
+            if records:x.update(record_validation=records[0],record_location=records[0]["record_locations"])
             x["evidence"]=[{"job_validation":v.get("job_validation"),"url":v.get("url"),"title":v.get("candidate_name"),"snippet":v.get("subtitle"),"observed_at":v.get("observed_at"),"published_at":v.get("published_at"),"verified_claim":v.get("verified_claim")} for v in verified_sources]
             x["current_status_guaranteed"]=False
             out.append(x);continue
@@ -453,6 +462,35 @@ def _verification_gate(items,promoted,evaluation,query="",location="",evidence=N
         if job_failures:x["job_verification_status"]="unverified";x["job_verification_reasons"]=list(dict.fromkeys(reason for check in job_failures for reason in check.get("reasons",[])))
         x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires candidate-specific supporting source evidence";out.append(x)
     return out
+
+
+def _scope_search_results(rows,query,location,evidence):
+    """Do not display unrelated job/record discovery as requested results."""
+    route=_deterministic_route_intent(query)
+    if is_hiring_query(query):route="jobs"
+    if route not in {"jobs","permits"}:return rows,[]
+    kept=[];excluded=[]
+    for item in rows:
+        row=dict(item)
+        if route=="jobs":
+            if row.get("classification")=="Verified Lead" and alternative_claim_allowed(query,row.get("verified_channels")):
+                kept.append(row);continue
+            proof=row.get("job_validation")
+            ok=receipt_is_current(proof,query,location,company=row.get("candidate_name") or row.get("title"))
+            reasons=(proof or {}).get("reasons") or row.get("job_verification_reasons") or ["current_role_and_city_job_evidence_required"]
+        else:
+            proof=row.get("record_validation")
+            if not record_receipt_is_current(proof,query,location):
+                source=next((s for s in evidence if s.get("url")==row.get("url")),row)
+                proof=check_record_evidence(source,query,location)
+            ok=record_receipt_is_current(proof,query,location)
+            reasons=(proof or {}).get("reasons") or ["current_record_and_city_evidence_required"]
+        if not ok:
+            excluded.append({"url":row.get("url"),"reasons":reasons});continue
+        row["relevance_status"]="source_matched"
+        if route=="permits":row.update(record_validation=proof,record_location=proof["record_locations"])
+        kept.append(row)
+    return kept,excluded
 
 def _fallback_candidates(discovery,limit=10):
     out=[];seen=set()
@@ -578,14 +616,19 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         visible=_verification_gate(discovery_visible,promoted,evaluation,q,loc,contact_evidence)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q,loc)
+        visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
         visible=_attach_source_contacts(visible,contact_evidence,loc)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
         provider_message=" ".join(dict.fromkeys(messages))
+        scope_summary={"relevance_gate":True,"excluded_result_count":len(excluded),"excluded_results":excluded,"availability_status":"matching_results" if visible else "no_confirmed_matches"}
+        answer_summary=evaluation.get("answer_summary") or ""
+        if is_hiring_query(q) or _deterministic_route_intent(q)=="permits":
+            answer_summary=f"{len(visible)} source-confirmed matches for the requested role or record and location." if visible else "No source-confirmed matches for the requested role or record and location."
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=deadline,"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":evaluation.get("answer_summary") or "","provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
+        return {**scope_summary,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=deadline,"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"intent":_deterministic_route_intent(q),"runtime_budget_seconds":runtime_budget,"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 

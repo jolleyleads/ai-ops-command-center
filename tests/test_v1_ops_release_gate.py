@@ -405,6 +405,10 @@ def test_universal_verifier_is_industry_agnostic(env,live_job_page):
     for query,name,proof in cases:
         evidence=[{"url":"https://example.com/proof","title":name,"subtitle":proof,"page_text":proof,"verification_research":True,"candidate_name":name}]
         if "hiring" in query:evidence=[live_job_page(company=name,title="Paralegal",url="https://example.com/jobs/1")]
+        if "permits" in query:
+            from datetime import datetime,timezone
+            date=datetime.now(timezone.utc).date().isoformat()
+            evidence=[live_job_page(company=name,title=name+" Permit 123",body=f'<h1>{name} Permit 123</h1><p>Project location: Norfolk, VA;</p><p>Date issued: {date}</p>')]
         promoted=ss._deterministic_need_verification(evidence,query)
         assert len(promoted)==1
         assert promoted[0]["verification_gate"]=="passed"
