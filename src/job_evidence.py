@@ -42,7 +42,7 @@ def requested_role_terms(query):
             role=before.group(1) if before else ""
     role=re.split(r"\b(?:in|near|around|with|that|or|include|exclude|rank)\b|[.;]",role,maxsplit=1)[0]
     stop={"find","show","list","me","a","an","and","the","for","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","open","now","today","remote","remotely","hybrid","companies","company","businesses","business","firms","firm"}
-    return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=3 or x=="ai") and x not in stop and not x.isdigit()][:10]
+    return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=3 or x in {"ai","ml","hr","it","qa","rn"}) and x not in stop and not x.isdigit()][:10]
 
 
 def requested_location(query, location=""):
@@ -58,6 +58,7 @@ def role_matches(title, terms):
     value=re.sub(r"\bml\b","machine learning",value)
     terms=["ai" if t=="artificial" and "intelligence" in terms else t for t in terms]
     terms=[t for t in terms if t!="intelligence" or "artificial" not in terms]
+    terms=[part for term in terms for part in (["machine","learning"] if term=="ml" else [term])]
     for term in terms:
         stem=term[:-1] if len(term)>4 and term.endswith("s") and not term.endswith(("ss","is")) else term
         if not re.search(r"\b"+re.escape(stem)+r"(?:s|es)?\b",value):return False

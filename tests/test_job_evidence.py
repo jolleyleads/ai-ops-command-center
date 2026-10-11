@@ -242,3 +242,12 @@ def test_undefined_verified_channel_cannot_bypass_job_guard_using_or_query(monke
     assert search.rank_research_results([row],query=query)[0]["classification"]=="Candidate"
     monkeypatch.delenv("EXA_API_KEY",raising=False)
     assert campaign.enhance_discovery({"results":[row]},query,"")["verified_count"]==0
+
+
+def test_ml_role_abbreviation_cannot_be_dropped(live_job_page):
+    assert check(live_job_page(now=NOW,title="Machine Learning Engineer"),query="ML engineer jobs in Norfolk, VA")["ok"]
+    assert not check(live_job_page(now=NOW,title="Software Engineer"),query="ML engineer jobs in Norfolk, VA")["ok"]
+
+
+def test_short_role_specialty_cannot_be_dropped(live_job_page):
+    assert not check(live_job_page(now=NOW,title="Sales Manager"),query="Find companies hiring HR managers in Norfolk, VA")["ok"]
