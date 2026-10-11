@@ -71,6 +71,10 @@ def _evidence_with_contact(result, email, email_source):
             item = dict(raw); item.setdefault("observed_at", observed); evidence.append(item)
     if email and email_source:
         evidence.append({"email": email, "url": email_source, "source": "verified_public_contact", "observed_at": observed,**(result.get("_contact_identity") or {})})
+    elif isinstance(result.get("_contact_enrichment"),dict):
+        enrichment=result["_contact_enrichment"]
+        source=(enrichment.get("fields",{}).get("email") or {}).get("source_url") or result.get("website") or result.get("url") or ""
+        evidence.append({"url":source,"source":"contact_validation_receipt","observed_at":observed,"enrichment":enrichment,"contact_assessment":enrichment.get("contact_assessment") or {},"contact_status":"no_validated_email"})
     return evidence
 
 

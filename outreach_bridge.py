@@ -195,7 +195,7 @@ def ingest_verified_results(search_payload):
         company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300);score=_evidence_score(result)
         if not company or score<QUEUE_MIN_SCORE or not _verified(result):continue
         target_location=_clean(search_payload.get("location") or result.get("contact_location") or result.get("location"),300)
-        result={**result,"contact_location":target_location}
+        result={**result,"contact_location":target_location,"query":search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent_signal") or result.get("query") or ""}
         summary["eligible"]+=1;urls=_candidate_urls(result);source_url=urls[0] if urls else ""
         base_evidence=result.get("evidence") or [result]
         enrichment=enrich_lead({"company_name":company,"target_location":target_location,"query":search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent_signal"),"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},base_evidence)

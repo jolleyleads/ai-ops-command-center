@@ -230,3 +230,29 @@ def test_campaign_skips_disallowed_inbox_without_losing_allowed_company_contact(
     monkeypatch.setattr(v1,'_public_contact_evidence',lambda result:([source('Acme Norfolk VA careers@acme.com info@acme.com')],{}))
     monkeypatch.setattr(dns.resolver,'resolve',lambda *a,**k:[SimpleNamespace(exchange='mail.acme.com.',preference=10)])
     assert v1._verified_public_email({'company':'Acme','website':'https://acme.com','contact_location':'Norfolk VA'})[0]=='info@acme.com'
+
+
+def test_bridge_passes_search_request_to_contact_probe(monkeypatch):
+    import outreach_bridge as bridge
+    seen=[]
+    monkeypatch.setattr(bridge,'OutreachLead',SimpleNamespace(query=SimpleNamespace(filter_by=lambda **k:SimpleNamespace(first=lambda:None))))
+    def probe(result):seen.append(result);return [],{}
+    monkeypatch.setattr(bridge,'_public_contact_evidence',probe)
+    query='companies hiring AI automation engineers'
+    bridge.ingest_verified_results({'query':query,'location':'Norfolk VA','results':[{'company':'Acme','website':'https://acme.com','location':'Norfolk VA','intent_score':80,'verification':'VERIFIED','evidence':[source('Acme Norfolk VA')]}]})
+    assert seen[0]['query']==query and seen[0]['contact_location']=='Norfolk VA'
+
+
+def test_rejected_mail_domain_receipt_persists_when_no_email_is_selected(monkeypatch):
+    import v1_orchestration as v1
+    monkeypatch.setattr(v1,'_public_contact_evidence',lambda result:([source('Acme Norfolk VA info@acme.com')],{}))
+    monkeypatch.setattr(dns.resolver,'resolve',lambda *a,**k:[SimpleNamespace(exchange='.',preference=0)])
+    result={'company':'Acme','website':'https://acme.com','contact_location':'Norfolk VA'}
+    email,url=v1._verified_public_email(result)
+    assert (email,url)==('','')
+    evidence=v1._evidence_with_contact(result,email,url)
+    receipt=next(e for e in evidence if e.get('source')=='contact_validation_receipt')
+    assert receipt['url']=='https://acme.com/team'
+    assert receipt['contact_assessment']['email_validation']['reason_codes']==['NULL_MX']
+    assert receipt['contact_assessment']['email_validation']['checked_at']
+    assert receipt['enrichment']['fields']['email']['validated'] is False
