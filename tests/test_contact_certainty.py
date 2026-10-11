@@ -267,3 +267,16 @@ def test_city_overlap_is_not_proof_of_hiring_responsibility():
 def test_technical_work_alone_does_not_establish_hiring_authority():
     result=enrich_lead(lead(),[source('Acme Norfolk VA Jane Doe, CEO. Responsible for automation testing. jane@acme.com')])
     assert 'decision_maker' not in result['fields']
+
+
+@pytest.mark.parametrize('term',['job openings','careers','jobs'])
+def test_explicit_hiring_responsibility_uses_same_terms_as_query(term):
+    result=enrich_lead(lead(query=f'companies with {term} for AI engineers'),[source(f'Acme Norfolk VA Jane Doe, CEO. Oversees {term} for AI engineers. jane@acme.com')])
+    assert result['contact_assessment']['decision_maker_status']=='source_supported'
+    assert result['fields']['decision_maker']['value']=='Jane Doe'
+
+
+def test_staffing_company_type_does_not_replace_requested_callback_need():
+    result=enrich_lead(lead(query='staffing companies with poor callback responses'),[source('Acme Norfolk VA Jane Doe, CEO. jane@acme.com')])
+    assert result['contact_assessment']['decision_maker_status']=='source_supported'
+    assert result['decision_maker_candidates'][0]['responsibility_basis']=='business_function_title'
