@@ -42,9 +42,10 @@ def test_other_company_evidence_cannot_promote_candidate():
     assert result[0]["classification"]=="Candidate"
 
 
-def test_candidate_specific_verification_promotes_requested_claim(monkeypatch):
+def test_candidate_specific_verification_promotes_requested_claim(monkeypatch,live_job_page):
     import smart_search
     monkeypatch.setattr(smart_search, "_exa_search", lambda q,loc="": {"results":[{"title":"ACME hiring","url":"https://jobs.example/acme","subtitle":"We are hiring project coordinators.","page_text":"ACME Construction is hiring project coordinators now.","source":"Exa"}],"message":"","source":"Exa"})
+    monkeypatch.setattr(smart_search,"_page_snapshot",lambda url:live_job_page(company="ACME Construction",title="Project Coordinator",url=url))
     query="find construction companies actively hiring project coordinators"
     rows,msg,used=smart_search._candidate_followups(query,"",[{"name":"ACME Construction","discovery_urls":["https://places.example/acme"]}],10**12,1)
     promoted=smart_search._deterministic_need_verification(rows,query)
@@ -114,15 +115,17 @@ def test_active_projects_get_project_verification_plan():
     assert "project" in joined
     assert "permit" in joined
 
-def test_hvac_hiring_requires_candidate_specific_source_evidence():
+def test_hvac_hiring_requires_candidate_specific_source_evidence(live_job_page):
     import smart_search
     q="Find HVAC companies in Virginia Beach that are currently hiring technicians."
     discovery_only=[{"title":"Coastal HVAC","url":"https://places.example/coastal","subtitle":"HVAC services in Virginia Beach"}]
     assert smart_search._deterministic_need_verification(discovery_only,q)==[]
     evidence=[{"candidate_name":"Coastal HVAC","verification_research":True,"url":"https://coastal.example/careers","title":"Coastal HVAC Careers","subtitle":"We are hiring HVAC technicians now.","page_text":""}]
-    promoted=smart_search._deterministic_need_verification(evidence,q)
+    assert smart_search._deterministic_need_verification(evidence,q)==[]
+    current=live_job_page(company="Coastal HVAC",title="HVAC Technician",city="Virginia Beach",url="https://coastal.example/jobs/1")
+    promoted=smart_search._deterministic_need_verification([current],q)
     assert len(promoted)==1
-    assert promoted[0]["supporting_urls"]==["https://coastal.example/careers"]
+    assert promoted[0]["supporting_urls"]==["https://coastal.example/jobs/1"]
 
 
 def test_failed_receipt_cannot_advance_workflow():

@@ -7,10 +7,16 @@ from app import app
 from research_agent import plan_research,recover_tool_plan,evaluate_research,extract_candidates
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
-from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host
+from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host, location_matches
+from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_current, requested_role_terms, is_hiring_query, requested_location, alternative_claim_allowed
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
+def _source_summary(item):
+    row=dict(item)
+    for key in ("page_text","job_detail_text","source_job_postings","source_apply_controls"):row.pop(key,None)
+    return row
+
 def _dedupe(items):
     out=[];seen={}
     for x in items:
@@ -135,13 +141,13 @@ def _page_snapshot(url):
         if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return {}
         r=requests.get(url,timeout=2,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/11.0"},allow_redirects=True)
         if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
-        raw=r.text[:100000];metadata=page_metadata(raw)
-        return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True}
+        raw=r.text[:100000];metadata={**page_metadata(raw),**job_page_metadata(raw,r.url)}
+        return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True,"http_status":r.status_code,"job_page_fetched_at":datetime.now(timezone.utc).isoformat()}
     except Exception:return {}
 def _page(url):
     return _page_snapshot(url).get("page_text","")
 def _inspect(items,limit=5):
-    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (x.get("verification_research") and not x.get("directly_fetched") and not shared_host(host(x["url"]))))][:limit]
+    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (x.get("verification_research") and not x.get("directly_fetched") and (not shared_host(host(x["url"])) or x.get("verification_intents") and "hiring" in x["verification_intents"])))][:limit]
     if not targets:return
     with ThreadPoolExecutor(max_workers=min(5,len(targets))) as pool:
         fs={pool.submit(_page_snapshot,x["url"]):x for x in targets}
@@ -183,7 +189,7 @@ def _verification_intent(q):
     """Classify claim channels generically; industry names never change verification rules."""
     ql=_clean(q,1200).lower()
     intents=[]
-    if re.search(r"\b(?:hiring|hire|jobs?|careers?|open(?:ing)?s?|seeking|recruiting)\b",ql):
+    if is_hiring_query(q):
         intents.append("hiring")
     if re.search(r"\b(?:unanswered|callbacks?|call\s*backs?|missed calls?|slow responses?|reviews?)\b",ql):
         intents.append("response_complaints")
@@ -204,12 +210,7 @@ def _needs_candidate_verification(q):
 
 
 def _requested_role_terms(q):
-    ql=_clean(q,1200).lower()
-    m=re.search(r"\b(?:actively\s+)?(?:hiring|hire|seeking|recruiting)\b(.*)",ql)
-    if not m:return []
-    stop={"a","an","and","or","the","for","with","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","now","today"}
-    role=re.split(r"\b(?:in|near|around|with|that|or|include|rank)\b",m.group(1),maxsplit=1)[0]
-    return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=4 or x=="ai") and x not in stop][:8]
+    return requested_role_terms(q)
 
 
 def _verification_queries(name,q,intents=None):
@@ -329,33 +330,36 @@ def _deterministic_need_verification(evidence,q,location=""):
             continue
         # A search query's candidate label does not establish source identity.
         identity_terms=[t for t in re.findall(r"[a-z0-9]+",candidate.lower()) if t not in {"inc","llc","ltd","the","company"}]
-        if not identity_terms or not all(re.search(rf"\b{re.escape(t)}\b",text) for t in identity_terms):
+        plain_identity_supported=bool(identity_terms and all(re.search(rf"\b{re.escape(t)}\b",text) for t in identity_terms))
+        if "hiring" not in intents and not plain_identity_supported:
             continue
-        location_terms=re.findall(r"[a-z0-9]+",location.lower())
-        if location_terms and not all(re.search(rf"\b{re.escape(t)}\b",text) for t in location_terms):
-            continue
+        if "hiring" not in intents and not location_matches(text,location):continue
+        job_check=check_job_evidence(item,q,location,candidate) if "hiring" in intents else None
+        if job_check is not None:item["job_validation"]=job_check
         matched=[]
         for intent in intents:
+            if intent=="hiring":
+                if job_check.get("ok"):matched.append(intent)
+                continue
             pattern=channel_patterns.get(intent)
             if pattern and re.search(pattern,text,re.I|re.S):
-                if intent=="hiring" and re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text):continue
-                if intent=="hiring" and role_terms:
-                    if not all(re.search(rf"\b{re.escape(term[:-1] if term.endswith('s') else term)}(?:s|es)?\b",text,re.I) for term in role_terms):
-                        continue
+                if intent=="hiring" and not job_check.get("ok"):continue
+                if intent!="hiring" and (not plain_identity_supported or not location_matches(text,location)):continue
                 matched.append(intent)
-        if not matched:
+        if not matched or ("hiring" in intents and "hiring" not in matched and not alternative_claim_allowed(q,matched)):
             continue
-        x=dict(item);x.pop("page_text",None);x["candidate_name"]=candidate;x["title"]=candidate
+        x=_source_summary(item);x["candidate_name"]=candidate;x["title"]=candidate
         x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed"
         x["verified_claim"]="Candidate-specific source evidence supports the requested claim."
         x["supporting_urls"]=[url];x["confidence"]="high"
         x["verified_channels"]=matched
+        if job_check and "hiring" in matched:x["job_validation"]=job_check;x["job_title"]=job_check["job_title"];x["job_location"]=job_check["job_locations"];x["job_status"]=job_check["open_status"];x["published_at"]=job_check["date_posted"]
         x["evidence_basis"]="candidate-specific evidence matched requested claim channel: "+",".join(matched)
         out.append(x);seen.add(url)
     return out
 
 
-def _verified_results(evidence,evaluation,q):
+def _verified_results(evidence,evaluation,q,location=""):
     by_url={_clean(x.get("url"),1600):x for x in evidence if _clean(x.get("url"),1600)}
     out=[];seen=set()
     for verdict in evaluation.get("verified_results") or []:
@@ -366,7 +370,12 @@ def _verified_results(evidence,evaluation,q):
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
         if not entity or not claim or not supporting or item.get("rag_retrieved"):continue
         if _candidate_key(entity)!=_candidate_key(item.get("candidate_name")):continue
-        x=dict(item);x.pop("page_text",None);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
+        if is_hiring_query(q):
+            supported=_deterministic_need_verification([item],q,location)
+            if not supported:continue
+            # Model confidence cannot replace current job, role, city, or closure proof.
+            out.extend(supported);seen.add(url);continue
+        x=_source_summary(item);x["candidate_name"]=_clean(item.get("candidate_name"),300);x["title"]=entity;x["verified_claim"]=claim;x["supporting_urls"]=supporting;x["confidence"]=_clean(verdict.get("confidence"),20) or "medium";x["promotion_status"]="verified";x["evidence_basis"]="candidate-specific requested claim semantically verified from supplied evidence";seen.add(url);out.append(x)
     annotate_evidence(out,q)
     return out
 
@@ -374,7 +383,7 @@ def _candidate_key(name):
     return re.sub(r"[^a-z0-9]+","",_clean(name,300).lower())
 
 
-def rank_research_results(rows,limit=10,query=""):
+def rank_research_results(rows,limit=10,query="",location=""):
     """Rank distinct companies by supported claims and dated evidence."""
     by_company={}
     now=datetime.now(timezone.utc)
@@ -394,7 +403,8 @@ def rank_research_results(rows,limit=10,query=""):
         verified=x.get("promotion_status")=="verified"
         text=" ".join(str(x.get(k) or "") for k in ("subtitle","verified_claim"))
         missing_review_date=age is None and "response_complaints" in x.get("verified_channels",[])
-        if missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
+        invalid_job=is_hiring_query(query) and ("hiring" in x.get("verified_channels",[]) or not alternative_claim_allowed(query,x.get("verified_channels"))) and not receipt_is_current(x.get("job_validation"),query,location,company=x.get("candidate_name") or x.get("title"))
+        if invalid_job or missing_review_date or (age is not None and (age<0 or age>180)) or re.search(r"\b(?:position filled|no longer accepting|job closed|applications closed)\b",text,re.I):
             verified=False;x.update(classification="Candidate",promotion_status="candidate",verification_gate="pending",evidence_basis="Requested current status requires fresh supporting evidence.")
         if verified:
             x.update(classification="Verified Lead",verification_gate="passed")
@@ -414,13 +424,15 @@ def _promoted_by_candidate(promoted):
         if key:out.setdefault(key,[]).append(item)
     return out
 
-def _verification_gate(items,promoted,evaluation):
+def _verification_gate(items,promoted,evaluation,query="",location="",evidence=None):
+    if is_hiring_query(query):
+        promoted=[v for v in promoted if ("hiring" not in v.get("verified_channels",[]) and alternative_claim_allowed(query,v.get("verified_channels"))) or receipt_is_current(v.get("job_validation"),query,location,company=v.get("candidate_name") or v.get("title"))]
     promoted_candidates=_promoted_by_candidate(promoted)
     rejected_urls={_clean(x.get("url"),1600) for x in (evaluation.get("rejected_results") or []) if isinstance(x,dict) and _clean(x.get("url"),1600)}
     relevant_urls={_clean(u,1600) for u in (evaluation.get("relevant_urls") or []) if _clean(u,1600)}
     out=[]
     for item in items:
-        x=dict(item);x.pop("page_text",None);url=_clean(x.get("url"),1600)
+        x=_source_summary(item);url=_clean(x.get("url"),1600)
         name=_clean(x.get("candidate_name") or x.get("title") or x.get("name"),300)
         verified_sources=promoted_candidates.get(_candidate_key(name),[])
         if verified_sources:
@@ -430,11 +442,15 @@ def _verification_gate(items,promoted,evaluation):
                 if _clean(v.get("verified_claim"),1200):claims.append(_clean(v.get("verified_claim"),1200))
             x["classification"]="Verified Lead";x["promotion_status"]="verified";x["verification_gate"]="passed";x["verified_claim"]=claims[0] if claims else "Candidate-specific verification evidence passed the deterministic gate.";x["supporting_urls"]=list(dict.fromkeys(u for u in supporting if u));x["evidence_basis"]="candidate-specific verification evidence deterministically joined to discovery identity"
             x["verified_channels"]=list(dict.fromkeys(c for v in verified_sources for c in v.get("verified_channels",[])))
-            x["evidence"]=[{"url":v.get("url"),"title":v.get("candidate_name"),"snippet":v.get("subtitle"),"observed_at":v.get("observed_at"),"published_at":v.get("published_at"),"verified_claim":v.get("verified_claim")} for v in verified_sources]
+            job_checks=[v["job_validation"] for v in verified_sources if receipt_is_current(v.get("job_validation"),query,location,company=v.get("candidate_name") or v.get("title"))]
+            if job_checks:x.update(job_validation=job_checks[0],job_title=job_checks[0]["job_title"],job_location=job_checks[0]["job_locations"],job_status=job_checks[0]["open_status"],published_at=job_checks[0]["date_posted"])
+            x["evidence"]=[{"job_validation":v.get("job_validation"),"url":v.get("url"),"title":v.get("candidate_name"),"snippet":v.get("subtitle"),"observed_at":v.get("observed_at"),"published_at":v.get("published_at"),"verified_claim":v.get("verified_claim")} for v in verified_sources]
             x["current_status_guaranteed"]=False
             out.append(x);continue
         if url in rejected_urls or (relevant_urls and url not in relevant_urls):
             x["classification"]="Rejected";x["promotion_status"]="rejected";x["verification_gate"]="failed";x["evidence_basis"]="rejected: evidence does not support the requested lead claim";out.append(x);continue
+        job_failures=[r.get("job_validation") for r in evidence or [] if _candidate_key(r.get("candidate_name"))==_candidate_key(name) and r.get("job_validation") and not r["job_validation"].get("ok")]
+        if job_failures:x["job_verification_status"]="unverified";x["job_verification_reasons"]=list(dict.fromkeys(reason for check in job_failures for reason in check.get("reasons",[])))
         x["classification"]="Candidate";x["promotion_status"]="candidate";x["verification_gate"]="pending";x["evidence_basis"]="discovery evidence only; requested claim still requires candidate-specific supporting source evidence";out.append(x)
     return out
 
@@ -475,6 +491,7 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
             for x in rows:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows)
+        if "hiring" in intents and time.monotonic()<deadline-3:_inspect(candidate_rows,5)
         # Irrelevant Exa hits are not success. Try the other provider for missing proof.
         if not _deterministic_need_verification(candidate_rows,q,loc) and time.monotonic()<deadline-20:
             verify_query=queries[0]
@@ -486,6 +503,7 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     return _dedupe(evidence),messages,tools
 
 def _smart_search(q,loc,runtime_budget=25,target_count=10):
+    if is_hiring_query(q):loc=requested_location(q,loc)
     runtime_budget=max(8,min(int(runtime_budget or 25),540))
     target_count=max(1,min(int(target_count or 10),20))
     started=time.monotonic();deadline=started+runtime_budget;messages=[];tools=[]
@@ -550,16 +568,16 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
                 x["evidence_basis"]="source-backed candidate; semantic verification unavailable"
         try:remember_evidence([x for x in evidence if not x.get("rag_retrieved") and (x.get("page_text") or x.get("subtitle"))])
         except Exception:app.logger.exception("RAG_PERSIST_ERROR")
-        promoted=_verified_results(evidence,evaluation,q) if evaluation else []
+        promoted=_verified_results(evidence,evaluation,q,loc) if evaluation else []
         deterministic_promoted=_deterministic_need_verification(evidence,q,loc)
         if deterministic_promoted:
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
         discovery_visible=_company_discovery_rows(candidates,discovery) if _needs_candidate_verification(q) else discovery[:10]
-        visible=_verification_gate(discovery_visible,promoted,evaluation)
+        visible=_verification_gate(discovery_visible,promoted,evaluation,q,loc,contact_evidence)
         if runtime_budget>25:
-            visible=rank_research_results(visible+promoted,target_count,q)
+            visible=rank_research_results(visible+promoted,target_count,q,loc)
         visible=_attach_source_contacts(visible,contact_evidence,loc)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")

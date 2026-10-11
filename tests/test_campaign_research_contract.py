@@ -120,17 +120,26 @@ def test_smoke_rejects_failures_not_just_label_mismatches(bad):
     assert validate_payload({**valid,**bad},"jobs")
 
 
-def test_campaign_gap_fill_preserves_full_verified_count():
+def test_campaign_gap_fill_preserves_full_verified_count(live_job_page):
     from v11_evidence_upgrade import enhance_discovery
-    rows=[{"title":f"Company {i}","classification":"Verified Lead"} for i in range(20)]
-    result=enhance_discovery({"results":rows,"verified_count":20,"target_count":20,"target_met":True},"companies hiring engineers","VA")
+    from src.job_evidence import check_job_evidence
+    rows=[]
+    for i in range(20):
+        name=f"Company {i}";source=live_job_page(company=name,title="Engineer")
+        proof=check_job_evidence(source,"companies hiring engineers","Norfolk, VA",name)
+        assert proof["ok"]
+        rows.append({"title":name,"classification":"Verified Lead","job_validation":proof})
+    result=enhance_discovery({"results":rows,"verified_count":20,"target_count":20,"target_met":True},"companies hiring engineers","Norfolk, VA")
     assert result["verified_count"]==20 and result["target_met"] is True
 
 
-def test_campaign_gap_fill_updates_target_after_grounded_promotion(monkeypatch):
+def test_campaign_gap_fill_updates_target_after_grounded_promotion(monkeypatch,live_job_page):
     import v11_evidence_upgrade as upgrade
-    monkeypatch.setattr(upgrade,"_proof",lambda *a:({"url":"https://acme.example/careers","source":"Official careers"},["https://acme.example/careers"]))
-    result=upgrade.enhance_discovery({"results":[{"title":"Acme","classification":"Candidate"}],"verified_count":0,"target_count":1,"target_met":False},"companies hiring engineers","VA")
+    import smart_search as engine
+    row=live_job_page(title="Engineer")
+    monkeypatch.setattr(engine,"_page_snapshot",lambda url:row)
+    monkeypatch.delenv("EXA_API_KEY",raising=False)
+    result=upgrade.enhance_discovery({"results":[{"title":"Acme","classification":"Candidate","url":row["url"]}],"verified_count":0,"target_count":1,"target_met":False},"companies hiring engineers","Norfolk, VA")
     assert result["verified_count"]==1 and result["target_met"] is True
 
 
