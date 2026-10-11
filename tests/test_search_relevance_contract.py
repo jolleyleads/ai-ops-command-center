@@ -112,3 +112,10 @@ def test_malformed_record_receipt_url_fails_without_exception(live_job_page):
     proof=check_record_evidence(record(live_job_page),"permits","Norfolk, VA")
     proof["source_url"]="https://["
     assert not record_receipt_is_current(proof,"permits","Norfolk, VA")
+
+
+def test_production_acceptance_polling_import_needs_no_application_packages():
+    import subprocess,sys
+    from pathlib import Path
+    result=subprocess.run([sys.executable,"-S","-c","from scripts.campaign_acceptance import acceptance_request_key; assert acceptance_request_key({'GITHUB_SHA':'sha','GITHUB_RUN_ID':'id','GITHUB_RUN_ATTEMPT':'1'}) == 'acceptance-sha-id-1'"],cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr

@@ -7,8 +7,6 @@ import urllib.request
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.job_evidence import receipt_is_current, is_hiring_query, alternative_claim_allowed
-from src.record_evidence import record_receipt_is_current
 
 ORIGIN = "https://ai-ops-command-center.onrender.com"
 CASES = [
@@ -41,6 +39,9 @@ def wait_for_commit(expected, timeout=300):
 
 
 def validate_payload(payload, expected_intent, query="", location=""):
+    # Campaign polling reuses HTTP helpers without importing application deps.
+    from src.job_evidence import receipt_is_current, is_hiring_query, alternative_claim_allowed
+    from src.record_evidence import record_receipt_is_current
     errors = []
     if not isinstance(payload, dict):
         return ["response is not an object"]
