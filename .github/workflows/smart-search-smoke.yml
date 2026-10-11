@@ -18,5 +18,7 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - name: Install evidence receipt parser dependency
+        run: python -m pip install 'tldextract>=5.1,<6'
       - name: Validate exact deployed Smart Search contract
         run: python scripts/smart_search_smoke.py
