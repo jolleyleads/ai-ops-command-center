@@ -112,8 +112,10 @@ def test_evaluator_sees_company_proof_after_large_job_feed(monkeypatch):
 
 
 def test_contacts_require_company_bound_source_and_remain_unconfirmed():
+    from datetime import datetime,timezone
     rows=[dict(title="Acme",candidate_name="Acme")]
     evidence=[dict(candidate_name="Acme",title="Other firm",page_text="Other firm email other@example.com",url="https://other.example"),dict(candidate_name="Acme",title="Acme contact",page_text="Acme email info@acme.example",url="https://acme.example/contact")]
+    for row in evidence:row.update(directly_fetched=True,http_status=200,observed_at=datetime.now(timezone.utc).isoformat())
     result=search._attach_source_contacts(rows,evidence)[0]
     assert [c["email"] for c in result["contacts"]]==["info@acme.example"]
     assert result["contacts"][0]["source_url"]=="https://acme.example/contact"
@@ -134,6 +136,8 @@ def test_provider_deadline_keeps_fast_evidence_without_waiting_for_stalled_call(
 
 
 def test_candidate_timeout_falls_back_to_web_and_retains_contact_source(monkeypatch):
+    from datetime import datetime,timezone
+    monkeypatch.setattr(search,"_page_snapshot",lambda url:dict(page_text="Acme hiring engineers. Apply now. Email info@acme.example or call (757) 555-1234.",directly_fetched=True,http_status=200,observed_at=datetime.now(timezone.utc).isoformat()))
     monkeypatch.setattr(search,"_exa_search",lambda *a:{"results":[],"message":"Exa Search failed: ReadTimeout."})
     monkeypatch.setattr(search,"_web_search",lambda *a:{"results":[dict(title="Acme contact",url="https://acme.example/contact",page_text="Acme hiring engineers. Apply now. Email info@acme.example or call (757) 555-1234.")],"message":""})
     rows,msg,used=search._candidate_followups("Find companies hiring engineers","",[dict(name="Acme",discovery_urls=[])],10**12,1)

@@ -13,7 +13,7 @@ from src.enrichment import enrich_lead, validated_payload
 
 
 def evidence(name, url, text, **extra):
-    return dict(candidate_name=name, url=url, title=name, page_text=text,
+    return dict(candidate_name=name, url=url, title=name, page_text=text,directly_fetched=True,http_status=200,
                 observed_at=datetime.now(timezone.utc).isoformat(), **extra)
 
 

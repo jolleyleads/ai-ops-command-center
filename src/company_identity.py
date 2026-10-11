@@ -11,9 +11,23 @@ import json
 import re
 from urllib.parse import urlparse
 import tldextract
+from datetime import datetime, timedelta, timezone
 
 # Use the packaged Public Suffix List; production checks never fetch a list.
 _extract_domain=tldextract.TLDExtract(suffix_list_urls=(),cache_dir=None,include_psl_private_domains=True)
+
+
+def current_contact_source(row, now=None):
+    """Only directly fetched, recent page content can establish a contact."""
+    if row.get("rag_retrieved") or row.get("directly_fetched") is not True or row.get("http_status")!=200:
+        return False
+    try:
+        checked=datetime.fromisoformat(str(row.get("observed_at") or "").replace("Z","+00:00"))
+        if checked.tzinfo is None:return False
+        now=now or datetime.now(timezone.utc)
+        return now-timedelta(hours=1)<=checked<=now+timedelta(minutes=5) and bool(row.get("page_text") or row.get("text"))
+    except (TypeError,ValueError):
+        return False
 
 SHARED_HOSTS = frozenset({
     "linkedin.com", "facebook.com", "google.com", "maps.google.com", "yelp.com",

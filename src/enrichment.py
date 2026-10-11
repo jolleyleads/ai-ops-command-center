@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, Iterable
 from urllib.parse import urlparse
 from src.company_identity import identity_proof, host, owned_host, email_on_domain, contact_context_matches
+from src.company_identity import current_contact_source
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 PHONE_RE=re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
@@ -40,11 +41,12 @@ def _evidence_rows(rows:Iterable[Dict[str,Any]],company:str):
     key=_company_key(company)
     for row in rows or []:
         if not isinstance(row,dict):continue
+        if not current_contact_source(row):continue
         candidate=_clean(row.get("candidate_name") or row.get("company_name") or row.get("company"),300)
         if candidate and _company_key(candidate)!=key:continue
         u=_url(row.get("url") or row.get("source_url"))
         if not u:continue
-        text=" ".join(_clean(row.get(k),8000) for k in ("title","subtitle","page_text","snippet","text"))
+        text=_clean(row.get("page_text") or row.get("text"),120000)
         yield row,u,text
 
 def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[str,Any]:
@@ -84,27 +86,11 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
                     out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True};break
         if "decision_maker" not in out["fields"]:
             # Require a title plus a nearby human-looking two-word name in the same source.
-            tm=TITLE_RE.search(text)
-            if tm:
-                window=text[max(0,tm.start()-100):min(len(text),tm.end()+100)]
-                names=re.findall(r"\b([A-Z][a-z]{1,30}\s+[A-Z][a-z]{1,30})\b",window)
-                names=[n for n in names if n.lower() not in {"Virginia Beach","United States"}]
-                if names:
-                    out["fields"]["decision_maker"]={"value":names[0],"title":tm.group(1),"source_url":u,"validated":True}
+            roles="(?i:"+TITLE_RE.pattern.replace("(?i)","").replace(r"\b","")+")"
+            pair=re.search(r"\b([A-Z][a-z]{1,30}\s+[A-Z][a-z]{1,30})\s*[,|:\-]\s*("+roles+r")\b",text)
+            if pair and _company_key(pair.group(1)) not in _company_key(company) and contact_context_matches(text,pair.group(1),location):
+                out["fields"]["decision_maker"]={"value":pair.group(1),"title":pair.group(2),"source_url":u,"validated":True}
         out["evidence"].append({"url":u,"title":_clean(row.get("title"),500),"snippet":_clean(row.get("subtitle") or row.get("snippet"),1500)})
-
-    # Existing phone/email may pass only when evidence text actually contains the value.
-    existing_phone=_phone(lead.get("phone"))
-    if existing_phone and "phone" not in out["fields"]:
-        digits=re.sub(r"\D","",existing_phone)[-10:]
-        for row,u,text in rows:
-            if digits and digits in re.sub(r"\D","",text) and not location:
-                out["fields"]["phone"]={"value":existing_phone,"source_url":u,"validated":True};break
-    existing_email=_email(lead.get("email") or lead.get("contact_email"))
-    if existing_email and "email" not in out["fields"]:
-        for row,u,text in rows:
-            if existing_email.lower() in text.lower() and email_on_domain(existing_email,website) and contact_context_matches(text,existing_email,location):
-                out["fields"]["email"]={"value":existing_email,"source_url":u,"validated":True};break
 
     out["evidence"]=list({x["url"]:x for x in out["evidence"]}.values())
     out["validated"]=bool(out["fields"]) and all(v.get("validated") and _url(v.get("source_url")) for v in out["fields"].values())
