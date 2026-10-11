@@ -223,3 +223,10 @@ def test_apostrophe_in_sourced_name_is_preserved():
     result=enrich_lead(lead(),[source("Acme Norfolk VA Mary O'Neill, Hiring Manager. mary.oneill@acme.com")])
     assert result['fields']['decision_maker']['value']=="Mary O'Neill"
     assert result['contact_assessment']['email_person_status']=='same_source_card'
+
+
+def test_campaign_skips_disallowed_inbox_without_losing_allowed_company_contact(monkeypatch):
+    import v1_orchestration as v1
+    monkeypatch.setattr(v1,'_public_contact_evidence',lambda result:([source('Acme Norfolk VA careers@acme.com info@acme.com')],{}))
+    monkeypatch.setattr(dns.resolver,'resolve',lambda *a,**k:[SimpleNamespace(exchange='mail.acme.com.',preference=10)])
+    assert v1._verified_public_email({'company':'Acme','website':'https://acme.com','contact_location':'Norfolk VA'})[0]=='info@acme.com'

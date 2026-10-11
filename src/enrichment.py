@@ -50,7 +50,7 @@ def _evidence_rows(rows:Iterable[Dict[str,Any]],company:str):
         text=str(row.get("page_text") or row.get("text") or "")[:120000]
         yield row,u,text
 
-def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[str,Any]:
+def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]], *, email_allowed=None)->Dict[str,Any]:
     """Validate source-backed enrichment. No LLM-generated field is accepted as proof."""
     company=_clean(lead.get("company_name") or lead.get("company") or lead.get("name") or lead.get("title"),300)
     out={"company_name":company,"fields":{},"evidence":[],"validated":False}
@@ -80,7 +80,7 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
     for row,u,text in rows:
         for e in EMAIL_RE.findall(text):
             email=_email(e)
-            if email and email_on_domain(email,website) and contact_context_matches(text,email,location) and current_email_context(text,email):
+            if email and email_on_domain(email,website) and contact_context_matches(text,email,location) and current_email_context(text,email) and (email_allowed is None or email_allowed(email)):
                 email_candidates.append({"value":email,"source_url":u,"validated":True,"observed_at":row.get("observed_at")})
                 out["fields"].setdefault("email",email_candidates[-1])
         if "phone" not in out["fields"]:
@@ -96,7 +96,7 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
     if not location:assessment["reason_codes"].append("CONTACT_LOCALITY_NOT_REQUESTED")
     if person:
         out["fields"]["decision_maker"]={"value":person["name"],"title":person["title"],"source_url":person["source_url"],"validated":True,"responsibility_status":person["responsibility_status"],"observed_at":person["observed_at"]}
-        if person["email"] and person["status"]=="source_supported":
+        if person["email"] and person["status"]=="source_supported" and (email_allowed is None or email_allowed(person["email"])):
             out["fields"]["email"]={"value":person["email"],"source_url":person["source_url"],"validated":True,"observed_at":person["observed_at"]}
             assessment.update(email_person_status="same_source_card",person_name=person["name"],person_email=person["email"])
     elif candidates:assessment["reason_codes"].append("DECISION_MAKER_NOT_UNIQUELY_SUPPORTED")

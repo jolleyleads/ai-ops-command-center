@@ -47,7 +47,7 @@ def _verified_public_email(result):
     company=result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title")
     location=result.get("contact_location") or result.get("target_location") or result.get("location") or ""
     query=result.get("query") or result.get("business_need") or ""
-    enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [])
+    enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
     apply_email_domain_check(enrichment)
     result["_contact_enrichment"]=enrichment
     validated=validated_payload(enrichment)
