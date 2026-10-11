@@ -51,9 +51,10 @@ def interpret_booking(text,now=None):
             if start.replace(fold=0).utcoffset()!=start.replace(fold=1).utcoffset():return fail("AMBIGUOUS_LOCAL_TIME")
             duration=int(os.getenv("BOOKING_DURATION_MINUTES","30"))
             if not 5<=duration<=120:return fail("INVALID_DURATION")
-            end=start+timedelta(minutes=duration)
+            end=(start.astimezone(timezone.utc)+timedelta(minutes=duration)).astimezone(tz)
         except ValueError:return fail("INVALID_DATE_OR_TIME")
     weekdays={day.lower() for day in re.findall(r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b",raw,re.I)}
     if weekdays and weekdays!={start.astimezone(tz).strftime("%A").lower()}:return fail("WEEKDAY_DATE_CONFLICT")
-    if start<=now or end<=start or end-start>timedelta(minutes=120):return fail("PAST_OR_INVALID_INTERVAL")
+    interval=end.astimezone(timezone.utc)-start.astimezone(timezone.utc)
+    if start<=now or interval<=timedelta(0) or interval>timedelta(minutes=120):return fail("PAST_OR_INVALID_INTERVAL")
     return {"start":start.isoformat(),"end":end.isoformat(),"timezone":zone,"ready":True,"reason":"","clarification":""}

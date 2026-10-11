@@ -117,3 +117,9 @@ def test_existing_contact_cannot_be_reconstructed_from_invoice_digits_or_image_n
     row=contact(page_text="Acme. Invoice 757 and order 555 and item 1212. Asset logo@acme.com.png")
     payload=validated_payload(enrich_lead({"company":"Acme","phone":"757-555-1212","email":"logo@acme.com"},[row]))
     assert "phone" not in payload and "email" not in payload
+
+
+def test_duration_crossing_clock_change_uses_real_elapsed_minutes(monkeypatch):
+    monkeypatch.setenv("BOOKING_DURATION_MINUTES","30")
+    proof=interpret_booking("March 10 2030 at 1:45 am America/New_York",NOW)
+    assert proof["ready"] and proof["end"]=="2030-03-10T03:15:00-04:00"
