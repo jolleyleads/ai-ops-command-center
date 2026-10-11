@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-live-proof
+  group: production-search-contract
   cancel-in-progress: false
 
 jobs:
