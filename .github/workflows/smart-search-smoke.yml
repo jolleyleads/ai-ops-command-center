@@ -5,145 +5,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: production-live-proof
+  group: production-search-contract
   cancel-in-progress: false
 
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
-      - name: Run live Smart Search end-to-end tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import urllib.parse
-          import urllib.request
-
-          origin = "https://ai-ops-command-center.onrender.com"
-          api = origin + "/api/test-smart-search"
-          failed = False
-
-          def get_text(url, timeout=120, attempts=3):
-              last = None
-              for attempt in range(1, attempts + 1):
-                  request = urllib.request.Request(url, headers={"User-Agent": "AI-Ops-Smoke-Test/1.0"})
-                  try:
-                      with urllib.request.urlopen(request, timeout=timeout) as response:
-                          return response.status, response.read().decode("utf-8", errors="replace")
-                  except Exception as exc:
-                      last = exc
-                      code = getattr(exc, "code", None)
-                      if code not in (502, 503, 504) or attempt == attempts:
-                          raise
-                      import time
-                      time.sleep(5)
-              raise last
-
-          # Frontend verification: one search interface, one endpoint, no old mode selector.
-          try:
-              status, html = get_text(origin + "/", timeout=60)
-              print(f"FRONTEND HTTP {status}")
-              checks = {
-                  "homepage_http_200": status == 200,
-                  "smart_search_heading": "Smart Search" in html,
-                  "smart_search_endpoint": "/api/smart-search" in html,
-                  "old_mode_selector_removed": 'id="searchMode"' not in html,
-                  "query_input_present": 'id="searchQuery"' in html,
-                  "location_input_present": 'id="searchLocation"' in html,
-              }
-              print(json.dumps(checks, indent=2))
-              if not all(checks.values()):
-                  print("FAIL frontend: unified search UI verification failed")
-                  failed = True
-          except Exception as exc:
-              print(f"FAIL frontend: {exc}")
-              failed = True
-
-          tests = [
-              ("jobs", "machine learning engineer jobs", "Portsmouth, VA"),
-              ("contractors", "contractors looking for a master electrician to pull permits", "Virginia Beach, VA"),
-              ("businesses", "find HVAC companies", "Norfolk, VA"),
-              ("permits", "recent electrical permits issued", "Chesapeake, VA"),
-              ("permit_leads", "master electrician permit pulling leads", "Portsmouth, VA"),
-          ]
-
-          for expected_intent, query, location in tests:
-              params = urllib.parse.urlencode({"query": query, "location": location})
-              url = f"{api}?{params}"
-              print(f"\nTEST {expected_intent}: query={query!r} location={location!r}")
-              try:
-                  status, body = get_text(url)
-              except Exception as exc:
-                  print(f"FAIL {expected_intent}: request error: {exc}")
-                  failed = True
-                  continue
-
-              print(f"HTTP {status}")
-              if status != 200:
-                  print(f"FAIL {expected_intent}: HTTP {status}")
-                  failed = True
-                  continue
-
-              try:
-                  payload = json.loads(body)
-              except Exception as exc:
-                  print(f"FAIL {expected_intent}: invalid JSON: {exc}")
-                  print(body[:1000])
-                  failed = True
-                  continue
-
-              actual_intent = payload.get("intent")
-              results = payload.get("results")
-              summary = {
-                  "expected_intent": expected_intent,
-                  "actual_intent": actual_intent,
-                  "configured": payload.get("configured"),
-                  "count": payload.get("count"),
-                  "source": payload.get("source"),
-                  "message": payload.get("message"),
-              }
-              print(json.dumps(summary, indent=2))
-
-              if actual_intent != expected_intent:
-                  print(f"FAIL {expected_intent}: routed to {actual_intent!r}")
-                  failed = True
-              if payload.get("configured") is not True:
-                  print(f"FAIL {expected_intent}: source is not configured")
-                  failed = True
-              if not isinstance(results, list):
-                  print(f"FAIL {expected_intent}: results is not a list")
-                  failed = True
-                  continue
-              if payload.get("count") != len(results):
-                  print(f"FAIL {expected_intent}: count does not match results length")
-                  failed = True
-
-              # Print only returned source-backed fields; never synthesize missing data.
-              samples = []
-              for item in results[:3]:
-                  samples.append({
-                      "title": item.get("title") or item.get("name") or item.get("company"),
-                      "type": item.get("type"),
-                      "source": item.get("source"),
-                      "verification": item.get("verification"),
-                      "url": item.get("url") or item.get("website") or item.get("direct_url") or item.get("source_url"),
-                  })
-              print("SAMPLES " + json.dumps(samples, indent=2))
-
-              # Result-level sanity checks only when results exist.
-              for index, item in enumerate(results):
-                  if not isinstance(item, dict):
-                      print(f"FAIL {expected_intent}: result {index} is not an object")
-                      failed = True
-                      continue
-                  if not (item.get("title") or item.get("name") or item.get("company")):
-                      print(f"FAIL {expected_intent}: result {index} has no display title")
-                      failed = True
-
-          if failed:
-              raise SystemExit(1)
-          print("\nALL UNIFIED SMART SEARCH END-TO-END TESTS PASSED")
-          PY
+      - uses: actions/checkout@v4
+      - name: Validate exact deployed Smart Search contract
+        run: python scripts/smart_search_smoke.py

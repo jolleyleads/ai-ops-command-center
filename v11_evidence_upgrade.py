@@ -104,5 +104,7 @@ def enhance_discovery(discovery,query,territory,max_candidates=10):
                 except Exception:extra=[]
                 src,urls=_proof(name,rows[idx],patterns,extra,query)
                 if src:_promote(rows[idx],src,urls);verified+=1
+    verified=sum(1 for x in rows if x.get("classification")=="Verified Lead")
     out=dict(discovery);out["results"]=rows;out["verified_count"]=verified;out["unverified_candidate_count"]=sum(1 for x in rows if x.get("classification")=="Candidate");out["rejected_count"]=sum(1 for x in rows if x.get("classification")=="Rejected");out["v11_evidence_upgrade"]=True;out["v11_evidence_mode"]="existing_evidence_plus_concurrent_bounded_gap_fill"
+    if discovery.get("target_count") is not None:out["target_met"]=verified>=int(discovery["target_count"])
     return out

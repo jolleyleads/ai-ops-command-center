@@ -3,12 +3,17 @@ def test_project_depth_exists():
 
 
 def test_smart_search_has_deterministic_universal_fallback_intents():
-    from pathlib import Path
-    source=Path("smart_search.py").read_text(encoding="utf-8")
-    assert "def _deterministic_route_intent(q):" in source
-    for intent in ("permit_leads","permits","jobs","contractors","businesses","web_research"):
-        assert f'return "{intent}"' in source
-    assert '"planning_unavailable"' in source
+    from smart_search import _deterministic_route_intent
+    cases={
+        "master electrician permit pulling leads":"permit_leads",
+        "recent electrical permits":"permits",
+        "engineer jobs":"jobs",
+        "contractors looking for help":"contractors",
+        "find companies":"businesses",
+        "research public sources":"web_research",
+    }
+    assert {query:_deterministic_route_intent(query) for query in cases}==cases
+
 
 def test_draft_limits_match_safe_send_validator():
     from pathlib import Path
