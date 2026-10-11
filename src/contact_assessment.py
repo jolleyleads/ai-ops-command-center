@@ -7,6 +7,7 @@ NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]
 ROLES=r"(?:chief executive officer|chief technology officer|human resources manager|operations manager|project manager|office manager|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|operations|recruiting|human resources|sales|customer service|customer success)|owner|founder|president|CEO|CTO|recruiter|director|principal|partner)"
 # Names keep case; titles may use any case.
 PAIR=re.compile(r"\b("+NAME+r")\s*[,|:\-]\s*((?i:"+ROLES+r"))\b")
+HIRING=re.compile(r"\b(?:hiring|hire|jobs?|recruitment|recruiting|staffing|talent|careers?|openings?)\b",re.I)
 EMAIL=re.compile(r"(?i)(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])")
 SHARED={"info","sales","support","contact","hello","office","admin","jobs","careers","hr","hiring","recruiting","recruitment","team","owner","service","billing","press","marketing","noreply","no-reply"}
 
@@ -57,7 +58,7 @@ def contact_sections(raw):
 def responsibility_matches(title,context,query,location="",company=""):
     if not query:return False
     q=query.casefold();t=title.casefold()
-    hiring=bool(re.search(r'\b(?:hiring|jobs?|recruiting|careers?|openings?)\b',q))
+    hiring=bool(HIRING.search(q))
     if hiring and re.search(r'hiring|recruit|human resources',t):return 'hiring_function_title'
     if re.search(r'engineering|automation|technical|software|\bai\b',q) and re.search(r'engineering|technology|\bcto\b',t):return 'technical_function_title'
     if not hiring and re.search(r'outreach|follow.up|call.?back|operations|automation',q) and re.search(r'operations|customer service|customer success|sales|office manager|owner|founder|president|ceo|chief executive',t):return 'business_function_title'
@@ -65,7 +66,7 @@ def responsibility_matches(title,context,query,location="",company=""):
     statement=re.search(r'(?i)\b(?:responsible for|oversees|leads)\s+([^.;]{3,120})',context)
     terms=set(re.findall(r'[a-z]{4,}',q))-{'companies','company','business','businesses','currently','looking','find','with','that','role','need'}
     terms-=set(re.findall(r'[a-z]{4,}',(location+' '+company).casefold()))
-    if hiring and statement and not re.search(r'(?i)\b(?:hiring|recruitment|recruiting|staffing|talent)\b',statement.group(1)):return ''
+    if hiring and statement and not HIRING.search(statement.group(1)):return ''
     return 'explicit_responsibility_statement' if statement and terms.intersection(re.findall(r'[a-z]{4,}',statement.group(1).casefold())) else ''
 
 
