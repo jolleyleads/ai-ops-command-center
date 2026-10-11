@@ -7,7 +7,9 @@ label cannot replace the guard.
 A hiring result must come from a fetched HTTP 200 employer page or a recognized
 ATS page with an exact hiring-organization match. A query label or generated
 answer is insufficient. The page needs a matching job title, the requested job
-city/state, and an enabled application control in the job content. Structured
+city/state, and an enabled application control in the job content whose target
+contains the selected posting's job identifier. Unbound JavaScript buttons and
+recommended-job application links remain unverified. Structured
 JobPosting metadata is read per posting, not pooled across jobs. Multi-posting
 listing pages with ambiguous detail URLs remain candidates. Unstructured pages
 need a specific role heading and a labeled worksite address.

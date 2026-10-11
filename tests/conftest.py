@@ -16,7 +16,8 @@ def live_job_page():
         job={"@type":"JobPosting","title":title,"description":f"{company} is hiring {title}. Apply now.","url":url,"datePosted":(now-timedelta(days=7)).isoformat(),"validThrough":(now+timedelta(days=30)).isoformat(),"hiringOrganization":{"@type":"Organization","name":company,"sameAs":root},"jobLocation":{"@type":"Place","address":{"addressLocality":city,"addressRegion":state,"addressCountry":"US"}}}
         job.update(changes or {})
         detail=body if body is not None else f"<h1>{title}</h1><p>{company}</p><p>Job location: {city}, {state}</p><p>{job['description']}</p>"
-        apply_html=apply_html if apply_html is not None else '<a href="/apply/1">Apply now</a>'
+        job_id=urlparse(url).path.rstrip('/').rsplit('/',1)[-1]
+        apply_html=apply_html if apply_html is not None else f'<a href="/apply/{job_id}">Apply now</a>'
         raw=f'<html><head><title>{title} | {company}</title><script type="application/ld+json">{json.dumps(job)}</script></head><body><main>{detail}{apply_html}</main></body></html>'
         return {"url":url,"resolved_url":url,"candidate_name":company,"verification_research":True,"title":title,"page_text":visible_page_text(raw),"directly_fetched":True,"http_status":200,"observed_at":now.isoformat(),"job_page_fetched_at":now.isoformat(),**page_metadata(raw),**job_page_metadata(raw,url)}
     return build

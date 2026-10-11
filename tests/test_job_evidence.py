@@ -251,3 +251,18 @@ def test_ml_role_abbreviation_cannot_be_dropped(live_job_page):
 
 def test_short_role_specialty_cannot_be_dropped(live_job_page):
     assert not check(live_job_page(now=NOW,title="Sales Manager"),query="Find companies hiring HR managers in Norfolk, VA")["ok"]
+
+
+@pytest.mark.parametrize("query",["Find companies with software engineer jobs in Norfolk, VA","Find companies that have software engineer jobs in Norfolk, VA"])
+def test_company_qualifiers_preserve_requested_role(live_job_page,query):
+    assert check(live_job_page(now=NOW,title="Software Engineer"),query=query)["ok"]
+    assert not check(live_job_page(now=NOW,title="Accountant"),query=query)["ok"]
+
+
+@pytest.mark.parametrize("apply_html",['<section><h2>Recommended job</h2><a href="/apply/2">Apply now</a></section>','<a href="/jobs/2">Apply now</a>','<button>Apply now</button>','<a href="https://unrelated.example/apply/1">Apply now</a>'])
+def test_unrelated_or_unbound_application_control_cannot_open_selected_job(live_job_page,apply_html):
+    assert not check(live_job_page(now=NOW,apply_html=apply_html))["ok"]
+
+
+def test_job_bound_application_form_is_supported(live_job_page):
+    assert check(live_job_page(now=NOW,apply_html='<form action="/apply/1"><button>Apply now</button></form>'))["ok"]

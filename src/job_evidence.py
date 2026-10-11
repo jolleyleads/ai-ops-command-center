@@ -40,6 +40,7 @@ def requested_role_terms(query):
         else:
             before=re.search(r"^(.*?)\b(?:jobs?|careers?|openings?|positions?|roles?)\b",q)
             role=before.group(1) if before else ""
+            role=re.sub(r"^.*?\b(?:with|that\s+(?:have|offer))\s+","",role)
     role=re.split(r"\b(?:in|near|around|with|that|or|include|exclude|rank)\b|[.;]",role,maxsplit=1)[0]
     stop={"find","show","list","me","a","an","and","the","for","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","open","now","today","remote","remotely","hybrid","companies","company","businesses","business","firms","firm"}
     return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=3 or x in {"ai","ml","hr","it","qa","rn"}) and x not in stop and not x.isdigit()][:10]
@@ -77,24 +78,26 @@ def _stamp(value, expiry=False):
 
 class _ApplyControls(HTMLParser):
     def __init__(self):
-        super().__init__();self.stack=[];self.controls=[];self.hidden=0;self.elements=[]
+        super().__init__();self.stack=[];self.controls=[];self.hidden=0;self.elements=[];self.form_actions=[]
     def handle_starttag(self,tag,attrs):
         attrs=dict(attrs)
         own_block="disabled" in attrs or "hidden" in attrs or attrs.get("aria-hidden","").lower()=="true" or attrs.get("aria-disabled","").lower()=="true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden",attrs.get("style",""),re.I))
         inherited=any(blocked for _,blocked in self.elements)
         if tag not in {"input","br","hr","img","meta","link","source","area","base","wbr"}:self.elements.append((tag,own_block or inherited))
         if tag in {"script","style"}:self.hidden+=1
+        if tag=="form":self.form_actions.append(attrs.get("action", ""))
         if tag in {"a","button"}:
             blocked=own_block or inherited
-            href=attrs.get("href","")
+            href=attrs.get("href","") if tag=="a" else attrs.get("formaction") or (self.form_actions[-1] if self.form_actions else "")
             if tag=="a" and (not href or href.startswith(("#","javascript:"))):blocked=True
             self.stack.append([tag,blocked,[],href])
         if tag=="input" and attrs.get("type","").lower() in {"submit","button"} and not (own_block or inherited):
-            if APPLY.fullmatch(attrs.get("value","").strip()):self.controls.append({"label":attrs["value"],"url":""})
+            if APPLY.fullmatch(attrs.get("value","").strip()):self.controls.append({"label":attrs["value"],"url":attrs.get("formaction") or (self.form_actions[-1] if self.form_actions else "")})
     def handle_data(self,data):
         if not self.hidden:
             for item in self.stack:item[2].append(data)
     def handle_endtag(self,tag):
+        if tag=="form" and self.form_actions:self.form_actions.pop()
         for i in range(len(self.elements)-1,-1,-1):
             if self.elements[i][0]==tag:
                 del self.elements[i:];break
@@ -153,6 +156,26 @@ def _ats(url):
     return any(host==h or host.endswith("."+h) for h in ATS_HOSTS)
 
 
+def _job_application_controls(row,url):
+    """Require the enabled application target to identify this specific posting."""
+    parsed=urlparse(url)
+    identifiers=[v for k,v in parse_qsl(parsed.query) if k.lower() in {"jobid","job_id","jid","gh_jid","requisitionid","reqid"}]
+    parts=[p for p in parsed.path.split("/") if p]
+    if parts and parts[-1].lower() not in {"jobs","job","careers","career","positions","apply","index.html"}:identifiers.append(parts[-1])
+    accepted=[]
+    for control in row.get("source_apply_controls") or []:
+        if not isinstance(control,dict):continue
+        target=control.get("url")
+        if not isinstance(target,str) or not target.startswith(("https://","http://")):continue
+        dest=urlparse(target)
+        if dest.hostname!=parsed.hostname and not _ats(target):continue
+        # Job links are not application links. The target must carry this job's ID.
+        if _same_job_url(target,url):continue
+        target_values=[p for p in dest.path.split("/") if p]+[v for _,v in parse_qsl(dest.query)]
+        if any(identifier in target_values for identifier in identifiers):accepted.append(control)
+    return accepted
+
+
 def check_job_evidence(row,query,location="",company="",now=None):
     now=now or datetime.now(timezone.utc)
     target=requested_location(query,location);terms=requested_role_terms(query)
@@ -205,12 +228,13 @@ def check_job_evidence(row,query,location="",company="",now=None):
         if record.get("datePosted") is not None and publication is None:reasons.append("job_posting_date_invalid")
         if publication and publication>now+timedelta(minutes=5):reasons.append("job_posting_date_in_future")
         if publication and now-publication>timedelta(days=MAX_POSTING_AGE_DAYS):reasons.append("job_posting_older_than_90_days")
-        if not row.get("source_apply_controls"):reasons.append("enabled_application_control_not_observed")
+        controls=_job_application_controls(row,url)
+        if not controls:reasons.append("enabled_application_control_not_observed")
         # Metadata cannot contradict the visible page's job title or city.
         if not fallback and (not role_matches(str(row.get("source_heading") or row.get("source_title") or ""),terms or re.findall(r"[a-z0-9]+",title.lower())) or not description or any(not contact_context_matches(detail,str(row.get("source_heading") or title),place) for place in requested_places)):
             reasons.append("job_metadata_not_supported_by_visible_page")
         if not reasons:
-            digest=hashlib.sha256((detail+json.dumps({"record":record,"application_controls":row.get("source_apply_controls"),"source_url":url},sort_keys=True,default=str)).encode()).hexdigest()
+            digest=hashlib.sha256((detail+json.dumps({"record":record,"application_controls":controls,"source_url":url},sort_keys=True,default=str)).encode()).hexdigest()
             return {**base,"ok":True,"reasons":[],"company":company,"job_title":title,"job_locations":locations or [target],"checked_at":checked.isoformat(),"remote_status":record.get("jobLocationType")=="TELECOMMUTE" or bool(fallback and re.search(r"\b(?:fully remote|100% remote|remote position|remote role)\b",detail,re.I)),"date_posted":record.get("datePosted"),"valid_through":record.get("validThrough"),"open_status":"enabled_application_observed","content_sha256":digest,"freshness_note":"Live application control observed; publication date unconfirmed." if not publication else "Dated posting and live application control observed."}
         failures.extend(reasons)
     return {**base,"reasons":list(dict.fromkeys(failures)) or ["job_details_unproven"]}

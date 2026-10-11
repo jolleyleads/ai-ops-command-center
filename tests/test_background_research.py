@@ -71,7 +71,7 @@ def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch,l
         return [dict(title="Fresh",url="https://fresh.example")],[],["web_search"]
     monkeypatch.setattr(search,"_run_calls",retrieve)
     def verify(q,loc,candidates,*a):
-        return ([live_job_page(company="Fresh",title="Engineer",url="https://fresh.example/jobs")] if any(c["name"]=="Fresh" for c in candidates) else []),[],[]
+        return ([live_job_page(company="Fresh",title="Engineer",url="https://fresh.example/jobs/1")] if any(c["name"]=="Fresh" for c in candidates) else []),[],[]
     monkeypatch.setattr(search,"_candidate_followups",verify)
     monkeypatch.setattr(search,"evaluate_research",lambda *a:{"sufficient":False,"followup_tool_calls":[dict(tool="web_search",query="Fresh official careers page")]})
     result=search._smart_search("Find companies hiring engineers","",runtime_budget=180,target_count=2)

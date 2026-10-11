@@ -370,7 +370,7 @@ def test_deterministic_hiring_verification_supports_requested_non_hvac_role(env,
         "verification_research":True,
         "candidate_name":"Example Veterinary Clinic",
     }]
-    evidence=[live_job_page(company="Example Veterinary Clinic",title="Veterinary Assistant",url="https://example.com/careers")]
+    evidence=[live_job_page(company="Example Veterinary Clinic",title="Veterinary Assistant",url="https://example.com/jobs/1")]
     promoted=ss._deterministic_need_verification(evidence,"veterinary clinics actively hiring veterinary assistants")
     assert len(promoted)==1
     assert promoted[0]["verification_gate"]=="passed"
@@ -404,7 +404,7 @@ def test_universal_verifier_is_industry_agnostic(env,live_job_page):
     ]
     for query,name,proof in cases:
         evidence=[{"url":"https://example.com/proof","title":name,"subtitle":proof,"page_text":proof,"verification_research":True,"candidate_name":name}]
-        if "hiring" in query:evidence=[live_job_page(company=name,title="Paralegal",url="https://example.com/proof")]
+        if "hiring" in query:evidence=[live_job_page(company=name,title="Paralegal",url="https://example.com/jobs/1")]
         promoted=ss._deterministic_need_verification(evidence,query)
         assert len(promoted)==1
         assert promoted[0]["verification_gate"]=="passed"

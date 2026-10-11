@@ -122,10 +122,10 @@ def test_hvac_hiring_requires_candidate_specific_source_evidence(live_job_page):
     assert smart_search._deterministic_need_verification(discovery_only,q)==[]
     evidence=[{"candidate_name":"Coastal HVAC","verification_research":True,"url":"https://coastal.example/careers","title":"Coastal HVAC Careers","subtitle":"We are hiring HVAC technicians now.","page_text":""}]
     assert smart_search._deterministic_need_verification(evidence,q)==[]
-    current=live_job_page(company="Coastal HVAC",title="HVAC Technician",city="Virginia Beach",url="https://coastal.example/careers")
+    current=live_job_page(company="Coastal HVAC",title="HVAC Technician",city="Virginia Beach",url="https://coastal.example/jobs/1")
     promoted=smart_search._deterministic_need_verification([current],q)
     assert len(promoted)==1
-    assert promoted[0]["supporting_urls"]==["https://coastal.example/careers"]
+    assert promoted[0]["supporting_urls"]==["https://coastal.example/jobs/1"]
 
 
 def test_failed_receipt_cannot_advance_workflow():
