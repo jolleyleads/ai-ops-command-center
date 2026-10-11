@@ -70,6 +70,8 @@ def test_execution_failure_is_persisted_without_retry(env,monkeypatch):
     final=env.get(launch.json["poll_url"])
     assert final.json["status"]=="failed"
     assert final.json["error"]=="EXECUTION_FAILED_REVIEW_REQUIRED"
+    assert final.json["result"]["reason"]==final.json["error"]
+    assert final.json["result_http_status"]==500
     assert jobs.process_next_execution_job()["processed"]==0
 
 
@@ -116,3 +118,26 @@ def test_semantic_planner_prose_does_not_change_intent_contract(monkeypatch,inte
 def test_smoke_rejects_failures_not_just_label_mismatches(bad):
     valid={"intent":"jobs","configured":True,"agent_mode":True,"verification_gate":True,"source":"web_search","count":0,"verified_count":0,"results":[]}
     assert validate_payload({**valid,**bad},"jobs")
+
+
+def test_campaign_gap_fill_preserves_full_verified_count():
+    from v11_evidence_upgrade import enhance_discovery
+    rows=[{"title":f"Company {i}","classification":"Verified Lead"} for i in range(20)]
+    result=enhance_discovery({"results":rows,"verified_count":20,"target_count":20,"target_met":True},"companies hiring engineers","VA")
+    assert result["verified_count"]==20 and result["target_met"] is True
+
+
+def test_campaign_gap_fill_updates_target_after_grounded_promotion(monkeypatch):
+    import v11_evidence_upgrade as upgrade
+    monkeypatch.setattr(upgrade,"_proof",lambda *a:({"url":"https://acme.example/careers","source":"Official careers"},["https://acme.example/careers"]))
+    result=upgrade.enhance_discovery({"results":[{"title":"Acme","classification":"Candidate"}],"verified_count":0,"target_count":1,"target_met":False},"companies hiring engineers","VA")
+    assert result["verified_count"]==1 and result["target_met"] is True
+
+
+def test_acceptance_key_is_unique_per_workflow_attempt():
+    from scripts.campaign_acceptance import acceptance_request_key
+    env={"GITHUB_SHA":"abc","GITHUB_RUN_ID":"123","GITHUB_RUN_ATTEMPT":"1"}
+    first=acceptance_request_key(env)
+    assert first==acceptance_request_key(env)
+    assert first!=acceptance_request_key({**env,"GITHUB_RUN_ID":"124"})
+    assert first!=acceptance_request_key({**env,"GITHUB_RUN_ATTEMPT":"2"})

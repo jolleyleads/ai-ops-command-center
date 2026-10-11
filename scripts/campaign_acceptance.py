@@ -4,11 +4,18 @@ import os
 import time
 import urllib.request
 from pathlib import Path
-from smart_search_smoke import ORIGIN, get_json
+if __package__:
+    from .smart_search_smoke import ORIGIN, get_json
+else:
+    from smart_search_smoke import ORIGIN, get_json
+
+
+def acceptance_request_key(environ):
+    return "acceptance-"+"-".join(environ[name] for name in ("GITHUB_SHA","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT"))
 
 
 def main():
-    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":"acceptance-"+os.environ["GITHUB_SHA"]})
+    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ)})
     with urllib.request.urlopen(req, timeout=60) as response:
         state = json.load(response)
     deadline = time.monotonic()+2700

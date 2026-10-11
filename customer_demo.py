@@ -163,7 +163,7 @@ $('launch').onclick=async()=>{
       if(!poll.ok)throw new Error('Could not read campaign status');
       data=await poll.json();
     }
-    $('result').textContent=JSON.stringify(data.result||data,null,2);
+    $('result').textContent=JSON.stringify(data.status==='failed'?{status:data.status,error:data.error,result:data.result}:data.result||data,null,2);
     if(data.status==='completed')campaignKey='';
   }catch(error){
     $('result').textContent='Connection or launch issue: '+error.message+'. A submitted campaign may still be running. Click again with the same fields to resume its status.';

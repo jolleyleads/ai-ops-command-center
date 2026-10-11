@@ -21,7 +21,7 @@ reusing a key for different input returns HTTP 409. Do not submit another launch
 just because a response was slow.
 
 The production acceptance POST uses the same asynchronous contract. Its workflow
-polls for the actual receipt and fails if no fresh qualified and drafted lead is
+uses a distinct idempotency key per workflow run and attempt, polls for the actual receipt, and fails if no fresh qualified and drafted lead is
 proved. It does not count a successful queue submission as acceptance success.
 
 Jobs persist in the existing application database and use a single in-process

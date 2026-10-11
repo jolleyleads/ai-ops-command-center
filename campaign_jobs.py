@@ -33,7 +33,7 @@ _future = None
 def process_next_execution_job():
     now = datetime.utcnow()
     # Execution can have external effects. A stale claim requires review, never requeue.
-    CampaignExecutionJob.query.filter(CampaignExecutionJob.status == "running", CampaignExecutionJob.started_at < now-timedelta(minutes=60)).update({"status":"failed", "error":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED", "finished_at":now})
+    CampaignExecutionJob.query.filter(CampaignExecutionJob.status == "running", CampaignExecutionJob.started_at < now-timedelta(minutes=60)).update({"status":"failed", "error":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED", "result_http_status":500, "result_json":json.dumps({"ok":False,"reason":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED"}), "finished_at":now})
     db.session.commit()
     job = CampaignExecutionJob.query.filter_by(status="queued").order_by(CampaignExecutionJob.created_at).first()
     if not job:
@@ -62,6 +62,8 @@ def process_next_execution_job():
         job = db.session.get(CampaignExecutionJob, job_id)
         job.status = "failed"
         job.error = "EXECUTION_FAILED_REVIEW_REQUIRED"
+        job.result_http_status = 500
+        job.result_json = json.dumps({"ok":False,"reason":job.error})
     job.finished_at = datetime.utcnow()
     db.session.commit()
     return {"processed":1, "job_id":job_id, "ok":job.status == "completed"}
