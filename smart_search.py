@@ -13,6 +13,7 @@ from src.record_evidence import check_record_evidence, record_receipt_is_current
 from src.company_identity import current_contact_source
 from src.company_identity import name_key
 from src.public_fetch import public_get
+from src.contact_assessment import contact_sections, assess_people, is_shared_email, current_email_context
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -146,7 +147,7 @@ def _page_snapshot(url):
         r=public_get(url,timeout=2)
         if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
         raw=r.text[:100000];metadata={**page_metadata(raw),**job_page_metadata(raw,r.url)}
-        return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True,"http_status":r.status_code,"job_page_fetched_at":datetime.now(timezone.utc).isoformat()}
+        return {**metadata,"page_text":visible_page_text(raw)[:8000],"contact_sections":contact_sections(raw),"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True,"http_status":r.status_code,"job_page_fetched_at":datetime.now(timezone.utc).isoformat()}
     except Exception:return {}
 def _page(url):
     return _page_snapshot(url).get("page_text","")
@@ -311,7 +312,7 @@ def _contact_followups(rows,evidence,deadline):
         return [source for group in pool.map(fetch,tasks) for source in group]
 
 
-def _attach_source_contacts(rows,evidence,location=""):
+def _attach_source_contacts(rows,evidence,location="",query=""):
     """Contacts require one resolved company domain and source-local evidence."""
     for row in rows:
         name=row.get("candidate_name") or row.get("title")
@@ -346,13 +347,23 @@ def _attach_source_contacts(rows,evidence,location=""):
             text=str(item.get("page_text") or item.get("text") or "")
             for email in dict.fromkeys(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",text)):
                 if not email_on_domain(email,official_site) or email.lower().endswith((".png",".jpg",".svg")):continue
-                if not contact_context_matches(text,email,location):continue
-                contacts.append({"email":email.lower(),"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
+                if not contact_context_matches(text,email,location) or not current_email_context(text,email):continue
+                contacts.append({"email":email.lower(),"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed","address_kind":"shared_inbox" if is_shared_email(email) else "individual_or_unknown","mailbox_status":"unconfirmed","person_status":"unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
             for phone in dict.fromkeys(re.findall(r"(?<!\d)(?:\+1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)",text)):
                 if not contact_context_matches(text,phone,location):continue
                 contacts.append({"phone":phone,"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_reachability_unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
         row["contacts"]=list({(c.get("email") or c.get("phone"),c["source_url"]):c for c in contacts}.values())
-        row["contact_status"]="source_observed" if contacts else "not_found"
+        people,person,person_status=assess_people([(item,proof["source_url"],str(item.get("page_text") or item.get("text") or "")) for item,proof in proofs],name,official_site,location,query)
+        row["decision_maker_candidates"]=people
+        row["decision_maker_status"]=person_status
+        if query and people:
+            chosen_email=person.get("email") if person and person["status"]=="source_supported" else ""
+            row["contacts"]=[c for c in row["contacts"] if not c.get("email") or is_shared_email(c["email"]) or c["email"]==chosen_email]
+        if person and person["status"]=="source_supported" and person["email"]:
+            for contact in row["contacts"]:
+                if contact.get("email")==person["email"]:
+                    contact.update(person_name=person["name"],person_title=person["title"],person_status="same_source_card",responsibility_status="source_supported")
+        row["contact_status"]="source_observed" if row["contacts"] else "not_found"
     return rows
 
 
@@ -676,7 +687,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
         contact_followups=_contact_followups(visible,contact_evidence,total_deadline) if runtime_budget>25 else []
         contact_evidence+=contact_followups
-        visible=_attach_source_contacts(visible,contact_evidence,loc)
+        visible=_attach_source_contacts(visible,contact_evidence,loc,q)
         verified_count=sum(1 for x in visible if x.get("classification")=="Verified Lead")
         candidate_count_visible=sum(1 for x in visible if x.get("classification")=="Candidate")
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")

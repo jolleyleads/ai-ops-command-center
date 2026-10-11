@@ -143,7 +143,7 @@ def test_probe_only_fetches_explicit_company_domain_not_job_board_roots(monkeypa
     def get(url,**kw):
         seen.append(url)
         return SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text='<title>Acme</title>Acme Norfolk VA owner@acme.com vendor@other.com')
-    monkeypatch.setattr(bridge.requests,"get",get)
+    monkeypatch.setattr(bridge,"public_get",get)
     rows,meta=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA",supporting_urls=["https://career.com/job/acme","https://contactout.com/person"]))
     assert all(owned_host(url,"https://acme.com") for url in seen)
     assert rows[0]["validated_emails"]==["owner@acme.com"]
@@ -154,14 +154,14 @@ def test_probe_preserves_local_cloudflare_contact_and_ignores_script_addresses(m
     email="owner@acme.com";key=0x42
     encoded=bytes([key]+[ord(c)^key for c in email]).hex()
     raw=f'<title>Acme</title><script>fake@acme.com</script>Acme Norfolk VA <span data-cfemail="{encoded}">protected</span>'
-    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=raw))
+    monkeypatch.setattr(bridge,"public_get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=raw))
     rows,_=bridge._public_contact_evidence(dict(company="Acme",website="https://acme.com",location="Norfolk VA"))
     assert rows[0]["validated_emails"]==[email]
 
 
 def test_probe_and_enrichment_examine_later_local_phone_numbers(monkeypatch):
     text="Acme Las Vegas NV (702) 555-1212. "+("Details. "*60)+"Acme Norfolk VA 757-555-3434"
-    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=text))
+    monkeypatch.setattr(bridge,"public_get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text=text))
     lead=dict(company="Acme",website="https://acme.com",location="Norfolk VA")
     rows,_=bridge._public_contact_evidence(lead)
     assert rows[0]["validated_phones"]==["757-555-3434"]
@@ -172,18 +172,20 @@ def test_probe_and_enrichment_examine_later_local_phone_numbers(monkeypatch):
 def test_probe_rejects_redirect_to_parent_domain_and_wrong_location(monkeypatch):
     def get(url,**kw):
         return SimpleNamespace(url="https://other.com/contact",ok=True,headers={"content-type":"text/html"},text="Acme Norfolk VA owner@other.com")
-    monkeypatch.setattr(bridge.requests,"get",get)
+    monkeypatch.setattr(bridge,"public_get",get)
     rows,_=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA"))
     assert rows==[]
-    monkeypatch.setattr(bridge.requests,"get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text="Acme Las Vegas NV owner@acme.com"))
+    monkeypatch.setattr(bridge,"public_get",lambda url,**kw:SimpleNamespace(url=url,ok=True,headers={"content-type":"text/html"},text="Acme Las Vegas NV owner@acme.com"))
     rows,_=bridge._public_contact_evidence(dict(title="Acme",website="https://acme.com",location="Norfolk VA"))
     assert rows==[]
 
 
 def test_outreach_uses_only_approved_local_emails_from_fetched_page(monkeypatch):
-    row=dict(url="https://acme.com/contact",text="vegas@acme.com owner@acme.com",validated_emails=["owner@acme.com"],identity_version="company-domain-v1",company_identity={"company_name":"Acme"},contact_location="Norfolk VA")
+    import dns.resolver
+    monkeypatch.setattr(dns.resolver,"resolve",lambda *a,**kw:[SimpleNamespace(exchange="mail.acme.com.",preference=10)])
+    row=evidence("Acme","https://acme.com/contact","Acme Las Vegas NV vegas@acme.com. Acme Norfolk VA owner@acme.com",identity_version="company-domain-v1",company_identity={"company_name":"Acme"},contact_location="Norfolk VA")
     monkeypatch.setattr(orchestration,"_public_contact_evidence",lambda r:([row],{}))
-    result=dict(company="Acme",website="https://acme.com")
+    result=dict(company="Acme",website="https://acme.com",contact_location="Norfolk VA")
     assert orchestration._verified_public_email(result)==("owner@acme.com","https://acme.com/contact")
     stored=orchestration._evidence_with_contact(result,"owner@acme.com","https://acme.com/contact")
     assert stored[-1]["company_identity"]["company_name"]=="Acme"

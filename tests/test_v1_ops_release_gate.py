@@ -1,9 +1,19 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+import dns.resolver
 import pytest
 import outreach_automation as oa
 import smart_search
 import v1_orchestration as v1
+
+
+def fresh_contact(url,text):
+    return {"url":url,"page_text":text,"text":text,"directly_fetched":True,"http_status":200,"observed_at":datetime.now(timezone.utc).isoformat()}
+
+
+def mail_route(monkeypatch):
+    monkeypatch.setattr(dns.resolver,"resolve",lambda *a,**kw:[SimpleNamespace(exchange="mail.example.com.",preference=10)])
 
 
 @pytest.fixture()
@@ -94,11 +104,12 @@ def test_scheduler_rejects_wrong_secret(env):
 
 
 def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
+    mail_route(monkeypatch)
     monkeypatch.setattr(
         v1,
         "_public_contact_evidence",
         lambda result: (
-            [{"url": "https://example.com/contact", "subtitle": "owner@example.com", "text": ""}],
+            [fresh_contact("https://example.com/contact","owner@example.com")],
             {"attempted": 1, "budget_exhausted": False},
         ),
     )
@@ -109,7 +120,8 @@ def test_verified_public_email_accepts_contact_probe_tuple(env, monkeypatch):
 
 
 def test_verified_public_email_accepts_source_visible_same_domain_email(env, monkeypatch):
-    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([{"url":"https://examplehvac.com/contact","text":"sales@examplehvac.com"}], {"attempted":1}))
+    mail_route(monkeypatch)
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([fresh_contact("https://examplehvac.com/contact","sales@examplehvac.com")], {"attempted":1}))
     email, source = v1._verified_public_email({
         "company": "Example HVAC",
         "website": "https://examplehvac.com",
@@ -242,7 +254,7 @@ def test_public_contact_probe_discovers_same_domain_contact_links(env, monkeypat
         if url=="https://example.com/reach-us":
             return Resp(url, 'Email us at hello@example.com')
         return Resp(url, 'No contact here')
-    monkeypatch.setattr(bridge.requests,"get",fake_get)
+    monkeypatch.setattr(bridge,"public_get",fake_get)
     rows,meta=bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
     assert rows
     assert rows[0]["url"]=="https://example.com/reach-us"
@@ -254,7 +266,7 @@ def test_public_contact_probe_rejects_off_domain_email(env, monkeypatch):
     class Resp:
         ok=True; headers={"content-type":"text/html"}
         def __init__(self,url): self.url=url; self.text="Email vendor@gmail.com"
-    monkeypatch.setattr(bridge.requests,"get",lambda url,**kwargs: Resp(url))
+    monkeypatch.setattr(bridge,"public_get",lambda url,**kwargs: Resp(url))
     rows,meta=bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
     assert not any("vendor@gmail.com" in (x.get("subtitle") or "") for x in rows)
 
@@ -267,7 +279,7 @@ def test_public_contact_probe_never_follows_third_party_discovered_links(env, mo
     def fake_get(url,**kwargs):
         seen.append(url)
         return Resp(url,'<a href="https://evil.example/contact">Contact</a>')
-    monkeypatch.setattr(bridge.requests,"get",fake_get)
+    monkeypatch.setattr(bridge,"public_get",fake_get)
     bridge._public_contact_evidence({"title":"Example Co","website":"https://example.com/"})
     assert not any("evil.example" in x for x in seen)
 
@@ -337,7 +349,8 @@ def test_enrichment_rejects_same_domain_non_outreach_mailboxes(env, monkeypatch)
 
 
 def test_enrichment_keeps_normal_company_mailboxes(env, monkeypatch):
-    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([{"url":"https://example.com/contact", "text":result["evidence"][0]["snippet"]}], {"attempted": 1}))
+    mail_route(monkeypatch)
+    monkeypatch.setattr(v1, "_public_contact_evidence", lambda result: ([fresh_contact("https://example.com/contact",result["evidence"][0]["snippet"])], {"attempted": 1}))
     for address in ("info@example.com","sales@example.com","hello@example.com","owner@example.com"):
         email, _ = v1._verified_public_email({
             "company":"Example Co","website":"https://example.com/",
