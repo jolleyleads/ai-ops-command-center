@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable
 from urllib.parse import urlparse
 from src.company_identity import identity_proof, host, owned_host, email_on_domain, contact_context_matches
 from src.company_identity import current_contact_source
+from src.contact_assessment import assess_people, is_shared_email, current_email_context
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 PHONE_RE=re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
@@ -46,10 +47,10 @@ def _evidence_rows(rows:Iterable[Dict[str,Any]],company:str):
         if candidate and _company_key(candidate)!=key:continue
         u=_url(row.get("url") or row.get("source_url"))
         if not u:continue
-        text=_clean(row.get("page_text") or row.get("text"),120000)
+        text=str(row.get("page_text") or row.get("text") or "")[:120000]
         yield row,u,text
 
-def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[str,Any]:
+def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]], *, email_allowed=None)->Dict[str,Any]:
     """Validate source-backed enrichment. No LLM-generated field is accepted as proof."""
     company=_clean(lead.get("company_name") or lead.get("company") or lead.get("name") or lead.get("title"),300)
     out={"company_name":company,"fields":{},"evidence":[],"validated":False}
@@ -73,24 +74,42 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]])->Dict[
     if website:
         out["fields"]["website"]={"value":website,"source_url":website,"validated":True}
 
-    # Contacts are accepted only when found in candidate-specific source text.
+    # Keep all source-local addresses so a known wrong person cannot become
+    # the fallback simply because their email occurred first on the page.
+    email_candidates=[]
     for row,u,text in rows:
-        if "email" not in out["fields"]:
-            for e in EMAIL_RE.findall(text):
-                email=_email(e)
-                if email and email_on_domain(email,website) and contact_context_matches(text,email,location):
-                    out["fields"]["email"]={"value":email,"source_url":u,"validated":True};break
+        for e in EMAIL_RE.findall(text):
+            email=_email(e)
+            if email and email_on_domain(email,website) and contact_context_matches(text,email,location) and current_email_context(text,email) and (email_allowed is None or email_allowed(email)):
+                email_candidates.append({"value":email,"source_url":u,"validated":True,"observed_at":row.get("observed_at")})
+                out["fields"].setdefault("email",email_candidates[-1])
         if "phone" not in out["fields"]:
             for match in PHONE_RE.finditer(text):
                 if contact_context_matches(text,match.group(0),location):
-                    out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True};break
-        if "decision_maker" not in out["fields"]:
-            # Require a title plus a nearby human-looking two-word name in the same source.
-            roles="(?i:"+TITLE_RE.pattern.replace("(?i)","").replace(r"\b","")+")"
-            pair=re.search(r"\b([A-Z][a-z]{1,30}\s+[A-Z][a-z]{1,30})\s*[,|:\-]\s*("+roles+r")\b",text)
-            if pair and _company_key(pair.group(1)) not in _company_key(company) and contact_context_matches(text,pair.group(1),location):
-                out["fields"]["decision_maker"]={"value":pair.group(1),"title":pair.group(2),"source_url":u,"validated":True}
-        out["evidence"].append({"url":u,"title":_clean(row.get("title"),500),"snippet":_clean(row.get("subtitle") or row.get("snippet"),1500)})
+                    out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True,"observed_at":row.get("observed_at")};break
+        out["evidence"].append({"url":u,"title":_clean(row.get("title"),500),"snippet":_clean(row.get("subtitle") or row.get("snippet"),1500),"observed_at":row.get("observed_at"),"directly_fetched":True,"http_status":200})
+
+    query=_clean(lead.get("query") or lead.get("business_need") or lead.get("intent_signal"),1000)
+    candidates,person,person_status=assess_people(rows,company,website,location,query)
+    out["decision_maker_candidates"]=candidates
+    assessment={"version":"contact-evidence-v2","company_status":"source_bound","target_location":location,"decision_maker_status":person_status,"email_person_status":"unconfirmed","mailbox_status":"unconfirmed","reason_codes":[]}
+    if not location:assessment["reason_codes"].append("CONTACT_LOCALITY_NOT_REQUESTED")
+    if person:
+        out["fields"]["decision_maker"]={"value":person["name"],"title":person["title"],"source_url":person["source_url"],"validated":True,"responsibility_status":person["responsibility_status"],"observed_at":person["observed_at"]}
+        if person["email"] and person["status"]=="source_supported" and (email_allowed is None or email_allowed(person["email"])):
+            out["fields"]["email"]={"value":person["email"],"source_url":person["source_url"],"validated":True,"observed_at":person["observed_at"]}
+            assessment.update(email_person_status="same_source_card",person_name=person["name"],person_email=person["email"])
+    elif candidates:assessment["reason_codes"].append("DECISION_MAKER_NOT_UNIQUELY_SUPPORTED")
+    if query and candidates and assessment["email_person_status"]!="same_source_card":
+        generic=next((c for c in email_candidates if is_shared_email(c["value"])),None)
+        if generic:out["fields"]["email"]=generic
+        else:out["fields"].pop("email",None)
+        assessment["reason_codes"].append("PERSONAL_EMAIL_RESPONSIBILITY_NOT_PROVEN")
+    email=out["fields"].get("email")
+    if email:
+        email.update(observation_status="source_observed",mailbox_status="unconfirmed",deliverability_status="unconfirmed",address_kind="shared_inbox" if is_shared_email(email["value"]) else "individual_or_unknown")
+        if is_shared_email(email["value"]):assessment["reason_codes"].append("SHARED_INBOX_NOT_PERSONAL_EMAIL")
+    out["contact_assessment"]=assessment
 
     out["evidence"]=list({x["url"]:x for x in out["evidence"]}.values())
     out["validated"]=bool(out["fields"]) and all(v.get("validated") and _url(v.get("source_url")) for v in out["fields"].values())
@@ -100,6 +119,7 @@ def validated_payload(enrichment:Dict[str,Any])->Dict[str,Any]:
     """The only enrichment shape qualification/outreach should consume."""
     if not enrichment.get("validated"):return {}
     payload={"company_name":_clean(enrichment.get("company_name"),300),"evidence":enrichment.get("evidence") or []}
+    if enrichment.get("contact_assessment"):payload["contact_assessment"]=enrichment["contact_assessment"]
     for key,record in (enrichment.get("fields") or {}).items():
         if isinstance(record,dict) and record.get("validated") and _url(record.get("source_url")):
             payload[key]=record.get("value")

@@ -762,6 +762,9 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
             "source_url": lead.source_url,
         }
 
+    workflow_data["recipient_name"]=lead.contact_name or ""
+    instructions += " Use only recipient_name for a personal greeting. If it is empty, address the company team. Names elsewhere in evidence may be unconfirmed or belong to another contact. Never describe a published address or DNS mail route as a confirmed deliverable mailbox."
+
     result = run_ai(
         prompt=f"{prompt}\n\nWORKFLOW DATA:\n{json.dumps(workflow_data, indent=2)}",
         instructions=instructions,
@@ -785,6 +788,13 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
     body = _clean(parsed.get("body"), 5000)
     if not subject or not body:
         return _fallback_draft(lead, follow_up_number)
+    enrichments=[evidence.get("enrichment") or {}] if isinstance(evidence,dict) else [e.get("enrichment") or {} for e in evidence if isinstance(e,dict)] if isinstance(evidence,list) else []
+    if not lead.contact_name:
+        for person in [p for e in enrichments for p in e.get("decision_maker_candidates") or []]:
+            name=str(person.get("name") or "")
+            first=name.split()[0] if name else ""
+            if name and (name.casefold() in body.casefold() or re.search(r"(?i)\b(?:hi|hello|dear|hey)\s+"+re.escape(first)+r"\b",body)):
+                return _fallback_draft(lead,follow_up_number)
     return {"ok": True, "subject": subject, "body": body, "model": result.get("model"), "fallback": False}
 
 def _gmail_send(to_email: str, subject: str, body: str, thread_id: str = "") -> Dict[str, Any]:

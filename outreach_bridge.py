@@ -3,12 +3,14 @@ import os
 import re
 import time
 from urllib.parse import urljoin,urlparse
-import requests
+from src.public_fetch import public_get
 from datetime import datetime, timezone
 from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, visible_page_text, contact_context_matches, shared_host
 from app import db
 from outreach_automation import OutreachLead, _draft_email
 from src.enrichment import enrich_lead, validated_payload
+from src.email_validation import apply_email_domain_check
+from src.contact_assessment import contact_sections, PAIR
 from src.qualification import qualify_lead, qualification_payload
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
@@ -107,9 +109,9 @@ def _public_contact_evidence(result):
         seen.add(url);attempted+=1
         connect_timeout=min(CONTACT_CONNECT_TIMEOUT,max(0.5,remaining/2))
         read_timeout=min(CONTACT_READ_TIMEOUT,max(0.5,remaining-connect_timeout))
-        try:r=requests.get(url,headers=headers,timeout=(connect_timeout,read_timeout),allow_redirects=True)
-        except requests.RequestException:continue
-        if not r.ok or getattr(r,"status_code",200)!=200:continue
+        try:r=public_get(url,timeout=min(remaining,connect_timeout+read_timeout))
+        except Exception:continue
+        if getattr(r,"status_code",200)!=200:continue
         ct=(r.headers.get("content-type") or "").lower()
         if "text/html" not in ct and "text/plain" not in ct:continue
         final=r.url
@@ -127,10 +129,14 @@ def _public_contact_evidence(result):
         emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[owning_root])]
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if contact_context_matches(visible,m.group(0),location)))
-        if proof and (emails or phones):
-            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
+        if proof and (emails or phones or PAIR.search(visible)):
+            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
             # Email is the outreach requirement; stop once exact same-domain proof exists.
-            if emails:break
+            if emails:
+                query=result.get("query") or result.get("business_need") or ""
+                if not query:break
+                assessed=enrich_lead({"company":company,"website":website or owning_root,"target_location":location,"query":query},rows)
+                if assessed.get("contact_assessment",{}).get("email_person_status")=="same_source_card":break
         # Discover explicit contact/about/team/careers links advertised by the
         # company's own page. Only same-company-domain URLs may enter the queue.
         for anchor in re.findall(r"(?is)<a\b[^>]*>.*?</a>",text):
@@ -144,7 +150,8 @@ def _public_contact_evidence(result):
             path=(urlparse(absolute).path or "").lower()
             label_text=re.sub(r"<[^>]+>"," ",anchor).lower()
             contactish=("contact","about","team","staff","people","leadership","career","location","reach","get in touch","connect","privacy")
-            if any(token in path or token in label_text for token in contactish) and absolute not in seen and absolute not in fetch_urls:
+            if any(token in path or token in label_text for token in contactish) and absolute not in seen:
+                if absolute in fetch_urls:fetch_urls.remove(absolute)
                 fetch_urls.insert(0,absolute)
     return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
 
@@ -187,22 +194,27 @@ def ingest_verified_results(search_payload):
         if not isinstance(result,dict):continue
         company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300);score=_evidence_score(result)
         if not company or score<QUEUE_MIN_SCORE or not _verified(result):continue
+        target_location=_clean(search_payload.get("location") or result.get("contact_location") or result.get("location"),300)
+        result={**result,"contact_location":target_location,"query":search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent_signal") or result.get("query") or ""}
         summary["eligible"]+=1;urls=_candidate_urls(result);source_url=urls[0] if urls else ""
         base_evidence=result.get("evidence") or [result]
-        enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},base_evidence)
+        enrichment=enrich_lead({"company_name":company,"target_location":target_location,"query":search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent_signal"),"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},base_evidence)
         validated=validated_payload(enrichment);contact_probe=None
         if not validated.get("email") and not validated.get("phone"):
             contact_rows,contact_probe=_public_contact_evidence(result)
             if contact_rows:
-                enrichment=enrich_lead({"company_name":company,"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},list(base_evidence)+contact_rows)
+                enrichment=enrich_lead({"company_name":company,"target_location":target_location,"query":search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent_signal"),"website":result.get("website"),"url":result.get("url"),"phone":result.get("phone"),"email":result.get("email"),"discovery_urls":urls},list(base_evidence)+contact_rows)
                 validated=validated_payload(enrichment)
             if not validated.get("email") and not validated.get("phone"):
                 summary["skipped"].append({"company":company,"reason":"contact_enrichment_exhausted","contact_probe":contact_probe})
+        apply_email_domain_check(enrichment)
+        validated=validated_payload(enrichment)
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         qctx={"target_location":_clean(search_payload.get("location"),300),"candidate_location":_clean(result.get("location"),300),"business_type":_clean(search_payload.get("business_type") or search_payload.get("category"),300),"candidate_type":_clean(result.get("category") or result.get("type"),300),"query":_clean(search_payload.get("query") or search_payload.get("goal") or search_payload.get("intent"),1000),"intent_signal":_clean(search_payload.get("intent_signal") or search_payload.get("query") or search_payload.get("goal"),1000),"evidence":result.get("evidence") or [],"duplicate":bool(existing),"excluded":bool(result.get("excluded")),"exclusion_terms":search_payload.get("exclusion_terms") or [],"max_evidence_age_days":search_payload.get("max_evidence_age_days") or 180}
         qualification=qualify_lead(validated,verification_ok=_verified(result),context=qctx);qualified=qualification_payload(validated,qualification)
         if not qualified:summary["skipped"].append({"company":company,"reason":"qualification_failed","qualification_status":qualification.get("status"),"qualification_reason_codes":qualification.get("reason_codes") or [],"validated_contact_fields":[k for k in ("email","phone","decision_maker") if validated.get(k)]});continue
-        email=_clean(qualified.get("email"),500);email_source=_clean(qualified.get("email_source_url"),1800);contact_name=_clean(qualified.get("decision_maker"),300)
+        email=_clean(qualified.get("email"),500);email_source=_clean(qualified.get("email_source_url"),1800);assessment=qualified.get("contact_assessment") or {}
+        contact_name=_clean(qualified.get("decision_maker"),300) if assessment.get("decision_maker_status")=="source_supported" and assessment.get("email_person_status")=="same_source_card" and assessment.get("person_email")==email else ""
         if existing:summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id});continue
         lead=OutreachLead(company=company,contact_email=email,contact_name=contact_name,location=_clean(result.get("location") or search_payload.get("location"),300),source_url=source_url,evidence_json=json.dumps({"verification":_evidence_for_storage(result),"enrichment":enrichment,"validated":validated,"qualification":qualification,"qualified":qualified,"contact_probe":contact_probe}),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="review")
         db.session.add(lead);db.session.commit();summary["saved"]+=1

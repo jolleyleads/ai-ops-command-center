@@ -7,6 +7,8 @@ from app import app, db
 from src.grounded_reply import routine_answer
 from src.automatic_reply_router import current_reply_text
 from src.company_identity import owned_host, name_key
+from src.enrichment import enrich_lead, validated_payload
+from src.email_validation import apply_email_domain_check
 from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _outreach_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
 from outreach_automation import FIRST_FOLLOWUP_DAYS, OutreachLead, OutreachBookingAttempt, OperatorAuditEvent, _audit_actor, _draft_email, _gmail_thread_reply_state, _persist_reply_evidence, _route_persisted_reply, _safe_send, _store_qualification
 
@@ -42,23 +44,23 @@ def _verified_public_email(result):
     # contact proof. Always re-fetch the company pages before qualification.
     contact_result = _public_contact_evidence(result)
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        url = _clean(row.get("url"), 1800)
-        if not owned_host(url,website):continue
-        text = " ".join([_clean(row.get("subtitle"), 5000), _clean(row.get("text"), 120000)])
-        emails=row.get("validated_emails",[]) if row.get("identity_version")=="company-domain-v1" else EMAIL_SCAN_RE.findall(text)
-        for raw in emails:
-            email = _valid_email(raw)
-            if email and _same_company_domain(email, company_urls) and _purpose_mailbox_allowed(email):
-                if row.get("identity_version")=="company-domain-v1":
-                    proof=row.get("company_identity") or {}
-                    company=result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title")
-                    if name_key(proof.get("company_name"))!=name_key(company):continue
-                    result["_contact_identity"]={"company_identity":proof,"identity_version":"company-domain-v1","contact_location":row.get("contact_location") or ""}
-                return email, url
-    return "", ""
+    company=result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title")
+    location=result.get("contact_location") or result.get("target_location") or result.get("location") or ""
+    query=result.get("query") or result.get("business_need") or ""
+    enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
+    apply_email_domain_check(enrichment)
+    result["_contact_enrichment"]=enrichment
+    validated=validated_payload(enrichment)
+    email=_valid_email(validated.get("email"));url=_clean(validated.get("email_source_url"),1800)
+    result["_contact_name"]=""
+    if email and _purpose_mailbox_allowed(email) and _same_company_domain(email,company_urls) and owned_host(url,website):
+        assessment=enrichment.get("contact_assessment") or {}
+        if assessment.get("decision_maker_status")=="source_supported" and assessment.get("person_email")==email and assessment.get("email_person_status")=="same_source_card":
+            result["_contact_name"]=validated.get("decision_maker") or ""
+        source=next((row for row in rows or [] if row.get("url")==url),{})
+        result["_contact_identity"]={"company_identity":source.get("company_identity") or {"company_name":company},"identity_version":"company-domain-v1","contact_location":location,"contact_assessment":assessment,"enrichment":enrichment}
+        return email,url
+    return "",""
 
 
 def _evidence_with_contact(result, email, email_source):
@@ -69,6 +71,10 @@ def _evidence_with_contact(result, email, email_source):
             item = dict(raw); item.setdefault("observed_at", observed); evidence.append(item)
     if email and email_source:
         evidence.append({"email": email, "url": email_source, "source": "verified_public_contact", "observed_at": observed,**(result.get("_contact_identity") or {})})
+    elif isinstance(result.get("_contact_enrichment"),dict):
+        enrichment=result["_contact_enrichment"]
+        source=(enrichment.get("fields",{}).get("email") or {}).get("source_url") or result.get("website") or result.get("url") or ""
+        evidence.append({"url":source,"source":"contact_validation_receipt","observed_at":observed,"enrichment":enrichment,"contact_assessment":enrichment.get("contact_assessment") or {},"contact_status":"no_validated_email"})
     return evidence
 
 
@@ -91,9 +97,10 @@ def orchestrate_discovery(payload):
         existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
         if existing:
             summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id}); continue
+        result={**result,"contact_location":payload.get("location") or result.get("contact_location") or result.get("location"),"query":payload.get("query") or payload.get("goal") or payload.get("intent_signal")}
         email,email_source=_verified_public_email(result)
         evidence=_evidence_with_contact(result,email,email_source)
-        lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
+        lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
         db.session.add(lead); db.session.commit(); summary["saved"]+=1
         qualification=_store_qualification(lead)
         if not qualification.get("ok"):

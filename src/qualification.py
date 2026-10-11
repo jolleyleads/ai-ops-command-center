@@ -125,5 +125,5 @@ def qualify_lead(validated:Dict[str,Any], *, verification_ok:bool=True, context:
 def qualification_payload(validated:Dict[str,Any],qualification:Dict[str,Any])->Dict[str,Any]:
     """Only an explicit successful Qualified receipt may flow to outreach."""
     if qualification.get("status")!=QUALIFIED or qualification.get("qualified") is not True or qualification.get("ok") is not True:return {}
-    allowed=("company_name","website","website_source_url","decision_maker","decision_maker_title","decision_maker_source_url","phone","phone_source_url","email","email_source_url","evidence")
+    allowed=("company_name","website","website_source_url","decision_maker","decision_maker_title","decision_maker_source_url","phone","phone_source_url","email","email_source_url","evidence","contact_assessment")
     return {k:validated[k] for k in allowed if k in validated}
