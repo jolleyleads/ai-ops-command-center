@@ -468,6 +468,7 @@ def _scope_search_results(rows,query,location,evidence):
     """Do not display unrelated job/record discovery as requested results."""
     route=_deterministic_route_intent(query)
     if is_hiring_query(query):route="jobs"
+    if route=="permit_leads":route="permits"
     if route not in {"jobs","permits"}:return rows,[]
     kept=[];excluded=[]
     for item in rows:
@@ -476,7 +477,15 @@ def _scope_search_results(rows,query,location,evidence):
             if row.get("classification")=="Verified Lead" and alternative_claim_allowed(query,row.get("verified_channels")):
                 kept.append(row);continue
             proof=row.get("job_validation")
-            ok=receipt_is_current(proof,query,location,company=row.get("candidate_name") or row.get("title"))
+            company=row.get("candidate_name") or row.get("company") or (row.get("title") if row.get("type")!="job" else "")
+            if not receipt_is_current(proof,query,location,company=company):
+                source=next((s for s in evidence if s.get("url")==row.get("url")),row)
+                if not row.get("candidate_name") and not row.get("company"):
+                    names={r.get("hiringOrganization",{}).get("name") for r in source.get("source_job_postings") or [] if isinstance(r,dict) and isinstance(r.get("hiringOrganization"),dict) and isinstance(r["hiringOrganization"].get("name"),str)}
+                    if len(names)==1:company=names.pop()
+                proof=check_job_evidence(source,query,location,company) if company else {"ok":False,"reasons":["job_employer_identity_required"]}
+            ok=bool(company) and receipt_is_current(proof,query,location,company=company)
+            if ok:row.update(job_validation=proof,company=company,job_title=proof["job_title"],job_location=proof["job_locations"],job_status=proof["open_status"],job_verification_status="verified")
             reasons=(proof or {}).get("reasons") or row.get("job_verification_reasons") or ["current_role_and_city_job_evidence_required"]
         else:
             proof=row.get("record_validation")
@@ -625,7 +634,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         provider_message=" ".join(dict.fromkeys(messages))
         scope_summary={"relevance_gate":True,"excluded_result_count":len(excluded),"excluded_results":excluded,"availability_status":"matching_results" if visible else "no_confirmed_matches"}
         answer_summary=evaluation.get("answer_summary") or ""
-        if is_hiring_query(q) or _deterministic_route_intent(q)=="permits":
+        if is_hiring_query(q) or _deterministic_route_intent(q) in {"permits","permit_leads"}:
             answer_summary=f"{len(visible)} source-confirmed matches for the requested role or record and location." if visible else "No source-confirmed matches for the requested role or record and location."
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
         return {**scope_summary,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=deadline,"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}

@@ -48,7 +48,7 @@ def _search_public_records(query,location=""):
         return {"configured":True,"source":"Google Programmable Search","message":f"Google Programmable Search returned HTTP {r.status_code}. {_google_error_message(r)}".strip(),"results":[]}
     return {"configured":False,"source":"Google Search","message":"Google search credentials are not configured.","results":[]}
 def _normalize_jobs(keyword):
-    return [{"type":"job","id":j.get("id") or "","title":j.get("title") or "Unknown title","subtitle":" | ".join(x for x in [j.get("company"),j.get("location")] if x),"url":j.get("url") or "","source":j.get("source") or "","status":j.get("status") or "","error":j.get("error") or ""} for j in search_remote_jobs(keyword)]
+    return [{"type":"job","id":j.get("id") or "","title":j.get("title") or "Unknown title","company":j.get("company") or "","job_location":j.get("location") or "","subtitle":" | ".join(x for x in [j.get("company"),j.get("location")] if x),"url":j.get("url") or "","source":j.get("source") or "","status":j.get("status") or "","error":j.get("error") or ""} for j in search_remote_jobs(keyword)]
 @app.route("/api/universal-search/capabilities")
 def universal_search_capabilities():
     custom=bool(os.environ.get("GOOGLE_SEARCH_API_KEY") and os.environ.get("GOOGLE_SEARCH_CX"));web=bool((os.environ.get("GOOGLE_WEB_SEARCH_API_KEY") or os.environ.get("GOOGLE_SEARCH_API_KEY")) and os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID"));source="Google Web Search Service" if web else ("Google Programmable Search" if custom else "Google Search")

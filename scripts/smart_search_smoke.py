@@ -66,11 +66,11 @@ def validate_payload(payload, expected_intent, query="", location=""):
             continue
         if not (row.get("title") or row.get("name") or row.get("company")):
             errors.append(f"result {i} has no display name")
-        company=row.get("candidate_name") or row.get("title") or row.get("company")
+        company=row.get("candidate_name") or row.get("company") or row.get("title")
         needs_job=expected_intent=="jobs" or row.get("classification")=="Verified Lead" and is_hiring_query(query) and not alternative_claim_allowed(query,row.get("verified_channels"))
         if needs_job and not receipt_is_current(row.get("job_validation"),query,location,company=company):
             errors.append(f"result {i} lacks current job evidence matching role, city and employer")
-        if (expected_intent=="permits" or "permit_license" in row.get("verified_channels",[])) and not record_receipt_is_current(row.get("record_validation"),query,location):
+        if (expected_intent in {"permits","permit_leads"} or "permit_license" in row.get("verified_channels",[])) and not record_receipt_is_current(row.get("record_validation"),query,location):
             errors.append(f"result {i} lacks current record evidence matching city")
         if row.get("classification") == "Verified Lead":
             verified += 1

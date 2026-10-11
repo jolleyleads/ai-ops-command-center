@@ -119,3 +119,37 @@ def test_production_acceptance_polling_import_needs_no_application_packages():
     from pathlib import Path
     result=subprocess.run([sys.executable,"-S","-c","from scripts.campaign_acceptance import acceptance_request_key; assert acceptance_request_key({'GITHUB_SHA':'sha','GITHUB_RUN_ID':'id','GITHUB_RUN_ATTEMPT':'1'}) == 'acceptance-sha-id-1'"],cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
+
+
+@pytest.mark.parametrize("type",["job","web"])
+def test_inspected_direct_job_gets_receipt_without_candidate_label(live_job_page,type):
+    source=live_job_page(title="Machine Learning Engineer")
+    source.pop("candidate_name");source.pop("verification_research")
+    row={"type":type,"title":"Machine Learning Engineer","url":source["url"],"classification":"Candidate"}
+    kept,excluded=search._scope_search_results([row],"machine learning engineer jobs","Norfolk, VA",[source])
+    assert len(kept)==1 and not excluded
+    assert kept[0]["company"]=="Acme" and kept[0]["job_validation"]["ok"]
+    assert validate_payload(payload(kept),"jobs")==[]
+
+
+def test_direct_job_provider_company_cannot_be_overridden_by_page(live_job_page):
+    source=live_job_page(title="Machine Learning Engineer")
+    row={"type":"job","company":"Other Company","title":"Machine Learning Engineer","url":source["url"]}
+    assert not search._scope_search_results([row],"machine learning engineer jobs","Norfolk, VA",[source])[0]
+
+
+def test_permit_lead_route_and_smoke_require_matching_record_city(live_job_page):
+    source=record(live_job_page,"Boston","MA");source["job_detail_text"]+=" Master Electrician permit pulling."
+    query="master electrician permit pulling leads"
+    assert not search._scope_search_results([{"title":"Acme","url":source["url"]}],query,"Norfolk, VA",[source])[0]
+    proof=check_record_evidence(source,query,"Boston, MA")
+    assert proof["ok"]
+    row={"title":"Acme","record_validation":proof}
+    assert validate_payload(payload([row],"permit_leads",query,"Norfolk, VA"),"permit_leads")
+    assert validate_payload(payload([row],"permit_leads",query,"Boston, MA"),"permit_leads")==[]
+
+
+@pytest.mark.parametrize("kind",["Inspection","License"])
+def test_inspection_and_license_identifiers_cannot_pool_records(live_job_page,kind):
+    source=record(live_job_page,body=f'<h1>Acme {kind} 123</h1><p>Project location: Norfolk, VA;</p><section>{kind} 456. Date issued: {NOW.date().isoformat()}</section>')
+    assert not check_record_evidence(source,"recent inspections and licenses","Norfolk, VA")["ok"]
