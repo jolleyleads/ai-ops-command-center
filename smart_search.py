@@ -12,6 +12,7 @@ from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_c
 from src.record_evidence import check_record_evidence, record_receipt_is_current
 from src.company_identity import current_contact_source
 from src.company_identity import name_key
+from src.public_fetch import public_get
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -142,7 +143,7 @@ def _page_snapshot(url):
     try:
         p=urlparse(_clean(url,1600));host=(p.hostname or "").lower()
         if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return {}
-        r=requests.get(url,timeout=2,headers={"User-Agent":"Mozilla/5.0 AI-Ops-Research-Agent/11.0"},allow_redirects=True)
+        r=public_get(url,timeout=2)
         if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
         raw=r.text[:100000];metadata={**page_metadata(raw),**job_page_metadata(raw,r.url)}
         return {**metadata,"page_text":visible_page_text(raw)[:8000],"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True,"http_status":r.status_code,"job_page_fetched_at":datetime.now(timezone.utc).isoformat()}

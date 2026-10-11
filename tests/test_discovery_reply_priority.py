@@ -128,3 +128,69 @@ def test_duration_crossing_clock_change_uses_real_elapsed_minutes(monkeypatch):
 @pytest.mark.parametrize("zone",["america/los_angeles","UTC+3","HST"])
 def test_explicit_unresolved_timezone_never_falls_back_to_business_zone(zone):
     assert not interpret_booking("January 10 2030 at 2 pm "+zone,NOW)["ready"]
+
+
+@pytest.mark.parametrize("text",[
+    "January 10 2030 or January 11 2030 at 2 pm America/New_York",
+    "2030-01-10 or 2030-01-11 at 2 pm America/New_York",
+    "January 10 2030 at 2 pm or 2030-01-11 America/New_York",
+    "2030-01-10T14:00:00-05:00 to 2030-01-10T14:30:00-05:00 America/New_York or January 11 2030",
+])
+def test_unpaired_alternative_date_requires_clarification(text):
+    assert not interpret_booking(text,NOW)["ready"]
+
+
+@pytest.mark.parametrize("address",["10.0.0.1","169.254.169.254","127.0.0.1","::1","::ffff:10.0.0.1"])
+def test_public_fetch_rejects_private_resolved_addresses(monkeypatch,address):
+    from src import public_fetch
+    monkeypatch.setattr(public_fetch.socket,"getaddrinfo",lambda *a,**k:[(0,0,0,"",(address,80))])
+    with pytest.raises(ValueError):public_fetch.public_destination("http://acme.com/contact")
+
+
+def test_public_fetch_pins_dns_and_rejects_private_redirect_before_request(monkeypatch):
+    from src import public_fetch
+    seen=[]
+    def resolve(host,*a,**k):
+        return [(0,0,0,"",("93.184.216.34" if host=="acme.com" else "169.254.169.254",80))]
+    class Response:
+        status=302
+        headers={"location":"http://metadata.local/latest"}
+        def close(self):pass
+    class Pool:
+        def __init__(self,address,port,**kwargs):seen.append((address,port,kwargs))
+        def urlopen(self,method,path,**kwargs):
+            assert kwargs["redirect"] is False and kwargs["headers"]["Host"]=="acme.com"
+            return Response()
+        def close(self):pass
+    monkeypatch.setattr(public_fetch.socket,"getaddrinfo",resolve)
+    monkeypatch.setattr(public_fetch.urllib3,"HTTPSConnectionPool",Pool)
+    with pytest.raises(ValueError):public_fetch.public_get("https://acme.com/contact")
+    assert seen==[("93.184.216.34",443,{"server_hostname":"acme.com","assert_hostname":"acme.com","cert_reqs":"CERT_REQUIRED"})]
+
+
+def test_public_fetch_rejects_mixed_public_private_dns(monkeypatch):
+    from src import public_fetch
+    monkeypatch.setattr(public_fetch.socket,"getaddrinfo",lambda *a,**k:[(0,0,0,"",("93.184.216.34",80)),(0,0,0,"",("10.0.0.1",80))])
+    with pytest.raises(ValueError):public_fetch.public_destination("https://acme.com")
+
+
+def test_public_fetch_preserves_valid_public_redirect_and_bounded_body(monkeypatch):
+    from src import public_fetch
+    seen=[]
+    monkeypatch.setattr(public_fetch.socket,"getaddrinfo",lambda *a,**k:[(0,0,0,"",("93.184.216.34",80))])
+    class Response:
+        def __init__(self,path):
+            self.status=302 if path=="/contact" else 200
+            self.headers={"location":"/contacts"} if self.status==302 else {"content-type":"text/html"}
+        def read(self,size,**kwargs):
+            assert size==100000
+            return b"<html>Acme</html>"
+        def close(self):pass
+    class Pool:
+        def __init__(self,*a,**k):pass
+        def urlopen(self,method,path,**kwargs):seen.append(path);return Response(path)
+        def close(self):pass
+    monkeypatch.setattr(public_fetch.urllib3,"HTTPSConnectionPool",Pool)
+    result=public_fetch.public_get("https://acme.com/contact")
+    assert result.status_code==200 and result.url=="https://acme.com/contacts" and result.text=="<html>Acme</html>"
+    assert seen==["/contact","/contacts"]
