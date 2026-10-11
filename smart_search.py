@@ -485,7 +485,8 @@ def _scope_search_results(rows,query,location,evidence):
                     if len(names)==1:company=names.pop()
                 proof=check_job_evidence(source,query,location,company) if company else {"ok":False,"reasons":["job_employer_identity_required"]}
             ok=bool(company) and receipt_is_current(proof,query,location,company=company)
-            if ok:row.update(job_validation=proof,company=company,job_title=proof["job_title"],job_location=proof["job_locations"],job_status=proof["open_status"],job_verification_status="verified")
+            if ok:
+                row.update(job_validation=proof,company=company,candidate_name=company,title=company,job_title=proof["job_title"],job_location=proof["job_locations"],job_status=proof["open_status"],job_verification_status="verified",published_at=proof["date_posted"],current_status_guaranteed=False,classification="Verified Lead",promotion_status="verified",verification_gate="passed",verified_channels=["hiring"],supporting_urls=[proof["source_url"]],verified_claim="Employer job page matches the requested role and city; an enabled application target for this posting was observed.")
             reasons=(proof or {}).get("reasons") or row.get("job_verification_reasons") or ["current_role_and_city_job_evidence_required"]
         else:
             proof=row.get("record_validation")

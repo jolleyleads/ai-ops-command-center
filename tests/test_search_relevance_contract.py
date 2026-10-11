@@ -129,6 +129,8 @@ def test_inspected_direct_job_gets_receipt_without_candidate_label(live_job_page
     kept,excluded=search._scope_search_results([row],"machine learning engineer jobs","Norfolk, VA",[source])
     assert len(kept)==1 and not excluded
     assert kept[0]["company"]=="Acme" and kept[0]["job_validation"]["ok"]
+    assert kept[0]["title"]=="Acme" and kept[0]["job_title"]=="Machine Learning Engineer"
+    assert kept[0]["classification"]=="Verified Lead"
     assert validate_payload(payload(kept),"jobs")==[]
 
 
