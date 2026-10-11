@@ -25,7 +25,7 @@ def check_record_evidence(row, query, location="", now=None):
     heading = str(row.get("source_heading") or "")
     if not RECORD.search(detail) or not RECORD.search(heading):
         return {**base, "reasons": ["record_detail_heading_required"]}
-    record_ids=set(re.findall(r"(?i)\b(?:permit|record|inspection|license)\s*(?:number|id|#)?\s*[:#\-]?\s*([a-z]*\d+[a-z0-9\-]*)\b",detail))
+    record_ids={(kind.lower(),value.lower()) for kind,value in re.findall(r"(?i)\b(permit|record|inspection|license)\s*(?:number|id|no\.?|#)?\s*[:#(\-]?\s*([a-z\-]*\d+[a-z0-9\-]*)\b",detail)}
     if len(record_ids)>1:
         return {**base, "reasons": ["ambiguous_multiple_records_on_page"]}
     if "master electrician" in query.lower() and not re.search(r"\bmaster electrician\b",detail,re.I):

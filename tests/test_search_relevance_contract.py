@@ -155,3 +155,8 @@ def test_permit_lead_route_and_smoke_require_matching_record_city(live_job_page)
 def test_inspection_and_license_identifiers_cannot_pool_records(live_job_page,kind):
     source=record(live_job_page,body=f'<h1>Acme {kind} 123</h1><p>Project location: Norfolk, VA;</p><section>{kind} 456. Date issued: {NOW.date().isoformat()}</section>')
     assert not check_record_evidence(source,"recent inspections and licenses","Norfolk, VA")["ok"]
+
+
+def test_prefixed_and_cross_type_record_ids_remain_distinct(live_job_page):
+    source=record(live_job_page,body=f'<h1>Acme Permit No. BLD-123</h1><p>Project location: Norfolk, VA;</p><section>Inspection No. BLD-123. Date issued: {NOW.date().isoformat()}</section>')
+    assert not check_record_evidence(source,"recent permits","Norfolk, VA")["ok"]
