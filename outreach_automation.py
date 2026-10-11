@@ -585,7 +585,8 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
     if not booking.get("start") or not booking.get("end") or not booking.get("timezone"):
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
-        sent=_send_reply_for_message(lead,item,"Happy to schedule a call. Please send the full date (including year), start time with AM/PM, and timezone you prefer. I'll check availability before confirming.")
+        from src.scheduling_dates import interpret_booking
+        sent=_send_reply_for_message(lead,item,interpret_booking(text)["clarification"] or "Please confirm one full date, start time, and timezone. I'll check availability before confirming.")
         if not sent.get("ok"):lead.last_error="AUTOMATIC_REPLY_REQUIRES_REVIEW"
         return {"ok":sent.get("ok") is True,"stage":"interested","classification":classification,"booking_attempted":False,"reply":sent}
 

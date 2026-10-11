@@ -24,34 +24,9 @@ def deterministic_proposal(text:Any)->Dict[str,Any]:
     return {"classification":label}
 
 def extract_explicit_booking(text:Any)->Dict[str,str]:
-    raw=str(text or "")
-    stamps=ISO.findall(raw)
-    tz=TZ.search(raw)
-    explicit = {
-        "start":stamps[0] if len(stamps)>0 else "",
-        "end":stamps[1] if len(stamps)>1 else "",
-        "timezone":tz.group(1) if tz else "",
-    }
-    if explicit["start"] or explicit["end"]:
-        return explicit
-    # Explicit full date + AM/PM only; ambiguous or multiple dates stay pending.
-    months="January February March April May June July August September October November December".split()
-    pattern=r"\b("+"|".join(months)+r")\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b"
-    matches=list(re.finditer(pattern,current_reply_text(raw),re.I))
-    if len(matches)!=1:return explicit
-    match=matches[0];month,day,year,hour,minute,period=match.groups()
-    zone=tz.group(1) if tz else os.getenv("BOOKING_TIMEZONE","America/New_York")
-    # Never silently override another explicitly named timezone.
-    if not tz and re.search(r"\b(?:UTC|GMT|PST|PDT|Pacific|CST|CDT|Central|MST|MDT|Mountain)\b",raw,re.I):return explicit
-    try:
-        hour=int(hour)
-        if not 1<=hour<=12:return explicit
-        length=int(os.getenv("BOOKING_DURATION_MINUTES","30"))
-        if not 5<=length<=120:return explicit
-        start=datetime(int(year),[m.lower() for m in months].index(month.lower())+1,int(day),hour%12+(12 if period.lower()=="pm" else 0),int(minute or 0),tzinfo=ZoneInfo(zone))
-        if start<=datetime.now(ZoneInfo(zone)):return explicit
-        return {"start":start.isoformat(),"end":(start+timedelta(minutes=length)).isoformat(),"timezone":zone}
-    except (ValueError,KeyError):return explicit
+    from src.scheduling_dates import interpret_booking
+    result=interpret_booking(text)
+    return {key:result[key] for key in ("start","end","timezone")}
 
 def current_reply_text(text):
     # Quoted outbound questions must not become the customer's intent.

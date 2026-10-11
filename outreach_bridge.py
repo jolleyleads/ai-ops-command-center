@@ -109,7 +109,7 @@ def _public_contact_evidence(result):
         read_timeout=min(CONTACT_READ_TIMEOUT,max(0.5,remaining-connect_timeout))
         try:r=requests.get(url,headers=headers,timeout=(connect_timeout,read_timeout),allow_redirects=True)
         except requests.RequestException:continue
-        if not r.ok:continue
+        if not r.ok or getattr(r,"status_code",200)!=200:continue
         ct=(r.headers.get("content-type") or "").lower()
         if "text/html" not in ct and "text/plain" not in ct:continue
         final=r.url
@@ -128,7 +128,7 @@ def _public_contact_evidence(result):
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if contact_context_matches(visible,m.group(0),location)))
         if proof and (emails or phones):
-            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
+            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
             # Email is the outreach requirement; stop once exact same-domain proof exists.
             if emails:break
         # Discover explicit contact/about/team/careers links advertised by the

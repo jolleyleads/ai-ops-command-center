@@ -148,7 +148,8 @@ def test_enrichment_omits_unsupported_contact_fields():
 def test_enrichment_accepts_source_bound_company_contact():
     from src.enrichment import enrich_lead, validated_payload
     lead={"company_name":"ACME HVAC"}
-    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/contact","title":"Contact","page_text":"Call (757) 555-1212 or email service@acmehvac.com"}]
+    from datetime import datetime,timezone
+    evidence=[{"candidate_name":"ACME HVAC","url":"https://acmehvac.com/contact","title":"Contact","page_text":"Call (757) 555-1212 or email service@acmehvac.com","directly_fetched":True,"http_status":200,"observed_at":datetime.now(timezone.utc).isoformat()}]
     payload=validated_payload(enrich_lead(lead,evidence))
     assert payload["email"]=="service@acmehvac.com"
     assert payload["phone"]=="(757) 555-1212"
@@ -564,9 +565,9 @@ def test_booking_extraction_requires_explicit_iso_times_and_timezone():
     from src.automatic_reply_router import extract_explicit_booking
     vague=extract_explicit_booking("Tomorrow afternoon works.")
     assert vague=={"start":"","end":"","timezone":""}
-    exact=extract_explicit_booking("2026-09-23T14:00:00-04:00 to 2026-09-23T14:30:00-04:00 America/New_York")
-    assert exact["start"]=="2026-09-23T14:00:00-04:00"
-    assert exact["end"]=="2026-09-23T14:30:00-04:00"
+    exact=extract_explicit_booking("2030-09-23T14:00:00-04:00 to 2030-09-23T14:30:00-04:00 America/New_York")
+    assert exact["start"]=="2030-09-23T14:00:00-04:00"
+    assert exact["end"]=="2030-09-23T14:30:00-04:00"
     assert exact["timezone"]=="America/New_York"
 
 
