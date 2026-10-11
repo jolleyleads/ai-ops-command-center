@@ -256,3 +256,14 @@ def test_rejected_mail_domain_receipt_persists_when_no_email_is_selected(monkeyp
     assert receipt['contact_assessment']['email_validation']['reason_codes']==['NULL_MX']
     assert receipt['contact_assessment']['email_validation']['checked_at']
     assert receipt['enrichment']['fields']['email']['validated'] is False
+
+
+def test_city_overlap_is_not_proof_of_hiring_responsibility():
+    result=enrich_lead(lead(query='Acme companies hiring AI automation engineers in Norfolk VA'),[source('Acme Norfolk VA Jane Doe, CEO. Responsible for Acme Norfolk office. jane@acme.com')])
+    assert 'decision_maker' not in result['fields']
+    assert result['contact_assessment']['decision_maker_status']=='unconfirmed'
+
+
+def test_technical_work_alone_does_not_establish_hiring_authority():
+    result=enrich_lead(lead(),[source('Acme Norfolk VA Jane Doe, CEO. Responsible for automation testing. jane@acme.com')])
+    assert 'decision_maker' not in result['fields']

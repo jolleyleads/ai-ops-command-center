@@ -54,7 +54,7 @@ def contact_sections(raw):
     return list(dict.fromkeys(parser.blocks))[:100]
 
 
-def responsibility_matches(title,context,query):
+def responsibility_matches(title,context,query,location="",company=""):
     if not query:return False
     q=query.casefold();t=title.casefold()
     hiring=bool(re.search(r'\b(?:hiring|jobs?|recruiting|careers?|openings?)\b',q))
@@ -64,6 +64,8 @@ def responsibility_matches(title,context,query):
     # Explicit responsibility statements can support other relevant titles.
     statement=re.search(r'(?i)\b(?:responsible for|oversees|leads)\s+([^.;]{3,120})',context)
     terms=set(re.findall(r'[a-z]{4,}',q))-{'companies','company','business','businesses','currently','looking','find','with','that','role','need'}
+    terms-=set(re.findall(r'[a-z]{4,}',(location+' '+company).casefold()))
+    if hiring and statement and not re.search(r'(?i)\b(?:hiring|recruitment|recruiting|staffing|talent)\b',statement.group(1)):return ''
     return 'explicit_responsibility_statement' if statement and terms.intersection(re.findall(r'[a-z]{4,}',statement.group(1).casefold())) else ''
 
 
@@ -83,7 +85,7 @@ def assess_people(rows,company,website,location,query):
                 if name_key(name) in name_key(company) or name.split()[0].casefold() in {"former","previous","retired","testimonial","customer","vendor","team","contact","meet"}:continue
                 if re.search(r'(?i)\b(?:former|previous|retired|ex[- ]|testimonial|customer|vendor|alumni)\b',card[max(start,match.start()-65):match.start()]):continue
                 local=bool(location and contact_context_matches(context,name,location))
-                relevant=responsibility_matches(title,card[match.end():stop],query)
+                relevant=responsibility_matches(title,card[match.end():stop],query,location,company)
                 # Only one person in this card may own an email. No address-format guesses.
                 emails=list(dict.fromkeys(e.lower() for e in EMAIL.findall(card) if email_on_domain(e,website) and not is_shared_email(e) and email_name_consistent(e,name))) if len(matches)==1 else []
                 if location:emails=[e for e in emails if contact_context_matches(card,e,location)]
