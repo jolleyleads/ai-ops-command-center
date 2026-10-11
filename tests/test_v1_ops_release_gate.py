@@ -360,7 +360,7 @@ def test_final_mailbox_gate_allows_normal_business_mailboxes(env):
         assert oa._recipient_mailbox_allowed(address) is True
 
 
-def test_deterministic_hiring_verification_supports_requested_non_hvac_role(env):
+def test_deterministic_hiring_verification_supports_requested_non_hvac_role(env,live_job_page):
     import smart_search as ss
     evidence=[{
         "url":"https://examplevet.com/careers",
@@ -370,6 +370,7 @@ def test_deterministic_hiring_verification_supports_requested_non_hvac_role(env)
         "verification_research":True,
         "candidate_name":"Example Veterinary Clinic",
     }]
+    evidence=[live_job_page(company="Example Veterinary Clinic",title="Veterinary Assistant",url="https://example.com/careers")]
     promoted=ss._deterministic_need_verification(evidence,"veterinary clinics actively hiring veterinary assistants")
     assert len(promoted)==1
     assert promoted[0]["verification_gate"]=="passed"
@@ -394,7 +395,7 @@ def test_demo_orchestration_honors_campaign_send_limit(env):
     assert payload["outreach_limit"]==1
 
 
-def test_universal_verifier_is_industry_agnostic(env):
+def test_universal_verifier_is_industry_agnostic(env,live_job_page):
     import smart_search as ss
     cases=[
         ("law firms actively hiring paralegals","Example Law","Now hiring paralegals. Apply today."),
@@ -403,6 +404,7 @@ def test_universal_verifier_is_industry_agnostic(env):
     ]
     for query,name,proof in cases:
         evidence=[{"url":"https://example.com/proof","title":name,"subtitle":proof,"page_text":proof,"verification_research":True,"candidate_name":name}]
+        if "hiring" in query:evidence=[live_job_page(company=name,title="Paralegal",url="https://example.com/proof")]
         promoted=ss._deterministic_need_verification(evidence,query)
         assert len(promoted)==1
         assert promoted[0]["verification_gate"]=="passed"

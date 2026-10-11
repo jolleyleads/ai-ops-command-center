@@ -58,7 +58,7 @@ def test_closed_job_and_wrong_location_do_not_pass():
     assert search._deterministic_need_verification([row],"Find companies hiring engineers","Washington DC")==[]
 
 
-def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch):
+def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch,live_job_page):
     calls=[]
     monkeypatch.setattr(search,"plan_research",lambda *a:{"tool_calls":[{"tool":"web_search","query":"initial"}]})
     monkeypatch.setattr(search,"_memory",lambda *a:[])
@@ -71,7 +71,7 @@ def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch):
         return [dict(title="Fresh",url="https://fresh.example")],[],["web_search"]
     monkeypatch.setattr(search,"_run_calls",retrieve)
     def verify(q,loc,candidates,*a):
-        return ([dict(candidate_name="Fresh",verification_research=True,title="Fresh hiring engineers",subtitle="Fresh hiring engineers. Apply now.",url="https://fresh.example/jobs",published_at=datetime.utcnow().isoformat())] if any(c["name"]=="Fresh" for c in candidates) else []),[],[]
+        return ([live_job_page(company="Fresh",title="Engineer",url="https://fresh.example/jobs")] if any(c["name"]=="Fresh" for c in candidates) else []),[],[]
     monkeypatch.setattr(search,"_candidate_followups",verify)
     monkeypatch.setattr(search,"evaluate_research",lambda *a:{"sufficient":False,"followup_tool_calls":[dict(tool="web_search",query="Fresh official careers page")]})
     result=search._smart_search("Find companies hiring engineers","",runtime_budget=180,target_count=2)

@@ -132,8 +132,8 @@ def page_metadata(raw):
                 types = node.get("@type", [])
                 types = [types] if isinstance(types, str) else types
                 if not isinstance(types,list):types=[]
-                if any(isinstance(t,str) and t in {"Organization", "Corporation", "LocalBusiness", "ProfessionalService"} for t in types):
-                    organizations.append({"name": node.get("name"), "url": node.get("url"), "address": node.get("address")})
+                if any(isinstance(t,str) and t.rstrip("/").rsplit("/",1)[-1] in {"Organization", "Corporation", "LocalBusiness", "ProfessionalService"} for t in types):
+                    organizations.append({"name": node.get("name"), "url": node.get("url") or (node.get("sameAs") if isinstance(node.get("sameAs"),str) else None), "address": node.get("address")})
                 stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
     title = re.search(r"(?is)<title\b[^>]*>(.*?)</title>", raw)
     heading = re.search(r"(?is)<h1\b[^>]*>(.*?)</h1>", raw)

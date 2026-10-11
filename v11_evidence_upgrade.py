@@ -3,6 +3,8 @@ import os,re,requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from src.job_evidence import check_job_evidence, receipt_is_current, requested_role_terms, role_matches, is_hiring_query, alternative_claim_allowed
+from src.company_identity import name_key
 
 
 def _s(v,n=3000): return str(v or "").strip()[:n]
@@ -15,17 +17,14 @@ def _intent_terms(query):
 
 def _intent_patterns(query):
     q=_s(query,1200).lower();patterns=[]
-    if any(x in q for x in ("hiring","hire ","jobs","job ","open role","opening")):
+    if is_hiring_query(query):
         # Hiring language is universal; role/business relevance is checked
         # separately against terms extracted from the actual user request.
         patterns += [r"\b(?:hiring|seeking|careers?|job opening|open position|openings?|join our team|now hiring|apply)\b",r"\b(?:job|position|opening|career)\b.{0,160}\b(?:apply|needed|required|available|hiring)\b"]
     return patterns
 
 def _intent_supported(query,text):
-    terms=_intent_terms(query)
-    if not terms:return True
-    hay=_s(text,20000).lower()
-    return any(t in hay for t in terms)
+    return role_matches(text,requested_role_terms(query))
 def _urls(row):
     vals=[]
     for key in ("url","source_url","verification_source_url"):
@@ -61,7 +60,7 @@ def _identity_supported(name,row,urls,text):
 def _bounded_exa(name,query,territory):
     key=os.getenv("EXA_API_KEY") or ""
     if not key:return []
-    terms=" ".join(_intent_terms(query)[:5]) or query
+    terms=" ".join(requested_role_terms(query)) or query
     body={"query":f'"{name}" {terms} hiring careers jobs {territory}',"numResults":3,"type":"auto","contents":{"highlights":{"numSentences":5,"highlightsPerUrl":3},"text":{"maxCharacters":3500},"livecrawl":"fallback"}}
     try:
         r=requests.post("https://api.exa.ai/search",headers={"x-api-key":key,"Content-Type":"application/json"},json=body,timeout=(2,5))
@@ -73,26 +72,47 @@ def _bounded_exa(name,query,territory):
             if url.startswith(("http://","https://")):out.append({"title":_s(item.get("title"),800),"subtitle":_s(" ".join(item.get("highlights") or []),5000),"text":_s(item.get("text"),3500),"url":url,"source":"Exa bounded candidate verification"})
         return out
     except requests.RequestException:return []
-def _proof(name,row,patterns,extra,query):
+def _proof(name,row,patterns,extra,query,territory="",cache=None):
+    from smart_search import _page_snapshot
+    cache=cache if cache is not None else {}
+    receipt=row.get("job_validation")
+    if receipt_is_current(receipt,query,territory) and name_key(receipt.get("company"))==name_key(name):return row,[receipt["source_url"]]
+    failures=[]
     for src in [row]+list(extra or []):
-        urls=_urls(src);text=_evidence_text(src)
-        if urls and text and _identity_supported(name,src,urls,text) and any(re.search(p,text,re.I|re.S) for p in patterns) and _intent_supported(query,text):return src,urls
+        urls=_urls(src)
+        if src.get("directly_fetched"):
+            check=check_job_evidence(src,query,territory,name)
+            if check["ok"]:return {**src,"job_validation":check},[check["source_url"]]
+            failures.extend(check["reasons"])
+        for url in urls[:3]:
+            if url not in cache:cache[url]=_page_snapshot(url)
+            snapshot=cache[url]
+            check=check_job_evidence({"url":url,**snapshot},query,territory,name)
+            if check["ok"]:return {"url":url,**snapshot,"job_validation":check},[check["source_url"]]
+            failures.extend(check["reasons"])
+    if failures:row.update(job_verification_status="unverified",job_verification_reasons=list(dict.fromkeys(failures)))
     return None,[]
 def _promote(row,src,urls):
-    observed=datetime.now(timezone.utc).isoformat()
-    proof={"title":_s(src.get("title"),800),"subtitle":_s(src.get("subtitle") or src.get("snippet") or src.get("text"),5000),"url":urls[0],"source":_s(src.get("source") or "V1.1 verified source",300),"observed_at":observed,"verified_claim":"Candidate-specific source evidence explicitly supports the requested current hiring signal."}
+    check=src.get("job_validation") or {}
+    observed=check.get("checked_at")
+    if not check.get("ok"):return
+    row.pop("job_verification_status",None);row.pop("job_verification_reasons",None)
+    proof={"job_validation":check,"title":_s(check.get("job_title"),800),"subtitle":_s("Job: "+str(check.get("job_title"))+"; locations: "+", ".join(check.get("job_locations") or [])+"; status: "+str(check.get("open_status")),5000),"url":urls[0],"source":_s(src.get("source") or "V1.1 verified source",300),"observed_at":observed,"verified_claim":"Candidate-specific source evidence explicitly supports the requested current hiring signal."}
     existing=[x for x in (row.get("evidence") or []) if isinstance(x,dict)]
-    row.update({"classification":"Verified Lead","promotion_status":"promoted","verification":"VERIFIED_INTENT","verification_gate":"passed","verified_claim":proof["verified_claim"],"supporting_urls":urls,"evidence_basis":"V1.1 deterministic identity + requested-intent evidence gate passed","verification_source":proof["source"],"verification_source_url":urls[0],"confidence":"high","intent_score":max(75,int(row.get("intent_score") or 0)),"evidence":existing+[proof]})
+    row.update({"classification":"Verified Lead","promotion_status":"verified","verification":"VERIFIED_INTENT","verification_gate":"passed","verified_claim":proof["verified_claim"],"supporting_urls":urls,"evidence_basis":"V1.1 deterministic identity + requested-intent evidence gate passed","verification_source":proof["source"],"verification_source_url":urls[0],"confidence":"high","intent_score":max(75,int(row.get("intent_score") or 0)),"job_validation":check,"job_title":check.get("job_title"),"job_location":check.get("job_locations"),"job_status":check.get("open_status"),"published_at":check.get("date_posted"),"verified_channels":["hiring"],"evidence":existing+[proof]})
 def enhance_discovery(discovery,query,territory,max_candidates=10):
     if not isinstance(discovery,dict):return discovery
     rows=[dict(x) for x in (discovery.get("results") or []) if isinstance(x,dict)];patterns=_intent_patterns(query)
     if not patterns:return dict(discovery)
-    verified=0;needs=[]
+    verified=0;needs=[];cache={}
+    for row in rows:
+        if row.get("classification")=="Verified Lead" and not ("hiring" not in row.get("verified_channels",[]) and alternative_claim_allowed(query,row.get("verified_channels"))) and not (receipt_is_current(row.get("job_validation"),query,territory) and name_key((row.get("job_validation") or {}).get("company"))==name_key(_candidate_name(row))):
+            row.update(classification="Candidate",promotion_status="candidate",verification_gate="pending",job_verification_status="unverified",job_verification_reasons=["current_role_city_and_application_proof_required"])
     for idx,row in enumerate(rows[:max_candidates]):
         if row.get("classification")=="Verified Lead":verified+=1;continue
         name=_candidate_name(row)
         if not name:continue
-        src,urls=_proof(name,row,patterns,[],query)
+        src,urls=_proof(name,row,patterns,[],query,territory,cache)
         if src:_promote(row,src,urls);verified+=1
         else:needs.append((idx,name))
     if needs and os.getenv("EXA_API_KEY"):
@@ -102,8 +122,10 @@ def enhance_discovery(discovery,query,territory,max_candidates=10):
                 idx,name=futures[future]
                 try:extra=future.result()
                 except Exception:extra=[]
-                src,urls=_proof(name,rows[idx],patterns,extra,query)
+                src,urls=_proof(name,rows[idx],patterns,extra,query,territory,cache)
                 if src:_promote(rows[idx],src,urls);verified+=1
+    for row in rows:
+        for key in ("page_text","job_detail_text","source_job_postings","source_apply_controls"):row.pop(key,None)
     verified=sum(1 for x in rows if x.get("classification")=="Verified Lead")
     out=dict(discovery);out["results"]=rows;out["verified_count"]=verified;out["unverified_candidate_count"]=sum(1 for x in rows if x.get("classification")=="Candidate");out["rejected_count"]=sum(1 for x in rows if x.get("classification")=="Rejected");out["v11_evidence_upgrade"]=True;out["v11_evidence_mode"]="existing_evidence_plus_concurrent_bounded_gap_fill"
     if discovery.get("target_count") is not None:out["target_met"]=verified>=int(discovery["target_count"])
