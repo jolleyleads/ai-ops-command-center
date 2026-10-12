@@ -36,6 +36,9 @@ MAX_FOLLOWUPS = int(os.getenv("OUTREACH_MAX_FOLLOWUPS", "2"))
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SESSION_COOKIE_SECURE=True,PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
 
 
+from src.hunter_mailbox import HunterMailboxCheck  # Register before startup create_all.
+
+
 class OutreachLead(db.Model):
     __tablename__ = "outreach_lead"
 
@@ -486,6 +489,18 @@ def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
     return email_on_domain(address,_clean(lead.source_url,1800))
 
 
+def _independent_mailbox_gate(lead):
+    from src.hunter_mailbox import enabled, verify_mailbox
+    if not enabled():return {"ok":True}
+    address=normalize_email(lead.contact_email)
+    mailbox=verify_mailbox(address)
+    _audit_actor(lead.id,"mailbox_verification",{"email":address},mailbox,"system:hunter")
+    db.session.commit()
+    if mailbox.get("mailbox_status")!="provider_verified":
+        return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["INDEPENDENT_MAILBOX_VERIFICATION_REQUIRED"],"mailbox_validation":mailbox}}
+    return {"ok":True,"mailbox_validation":mailbox}
+
+
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
     if not _recipient_matches_source_domain(lead):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
@@ -505,6 +520,8 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW"]},"attempt_status":"failed"}
     if not ag.get("allowed"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
+    mailbox_gate=_independent_mailbox_gate(lead)
+    if not mailbox_gate.get("ok"):return mailbox_gate
     if attempt is None:
         attempt=OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending")
         db.session.add(attempt)

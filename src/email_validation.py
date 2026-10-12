@@ -53,4 +53,5 @@ def apply_email_domain_check(enrichment, resolver=None):
     if receipt['domain_status'] in {'invalid','does_not_exist','does_not_accept_mail'}:
         record['validated']=False
         enrichment['contact_assessment']['reason_codes'].append('EMAIL_MAIL_ROUTE_REJECTED')
-    return enrichment
+    from src.hunter_mailbox import apply_mailbox_check
+    return apply_mailbox_check(enrichment)
