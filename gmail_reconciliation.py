@@ -113,6 +113,8 @@ def hardened_safe_send(lead,*,kind,sequence,subject,body):
     key=send_key(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address);attempt=oa.OutreachSendAttempt.query.filter_by(idempotency_key=key).first();ag=send_attempt_gate(attempt.status if attempt else "")
     if attempt is not None and attempt.status=="failed":return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW"]},"attempt_status":"failed"}
     if not ag.get("allowed"):return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
+    mailbox_gate=oa._independent_mailbox_gate(lead)
+    if not mailbox_gate.get("ok"):return mailbox_gate
     if attempt is None:
         attempt=oa.OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending");db.session.add(attempt);existing=oa._commit_unique_or_existing(oa.OutreachSendAttempt,{"idempotency_key":key})
         if existing is not None:return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["CONCURRENT_SEND_ATTEMPT_EXISTS"]},"attempt_status":existing.status}
