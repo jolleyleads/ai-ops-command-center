@@ -147,3 +147,15 @@ def test_valid_send_time_gate_keeps_qualification_evidence_unchanged(active,monk
     audit=oa.OperatorAuditEvent.query.filter_by(lead_id=lead.id,action='mailbox_verification').one()
     assert 'provider_verified' in audit.result_json
     oa.db.session.delete(audit);oa.db.session.delete(lead);oa.db.session.commit()
+
+
+def test_privacy_restriction_survives_key_rotation_and_feature_disablement(active,monkeypatch):
+    get,calls=transport(code=451)
+    assert hunter.verify_mailbox('jane@acme.com',get)['reason_codes']==['HUNTER_PROCESSING_RESTRICTED']
+    monkeypatch.setenv('HUNTER_API_KEY','rotated-unit-test-key')
+    assert hunter.verify_mailbox('jane@acme.com',get)['reason_codes']==['HUNTER_PROCESSING_RESTRICTED']
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false')
+    assert oa._is_suppressed('jane@acme.com') is True
+    assert len(calls)==2
+    marker=hunter.HunterMailboxCheck.query.filter_by(state='restricted').one()
+    assert 'jane@acme.com' not in marker.key and marker.receipt_json=='{}'

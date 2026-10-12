@@ -449,6 +449,8 @@ def _store_qualification(lead: OutreachLead, data: Dict[str, Any]|None=None) -> 
 
 
 def _is_suppressed(email: str) -> bool:
+    from src.hunter_mailbox import processing_restricted
+    if processing_restricted(email):return True
     address=normalize_email(email)
     return bool(address and OutreachSuppression.query.filter_by(normalized_email=address).first())
 

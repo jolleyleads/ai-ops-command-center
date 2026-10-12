@@ -31,6 +31,19 @@ def base_receipt(email,reason):
     return {'email':email,'provider':'hunter','checked_at':datetime.now(timezone.utc).isoformat(),'mailbox_status':'unconfirmed','deliverability_status':'unconfirmed','reason_codes':[reason]}
 
 
+def _restriction_key(email):
+    return hashlib.sha256(('hunter-processing-restricted:'+str(email).strip().lower()).encode()).hexdigest()
+
+
+def processing_restricted(email):
+    if not has_app_context():return False
+    try:
+        with Session(db.engine) as session:
+            row=session.get(HunterMailboxCheck,_restriction_key(email))
+            return bool(row and row.state=='restricted')
+    except Exception:return False
+
+
 def normalize_result(email,data,now=None):
     receipt=base_receipt(email,'HUNTER_RESULT_UNCONFIRMED')
     if not isinstance(data,dict) or str(data.get('email') or '').lower()!=email.lower():
@@ -67,6 +80,8 @@ def _request(path,key,params,get):
 
 def verify_mailbox(email,get=None):
     email=str(email or '').strip().lower()
+    if processing_restricted(email):
+        receipt=base_receipt(email,'HUNTER_PROCESSING_RESTRICTED');receipt['mailbox_status']='provider_rejected';return receipt
     if not enabled():return base_receipt(email,'HUNTER_NOT_ENABLED')
     key=os.getenv('HUNTER_API_KEY','').strip()
     expected=os.getenv('HUNTER_ACCOUNT_EMAIL','').strip().lower()
@@ -123,6 +138,10 @@ def verify_mailbox(email,get=None):
         with Session(db.engine) as session:
             completed=session.execute(update(HunterMailboxCheck).where(HunterMailboxCheck.key==cache_key,HunterMailboxCheck.state=='reserved',HunterMailboxCheck.lease_token==token).values(state='complete',expires_at=time.time()+ttl,receipt_json=json.dumps(receipt))).rowcount
             if completed!=1:return base_receipt(email,'HUNTER_RECEIPT_STORAGE_FAILED')
+            if receipt['reason_codes']==['HUNTER_PROCESSING_RESTRICTED']:
+                restriction=_restriction_key(email)
+                if session.get(HunterMailboxCheck,restriction) is None:
+                    session.add(HunterMailboxCheck(key=restriction,state='restricted',lease_token='restricted',expires_at=0,receipt_json='{}'))
             session.commit()
     except Exception:return base_receipt(email,'HUNTER_RECEIPT_STORAGE_FAILED')
     return receipt
@@ -136,7 +155,7 @@ def apply_mailbox_check(enrichment):
     assessment['mailbox_validation']=receipt
     record['mailbox_status']=receipt['mailbox_status']
     record['deliverability_status']=receipt['deliverability_status']
-    if enabled() and receipt['mailbox_status']!='provider_verified':
+    if (enabled() and receipt['mailbox_status']!='provider_verified') or receipt['reason_codes']==['HUNTER_PROCESSING_RESTRICTED']:
         record['validated']=False
         assessment.setdefault('reason_codes',[]).append('INDEPENDENT_MAILBOX_VERIFICATION_REQUIRED')
     return enrichment

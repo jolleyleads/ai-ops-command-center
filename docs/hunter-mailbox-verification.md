@@ -27,6 +27,7 @@ matching response email, valid status, positive SMTP mailbox check, non-catch-al
 non-disposable/unblocked checks, and a matching valid verification within seven
 days. Catch-all, unknown, webmail-only, stale, malformed, quota failure, privacy
 restriction, missing credentials, and dummy test keys cannot become verified mailboxes.
+Privacy restrictions persist as hashed address markers across cache expiry, key rotation and feature disablement; they block repeat provider processing and outgoing sends.
 A provider-reported valid result is evidence, not an inbox-placement guarantee.
 
 Both discovery/enrichment paths and the final safe-send gate share this check.
