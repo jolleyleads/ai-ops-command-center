@@ -30,10 +30,10 @@ def active(monkeypatch):
     monkeypatch.setenv('HUNTER_ACCOUNT_EMAIL','jolleyleads@gmail.com')
     with oa.app.app_context():
         oa.db.create_all()
-        hunter.HunterMailboxCheck.query.delete();oa.db.session.commit()
+        hunter.HunterMailboxCheck.query.delete();hunter.HunterAccountGuard.query.delete();oa.db.session.commit()
         yield
         oa.db.session.rollback()
-        hunter.HunterMailboxCheck.query.delete();oa.db.session.commit()
+        hunter.HunterMailboxCheck.query.delete();hunter.HunterAccountGuard.query.delete();oa.db.session.commit()
 
 
 def transport(account=None,verification=None,code=200):

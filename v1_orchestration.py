@@ -1,6 +1,10 @@
 import json
 import os
 import re
+import hashlib
+import threading
+from contextlib import contextmanager
+from sqlalchemy import text as sql_text
 from datetime import datetime, timedelta, timezone
 from flask import jsonify, request
 from app import app, db
@@ -49,6 +53,12 @@ def _verified_public_email(result):
     query=result.get("query") or result.get("business_need") or ""
     enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
     apply_email_domain_check(enrichment)
+    if (result.get('_campaign_context') or {}).get('require_decision_maker') is True:
+        assessment=enrichment.get('contact_assessment') or {}
+        if assessment.get('email_person_status')!='same_source_card' or assessment.get('decision_maker_status')!='source_supported':
+            if enrichment.get('fields',{}).get('email'):
+                enrichment['fields']['email']['validated']=False
+            assessment.setdefault('reason_codes',[]).append('NAMED_DECISION_MAKER_EMAIL_REQUIRED')
     result["_contact_enrichment"]=enrichment
     validated=validated_payload(enrichment)
     email=_valid_email(validated.get("email"));url=_clean(validated.get("email_source_url"),1800)
@@ -78,6 +88,72 @@ def _evidence_with_contact(result, email, email_source):
     return evidence
 
 
+_discovery_locks = [threading.Lock() for _ in range(64)]
+
+
+@contextmanager
+def discovery_lock(company, source_url):
+    """Serialize one company/source across transactions and PostgreSQL workers."""
+    digest = hashlib.sha256((company.casefold()+'|'+source_url).encode()).digest()
+    key = int.from_bytes(digest[:8], 'big', signed=True)
+    if db.engine.dialect.name != 'postgresql':
+        lock = _discovery_locks[key % len(_discovery_locks)]
+        acquired = lock.acquire(blocking=False)
+        try:yield acquired
+        finally:
+            if acquired:lock.release()
+        return
+    # A separate connection keeps the session lock across workflow commits.
+    with db.engine.connect() as connection:
+        acquired = connection.execute(sql_text('SELECT pg_try_advisory_lock(:key)'), {'key':key}).scalar()
+        try:yield bool(acquired)
+        finally:
+            connection.rollback()
+            if acquired:
+                connection.execute(sql_text('SELECT pg_advisory_unlock(:key)'), {'key':key})
+                connection.commit()
+
+
+def campaign_context(payload, result):
+    query = _clean(payload.get("query") or payload.get("goal") or payload.get("intent_signal"), 1000)
+    return {"target_location": _clean(payload.get("location") or result.get("contact_location"), 300),
+            "query": query, "intent_signal": query,
+            "business_type": _clean(payload.get("business_type"), 300),
+            "candidate_type": _clean(result.get("category") or result.get("type"), 300),
+            "require_decision_maker": payload.get("require_decision_maker") is True or bool(re.search(r"(?i)\bdecision[ -]?makers?\b", query))}
+
+
+def resume_discovery_lead(lead, result, lease_valid=None):
+    """Refresh held discovery only, never rewrite a sent conversation."""
+    email, source = _verified_public_email(result)
+    if lease_valid and not lease_valid():
+        return {'ok':False,'reason_codes':['RECOVERY_LEASE_LOST']}
+    assessment = (result.get('_contact_enrichment') or {}).get('contact_assessment') or {}
+    mailbox = assessment.get('mailbox_validation') or {}
+    lead.contact_email = email
+    lead.contact_name = _clean(result.get('_contact_name'), 300)
+    evidence = _evidence_with_contact(result, email, source)
+    if result.get('_campaign_context'):
+        evidence.append({'source': 'campaign_context', 'context': result['_campaign_context']})
+    lead.evidence_json = json.dumps(evidence)
+    db.session.commit()
+    receipt = _store_qualification(lead)
+    if not receipt.get('ok') or not email:
+        return {'ok': False, 'reason_codes': mailbox.get('reason_codes') or receipt.get('reason_codes') or ['CONTACT_EVIDENCE_MISSING']}
+    drafted = _draft_email(lead)
+    if not drafted.get('ok'):
+        return {'ok': False, 'reason_codes': ['DRAFT_FAILED']}
+    if lease_valid and not lease_valid():
+        return {'ok':False,'reason_codes':['RECOVERY_LEASE_LOST']}
+    lead.subject, lead.body = drafted['subject'], drafted['body']
+    lead.status = 'drafted'
+    lead.last_error = ''
+    db.session.commit()
+    # Recovery prepares drafts. Sending requires a subsequent authorized campaign
+    # or operator action, so clearing quota cannot fire an old campaign unexpectedly.
+    return {'ok': True, 'stage': 'drafted'}
+
+
 def orchestrate_discovery(payload):
     summary={"enabled":True,"autosend_enabled":AUTOSEND_ENABLED,"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
@@ -94,32 +170,50 @@ def orchestrate_discovery(payload):
         urls=_candidate_urls(result); source_url=urls[0] if urls else ""
         if not source_url:
             summary["skipped"].append({"company":company,"reason":"missing_source_url"}); continue
-        existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
-        if existing:
-            summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id}); continue
-        result={**result,"contact_location":payload.get("location") or result.get("contact_location") or result.get("location"),"query":payload.get("query") or payload.get("goal") or payload.get("intent_signal")}
-        email,email_source=_verified_public_email(result)
-        evidence=_evidence_with_contact(result,email,email_source)
-        lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
-        db.session.add(lead); db.session.commit(); summary["saved"]+=1
-        qualification=_store_qualification(lead)
-        if not qualification.get("ok"):
-            summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"qualification_failed","reason_codes":qualification.get("reason_codes") or []}); continue
-        summary["qualified"]+=1
-        if not email:
-            summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"no_verified_public_email"}); continue
-        drafted=_draft_email(lead)
-        if not drafted.get("ok"):
-            lead.last_error=_clean(drafted.get("error"),2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"draft_failed"}); continue
-        lead.subject=drafted["subject"]; lead.body=drafted["body"]; lead.status="drafted"; lead.last_error=""; db.session.commit(); summary["drafted"]+=1
-        if not AUTOSEND_ENABLED:
-            summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"autosend_disabled","status":"drafted"}); continue
-        execution=_safe_send(lead,kind="initial",sequence=0,subject=lead.subject,body=lead.body)
-        if not execution.get("ok"):
-            lead.last_error=_clean(execution,2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"safe_send_failed","stage":_clean(execution.get("stage"),100),"gate_reasons":((execution.get("gate") or {}).get("reasons") or []),"receipt_reasons":((execution.get("send_receipt") or {}).get("reasons") or []),"provider_error":_clean(execution.get("error"),500)}); continue
-        receipt=execution.get("send_receipt") or {}; now=datetime.utcnow()
-        lead.gmail_message_id=_clean(receipt.get("message_id"),255); lead.gmail_thread_id=_clean(receipt.get("thread_id"),255); lead.sent_at=now; lead.follow_up_due_at=now+timedelta(days=FIRST_FOLLOWUP_DAYS); lead.status="sent"; lead.last_error=""; lead.updated_at=now; db.session.commit(); summary["sent"]+=1
-        summary["skipped"].append({"company":company,"lead_id":lead.id,"status":"sent","message_id":lead.gmail_message_id,"thread_id":lead.gmail_thread_id})
+        with discovery_lock(company,source_url) as acquired:
+            if not acquired:
+                summary['skipped'].append({'company':company,'reason':'discovery_in_progress'})
+                continue
+            existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
+            result={**result,"contact_location":payload.get("location") or result.get("contact_location") or result.get("location"),"query":payload.get("query") or payload.get("goal") or payload.get("intent_signal"),"_campaign_context":campaign_context(payload,result)}
+            if existing:
+                from lead_recovery import LeadRecovery, schedule_recovery
+                held = db.session.get(LeadRecovery, existing.id)
+                if existing.status=='needs_evidence' and not existing.gmail_message_id and not held:
+                    held=schedule_recovery(existing,result,['CONTACT_EVIDENCE_MISSING'])
+                if held and existing.status in {'needs_evidence','qualified','drafted'}:
+                    summary["skipped"].append({"company":company,"reason":"recovery_scheduled","lead_id":existing.id,"recovery_state":held.state})
+                else:
+                    summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id})
+                continue
+            email,email_source=_verified_public_email(result)
+            evidence=_evidence_with_contact(result,email,email_source)
+            evidence.append({'source':'campaign_context','context':result['_campaign_context']})
+            lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
+            db.session.add(lead); db.session.commit(); summary["saved"]+=1
+            qualification=_store_qualification(lead)
+            if not qualification.get("ok"):
+                from lead_recovery import schedule_recovery
+                mailbox=(result.get('_contact_enrichment') or {}).get('contact_assessment',{}).get('mailbox_validation',{})
+                schedule_recovery(lead,result,mailbox.get('reason_codes') or qualification.get('reason_codes'))
+                summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"qualification_failed","reason_codes":qualification.get("reason_codes") or []}); continue
+            summary["qualified"]+=1
+            if not email:
+                summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"no_verified_public_email"}); continue
+            drafted=_draft_email(lead)
+            if not drafted.get("ok"):
+                from lead_recovery import schedule_recovery
+                schedule_recovery(lead,result,['DRAFT_FAILED'])
+                lead.last_error=_clean(drafted.get("error"),2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"draft_failed"}); continue
+            lead.subject=drafted["subject"]; lead.body=drafted["body"]; lead.status="drafted"; lead.last_error=""; db.session.commit(); summary["drafted"]+=1
+            if not AUTOSEND_ENABLED:
+                summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"autosend_disabled","status":"drafted"}); continue
+            execution=_safe_send(lead,kind="initial",sequence=0,subject=lead.subject,body=lead.body)
+            if not execution.get("ok"):
+                lead.last_error=_clean(execution,2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"safe_send_failed","stage":_clean(execution.get("stage"),100),"gate_reasons":((execution.get("gate") or {}).get("reasons") or []),"receipt_reasons":((execution.get("send_receipt") or {}).get("reasons") or []),"provider_error":_clean(execution.get("error"),500)}); continue
+            receipt=execution.get("send_receipt") or {}; now=datetime.utcnow()
+            lead.gmail_message_id=_clean(receipt.get("message_id"),255); lead.gmail_thread_id=_clean(receipt.get("thread_id"),255); lead.sent_at=now; lead.follow_up_due_at=now+timedelta(days=FIRST_FOLLOWUP_DAYS); lead.status="sent"; lead.last_error=""; lead.updated_at=now; db.session.commit(); summary["sent"]+=1
+            summary["skipped"].append({"company":company,"lead_id":lead.id,"status":"sent","message_id":lead.gmail_message_id,"thread_id":lead.gmail_thread_id})
     return summary
 
 

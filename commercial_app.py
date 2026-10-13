@@ -25,6 +25,7 @@ import production_e2e  # noqa: F401
 import operator_e2e_ui  # noqa: F401
 import gmail_reconciliation  # noqa: F401
 import v1_orchestration  # noqa: F401
+import lead_recovery  # noqa: F401
 import operator_inbound_ui  # noqa: F401
 import operator_conversation_import  # noqa: F401
 import outreach_scheduler  # noqa: F401

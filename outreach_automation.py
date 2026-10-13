@@ -391,6 +391,15 @@ def _server_qualification_inputs(lead: OutreachLead) -> tuple[Dict[str,Any],Dict
             contact_source=url;break
     validated["email_source_url"]=contact_source
     context={"candidate_location":_clean(lead.location,300),"lead_location":_clean(lead.location,300),"evidence":evidence}
+    # Only new discovery records carry this marker; legacy signed digests remain
+    # byte-for-byte compatible. Booking wrappers retain the original evidence.
+    for item in evidence:
+        if item.get('source')=='campaign_context' and isinstance(item.get('context'),dict):
+            allowed=('target_location','query','intent_signal','business_type','candidate_type','require_decision_maker')
+            context.update({k:item['context'][k] for k in allowed if k in item['context']})
+        assessment=item.get('contact_assessment')
+        if isinstance(assessment,dict) and any(x.get('source')=='campaign_context' for x in evidence):
+            validated['contact_assessment']=assessment
     return validated,context,evidence
 
 def _qualification_evidence_digest(lead: OutreachLead, validated: Dict[str,Any], context: Dict[str,Any]) -> str:
@@ -902,8 +911,11 @@ def _dashboard_record(lead: OutreachLead) -> Dict[str, Any]:
         try:qualification=json.loads(q.receipt_json or "{}")
         except Exception:qualification={"status":q.status,"ok":q.ok}
     audits=OperatorAuditEvent.query.filter_by(lead_id=lead.id).order_by(OperatorAuditEvent.id.desc()).limit(20).all()
+    from lead_recovery import LeadRecovery
+    recovery=db.session.get(LeadRecovery,lead.id)
     return {
         "lead":_serialize(lead),
+        "recovery":{"state":recovery.state,"attempts":recovery.attempts,"reason_codes":json.loads(recovery.reason_json),"next_check_at":recovery.next_check_at.isoformat() if recovery.next_check_at else None} if recovery else None,
         "qualification":qualification,
         "send_receipt":{"status":send.status,"message_id":send.message_id,"thread_id":send.thread_id,"error":send.error} if send else None,
         "reply_evidence":{"message_id":reply.message_id,"from_email":reply.from_email,"body_text":reply.body_text,"body_source":reply.body_source,"opted_out":reply.opted_out} if reply else None,
@@ -1060,7 +1072,7 @@ def operator_dashboard():
     lead_html=[]
     for x in records:
         l=x["lead"];o=l.get("operational") or {}
-        details=h(json.dumps({"qualification":x["qualification"],"send":x["send_receipt"],"reply":x["reply_evidence"],"booking":x["booking_receipt"],"evidence":l.get("evidence"),"audit":x["audit"]},indent=2))
+        details=h(json.dumps({"qualification":x["qualification"],"send":x["send_receipt"],"reply":x["reply_evidence"],"booking":x["booking_receipt"],"evidence":l.get("evidence"),"recovery":x.get("recovery"),"audit":x["audit"]},indent=2))
         buttons="".join(f'<button name="action" value="{a}">{a.title()}</button>' for a in ("review","approve","reject","retry","reconcile","suppress","close"))
         lead_html.append(f'<article><div class="top"><div><b>{h(l.get("company"))}</b><div class="muted">{h(l.get("contact_email"))} · {h(l.get("location"))}</div></div><span>{h(o.get("stage"))}</span></div><form method="post" action="/operator/leads/{int(l["id"])}/control"><input type="hidden" name="csrf_token" value="{_csrf_token()}">{buttons}</form><details><summary>Evidence, receipts & audit</summary><pre>{details}</pre></details></article>')
     body="".join(lead_html) or '<p class="muted">No lead records yet.</p>'
