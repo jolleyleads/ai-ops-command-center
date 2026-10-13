@@ -71,13 +71,18 @@ def _restriction_key(email):
     return hashlib.sha256(('hunter-processing-restricted:'+str(email).strip().lower()).encode()).hexdigest()
 
 
-def processing_restricted(email):
-    if not has_app_context():return True
+def processing_restriction_state(email):
+    if not has_app_context():return 'unavailable'
     try:
         with Session(db.engine) as session:
             row=session.get(HunterMailboxCheck,_restriction_key(email))
-            return bool(row and row.state=='restricted')
-    except Exception:return True
+            return 'restricted' if row and row.state=='restricted' else 'clear'
+    except Exception:return 'unavailable'
+
+
+def processing_restricted(email):
+    # Suppression fails closed, while verification keeps outages retryable.
+    return processing_restriction_state(email)!='clear'
 
 
 def normalize_result(email,data,now=None):
@@ -118,7 +123,9 @@ def _request(path,key,params,get):
 
 def verify_mailbox(email,get=None):
     email=str(email or '').strip().lower()
-    if has_app_context() and processing_restricted(email):
+    restriction=processing_restriction_state(email) if has_app_context() else 'clear'
+    if restriction=='unavailable':return base_receipt(email,'HUNTER_CACHE_UNAVAILABLE')
+    if restriction=='restricted':
         receipt=base_receipt(email,'HUNTER_PROCESSING_RESTRICTED');receipt['mailbox_status']='provider_rejected';return receipt
     if not enabled():return base_receipt(email,'HUNTER_NOT_ENABLED')
     key=os.getenv('HUNTER_API_KEY','').strip()

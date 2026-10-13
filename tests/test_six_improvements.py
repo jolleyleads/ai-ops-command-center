@@ -159,6 +159,10 @@ def test_restriction_database_failure_is_fail_closed(env,monkeypatch):
         def __init__(self,*a,**k):raise RuntimeError('database offline')
     monkeypatch.setattr(hunter,'Session',Broken)
     assert oa._is_suppressed('jane@acme.com') is True
+    receipt=hunter.verify_mailbox('jane@acme.com')
+    assert receipt['reason_codes']==['HUNTER_CACHE_UNAVAILABLE']
+    assert receipt['mailbox_status']=='unconfirmed'
+    assert recovery_policy(receipt['reason_codes'])['retryable']
 
 
 def test_approved_paraphrases_and_multiple_questions(monkeypatch):
