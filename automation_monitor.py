@@ -17,8 +17,10 @@ with app.app_context():
     db.create_all()
 
 
-def record_cycle(inbound, followups, research):
-    for name, result in (("inbound", inbound), ("followups", followups), ("research", research)):
+def record_cycle(inbound, followups, research, recovery=None):
+    results = [("inbound", inbound), ("followups", followups), ("research", research)]
+    if recovery is not None:results.append(('lead_recovery', recovery))
+    for name, result in results:
         row = db.session.get(AutomationHeartbeat, name)
         if row is None:
             row = AutomationHeartbeat(name=name)
@@ -34,13 +36,18 @@ def health_snapshot():
     from outreach_automation import ExternalSideEffectCommand, OutreachLead
     cutoff = datetime.utcnow() - timedelta(minutes=15)
     workers = []
-    for name in ("inbound", "followups", "research"):
+    for name in ("inbound", "followups", "research", "lead_recovery"):
         row = db.session.get(AutomationHeartbeat, name)
         workers.append({"name": name, "status": "missing" if row is None else "stale" if row.checked_at < cutoff else "healthy" if row.ok else "failed", "checked_at": row.checked_at.isoformat() if row else None})
     stalled = ResearchJob.query.filter(ResearchJob.status.in_(["queued", "running"]), ResearchJob.created_at < cutoff).count()
     uncertain = ExternalSideEffectCommand.query.filter_by(status="uncertain").count()
     replies = OutreachLead.query.filter(OutreachLead.last_error != "", OutreachLead.last_error.isnot(None)).count()
-    return {"ok": all(x["status"] == "healthy" for x in workers) and not stalled and not uncertain, "workers": workers, "stalled_searches": stalled, "uncertain_deliveries": uncertain, "leads_needing_review": replies}
+    from lead_recovery import recovery_snapshot
+    oldest = ResearchJob.query.filter(ResearchJob.status.in_(['queued','running'])).order_by(ResearchJob.created_at).first()
+    return {"ok": all(x["status"] == "healthy" for x in workers) and not stalled and not uncertain,
+            "workers": workers, "stalled_searches": stalled, "uncertain_deliveries": uncertain,
+            "leads_needing_review": replies, "lead_recovery": recovery_snapshot(),
+            "oldest_search_age_seconds": max(0,int((datetime.utcnow()-oldest.created_at).total_seconds())) if oldest else 0}
 
 
 @app.route("/api/operator/automation-health")

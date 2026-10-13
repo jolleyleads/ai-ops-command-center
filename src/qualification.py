@@ -69,6 +69,14 @@ def qualify_lead(validated:Dict[str,Any], *, verification_ok:bool=True, context:
     if email_ok or phone_ok:passed.append("validated_contact")
     else:missing.append("MISSING_VALIDATED_CONTACT")
 
+    if context.get('require_decision_maker') is True:
+        assessment=validated.get('contact_assessment') or {}
+        if (assessment.get('decision_maker_status')!='source_supported'
+                or assessment.get('email_person_status')!='same_source_card'
+                or assessment.get('person_email')!=validated.get('email')):
+            missing.append('NAMED_DECISION_MAKER_EMAIL_REQUIRED')
+        else:passed.append('named_decision_maker_email')
+
     rows=_evidence(validated,context)
     if rows:passed.append("source_evidence")
     else:missing.append("MISSING_SOURCE_EVIDENCE")

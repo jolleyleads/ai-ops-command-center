@@ -44,15 +44,17 @@ def process_next_research_job():
     try:
         budget=research_budget_seconds(job.target_count)
         result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
-        job.result_json=json.dumps(result)
-        job.status="failed" if result.get("agent_error") else "completed"
-        job.error="Research could not finish. Please try again." if job.status=="failed" else ""
+        result_json=json.dumps(result)
+        status="failed" if result.get("agent_error") else "completed"
+        error="Research could not finish. Please try again." if status=="failed" else ""
     except Exception:
         app.logger.exception("BACKGROUND_RESEARCH_FAILED")
-        db.session.rollback();job=db.session.get(ResearchJob,job_id)
-        job.status="failed";job.error="Research could not finish. Please try again."
-    job.finished_at=datetime.utcnow();db.session.commit()
-    return {"ok":job.status=="completed","processed":1,"job_id":job.id}
+        db.session.rollback()
+        result_json,status,error='{}','failed','Research could not finish. Please try again.'
+    finished=ResearchJob.query.filter_by(id=job_id,status='running',started_at=now).update(
+        {'result_json':result_json,'status':status,'error':error,'finished_at':datetime.utcnow()},synchronize_session=False)
+    db.session.commit()
+    return {"ok":status=="completed" and bool(finished),"processed":1,"job_id":job_id,"lease_lost":not bool(finished)}
 
 
 def _worker():
