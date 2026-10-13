@@ -9,7 +9,7 @@ import hashlib
 import html
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import tldextract
 from datetime import datetime, timedelta, timezone
 
@@ -151,8 +151,14 @@ def page_metadata(raw):
                 stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
     title = re.search(r"(?is)<title\b[^>]*>(.*?)</title>", raw)
     heading = re.search(r"(?is)<h1\b[^>]*>(.*?)</h1>", raw)
-    clean = lambda s: html.unescape(re.sub(r"(?s)<[^>]+>", " ", s)).strip()
-    return {"source_title": clean(title.group(1)) if title else "", "source_heading": clean(heading.group(1)) if heading else "", "source_organizations": organizations}
+    clean = lambda s: " ".join(html.unescape(re.sub(r"(?s)<[^>]+>", " ", s)).split())
+    brands=[]
+    for anchor in re.findall(r'(?is)<a\b[^>]*>.*?</a>',raw):
+        href=re.search(r'''(?is)\bhref\s*=\s*["']([^"']+)["']''',anchor)
+        image=re.search(r'''(?is)<img\b[^>]*\balt\s*=\s*["']([^"']+)["']''',anchor)
+        if href and image:
+            brands.append({'name':re.sub(r'(?i)\s+logo$','',clean(image.group(1))), 'url':html.unescape(href.group(1))})
+    return {"source_title": clean(title.group(1)) if title else "", "source_heading": clean(heading.group(1)) if heading else "", "source_organizations": organizations, "source_brand_links":brands[:40]}
 
 
 def identity_proof(company, row, website=""):
@@ -177,6 +183,15 @@ def identity_proof(company, row, website=""):
         if isinstance(organization, dict) and name_key(organization.get("name")) == key and owned_host(url, organization.get("url")) and (website or host(organization.get("url"))==company_root):
             basis = "organization_named_on_owned_page"
             break
+    # A named logo linked to this site's own root is explicit brand evidence,
+    # including abbreviated domains. A directory's logo linking elsewhere fails
+    # the ownership check; do not infer aliases from domain initials.
+    for brand in row.get('source_brand_links') or []:
+        if not isinstance(brand,dict) or name_key(brand.get('name'))!=key:continue
+        target=urljoin(str(url),str(brand.get('url') or ''))
+        if urlparse(target).path.rstrip('/') or urlparse(target).query:continue
+        if owned_host(url,target) and registrable_host(host(target))==company_root:
+            basis='named_logo_on_owned_root';break
     # A previously established website still needs the company's name in the
     # fetched page title/heading. A passing mention in a directory is insufficient.
     label = str(row.get("source_title") or row.get("title") or "") + " " + str(row.get("source_heading") or "")

@@ -19,7 +19,7 @@ from src.contact_assessment import contact_sections, assess_people, is_shared_em
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
 def _source_summary(item):
     row=dict(item)
-    for key in ("page_text","job_detail_text","source_job_postings","source_apply_controls"):row.pop(key,None)
+    for key in ("page_text","job_detail_text","source_application_text","source_email_application_controls","source_job_postings","source_apply_controls"):row.pop(key,None)
     return row
 
 def _dedupe(items):

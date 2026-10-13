@@ -46,7 +46,8 @@ def process_next_execution_job():
     try:
         import customer_demo as demo
         if job.kind == "acceptance":
-            response = app.make_response(demo._run_acceptance())
+            campaign=json.loads(job.payload_json).get('campaign')
+            response = app.make_response(demo._run_acceptance(campaign) if campaign is not None else demo._run_acceptance())
             result, code = response.get_json(), response.status_code
         else:
             result, stage, reason = demo._run_campaign(json.loads(job.payload_json))

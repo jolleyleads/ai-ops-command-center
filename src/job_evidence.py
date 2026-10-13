@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, parse_qsl
-from src.company_identity import identity_proof, location_matches, contact_context_matches, name_key, visible_page_text, STATES
+from src.company_identity import identity_proof, location_matches, contact_context_matches, name_key, visible_page_text, email_on_domain, STATES
 
 VERSION = "job-page-v1"
 MAX_CHECK_AGE = timedelta(hours=1)
@@ -78,7 +78,7 @@ def _stamp(value, expiry=False):
 
 class _ApplyControls(HTMLParser):
     def __init__(self):
-        super().__init__();self.stack=[];self.controls=[];self.hidden=0;self.elements=[];self.form_actions=[]
+        super().__init__();self.stack=[];self.controls=[];self.email_controls=[];self.visible_parts=[];self.hidden=0;self.elements=[];self.form_actions=[]
     def handle_starttag(self,tag,attrs):
         attrs=dict(attrs)
         own_block="disabled" in attrs or "hidden" in attrs or attrs.get("aria-hidden","").lower()=="true" or attrs.get("aria-disabled","").lower()=="true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden",attrs.get("style",""),re.I))
@@ -95,6 +95,7 @@ class _ApplyControls(HTMLParser):
             if APPLY.fullmatch(attrs.get("value","").strip()):self.controls.append({"label":attrs["value"],"url":attrs.get("formaction") or (self.form_actions[-1] if self.form_actions else "")})
     def handle_data(self,data):
         if not self.hidden:
+            if not any(blocked for _,blocked in self.elements):self.visible_parts.append(data)
             for item in self.stack:item[2].append(data)
     def handle_endtag(self,tag):
         if tag=="form" and self.form_actions:self.form_actions.pop()
@@ -105,6 +106,8 @@ class _ApplyControls(HTMLParser):
         if self.stack and self.stack[-1][0]==tag:
             _,blocked,parts,href=self.stack.pop();label=" ".join(" ".join(parts).split())
             if not blocked and APPLY.fullmatch(label):self.controls.append({"label":label,"url":href})
+            if not blocked and label and href.lower().startswith('mailto:'):
+                self.email_controls.append({'label':label,'url':href})
 
 
 def job_page_metadata(raw, source_url):
@@ -120,7 +123,7 @@ def job_page_metadata(raw, source_url):
             elif isinstance(node,dict):
                 types=node.get("@type");types=[types] if isinstance(types,str) else types
                 if isinstance(types,list) and any(isinstance(t,str) and t.rstrip("/").rsplit("/",1)[-1]=="JobPosting" for t in types):
-                    records.append({k:node.get(k) for k in ("title","description","url","datePosted","validThrough","hiringOrganization","jobLocation","jobLocationType","applicantLocationRequirements")})
+                    records.append({k:node.get(k) for k in ("title","description","url","identifier","datePosted","validThrough","hiringOrganization","jobLocation","jobLocationType","applicantLocationRequirements")})
                 stack.extend(v for v in node.values() if isinstance(v,(dict,list)))
     main=re.search(r"(?is)<main\b[^>]*>(.*?)</main>",raw)
     detail=main.group(1) if main else raw
@@ -140,7 +143,7 @@ def job_page_metadata(raw, source_url):
             links.append({'url':target,'label':label})
     for record in records:
         if isinstance(record.get('url'),str):links.append({'url':urljoin(source_url,record['url']),'label':str(record.get('title') or '')})
-    return {"source_job_links":list({x['url']:x for x in links}.values())[:80],"source_job_postings":records[:40],"source_apply_controls":[{**c,"url":urljoin(source_url,c["url"]) if c["url"] else ""} for c in parser.controls[:30]],"job_detail_text":visible_page_text(detail)[:30000]}
+    return {"source_application_text":" ".join(" ".join(parser.visible_parts).split())[:30000],"source_email_application_controls":parser.email_controls[:30],"source_job_links":list({x['url']:x for x in links}.values())[:80],"source_job_postings":records[:40],"source_apply_controls":[{**c,"url":urljoin(source_url,c["url"]) if c["url"] else ""} for c in parser.controls[:30]],"job_detail_text":visible_page_text(detail)[:30000]}
 
 
 def _addresses(record):
@@ -168,12 +171,22 @@ def _ats(url):
     return any(host==h or host.endswith("."+h) for h in ATS_HOSTS)
 
 
-def _job_application_controls(row,url):
+def _job_application_controls(row,url,record=None):
     """Require the enabled application target to identify this specific posting."""
     parsed=urlparse(url)
     identifiers=[v for k,v in parse_qsl(parsed.query) if k.lower() in {"jobid","job_id","jid","gh_jid","requisitionid","reqid"}]
     parts=[p for p in parsed.path.split("/") if p]
     if parts and parts[-1].lower() not in {"jobs","job","careers","career","positions","apply","index.html"}:identifiers.append(parts[-1])
+    # Employer pages and their ATS often use different IDs. Only page-authored
+    # identifiers for this posting may bridge them; never a model-proposed ID.
+    identifier=(record or {}).get('identifier')
+    if isinstance(identifier,dict):identifier=identifier.get('value')
+    if isinstance(identifier,(str,int)):identifiers.append(str(identifier))
+    labelled=re.findall(r'(?i)\b(?:req(?:uisition)?\s*(?:id|number|#)|job\s*(?:id|number|#))\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,40})',str(row.get('job_detail_text') or ''))
+    if len(set(labelled))==1:
+        identifiers.append(labelled[0])
+        year_number=re.fullmatch(r'(?:19|20)\d{2}-(\d{4,})',labelled[0])
+        if year_number:identifiers.append(year_number.group(1))
     accepted=[]
     for control in row.get("source_apply_controls") or []:
         if not isinstance(control,dict):continue
@@ -185,6 +198,20 @@ def _job_application_controls(row,url):
         if _same_job_url(target,url):continue
         target_values=[p for p in dest.path.split("/") if p]+[v for _,v in parse_qsl(dest.query)]
         if any(identifier in target_values for identifier in identifiers):accepted.append(control)
+    # Dedicated employer job pages may explicitly accept applications by email.
+    # Require a labeled application section, application/resume instructions and
+    # a single address on the employer's own domain. General contact/footer mail
+    # and third-party addresses are not application evidence.
+    detail=str(row.get('source_application_text') or '')
+    section=re.search(r'(?i)\bhow to apply\s*:\s*(.{0,800}?)(?=\b(?:benefits|requirements|duties|about us|contact us)\s*:|$)',detail)
+    if section:
+        instructions=section.group(1)
+        emails=set(re.findall(r'(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b',instructions))
+        if len(emails)==1 and re.search(r'(?i)\b(?:email|send|submit)\b',instructions) and re.search(r'(?i)\b(?:application|resume|résumé|cv)\b',instructions):
+            email=next(iter(emails)).lower()
+            enabled_emails={str(c.get('url') or '').removeprefix('mailto:').split('?',1)[0].lower() for c in row.get('source_email_application_controls') or [] if isinstance(c,dict)}
+            if email in enabled_emails and email_on_domain(email,'https://'+(urlparse(url).hostname or '').removeprefix('www.')):
+                accepted.append({'label':'Published email application instructions','url':'mailto:'+email,'kind':'email_application'})
     return accepted
 
 
@@ -240,7 +267,7 @@ def check_job_evidence(row,query,location="",company="",now=None):
         if record.get("datePosted") is not None and publication is None:reasons.append("job_posting_date_invalid")
         if publication and publication>now+timedelta(minutes=5):reasons.append("job_posting_date_in_future")
         if publication and now-publication>timedelta(days=MAX_POSTING_AGE_DAYS):reasons.append("job_posting_older_than_90_days")
-        controls=_job_application_controls(row,url)
+        controls=_job_application_controls(row,url,record)
         if not controls:reasons.append("enabled_application_control_not_observed")
         # Metadata cannot contradict the visible page's job title or city.
         if not fallback and (not role_matches(str(row.get("source_heading") or row.get("source_title") or ""),terms or re.findall(r"[a-z0-9]+",title.lower())) or not description or any(not contact_context_matches(detail,str(row.get("source_heading") or title),place) for place in requested_places)):

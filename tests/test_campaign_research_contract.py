@@ -72,6 +72,20 @@ def test_execution_failure_is_persisted_without_retry(env,monkeypatch):
     assert final.json["error"]=="EXECUTION_FAILED_REVIEW_REQUIRED"
     assert final.json["result"]["reason"]==final.json["error"]
     assert final.json["result_http_status"]==500
+
+
+def test_controlled_acceptance_campaign_is_validated_and_persisted(env,monkeypatch):
+    assert env.post('/api/operator/v1-1-acceptance-once',json={'campaign':{}}).status_code==400
+    assert env.post('/api/operator/v1-1-acceptance-once',json={'campaign':[]}).status_code==400
+    body={'target_customer':'construction companies hiring accounting assistants','territory':'Norfolk, Virginia','target_count':1,'sending_limit':1}
+    calls=[]
+    monkeypatch.setattr(demo,'_run_acceptance',lambda campaign:calls.append(campaign) or ({'ok':False,'pass':False,'reason':'NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED'},409))
+    first=env.post('/api/operator/v1-1-acceptance-once',json={'campaign':body},headers={'Idempotency-Key':'controlled-acceptance'})
+    second=env.post('/api/operator/v1-1-acceptance-once',json={'campaign':body},headers={'Idempotency-Key':'controlled-acceptance'})
+    assert first.status_code==202 and first.json['job_id']==second.json['job_id']
+    assert not jobs.process_next_execution_job()['ok']
+    assert len(calls)==1 and calls[0]['target_count']==1
+    assert env.get(first.json['poll_url']).json['result']['pass'] is False
     assert jobs.process_next_execution_job()["processed"]==0
 
 
