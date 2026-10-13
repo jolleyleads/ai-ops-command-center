@@ -167,6 +167,15 @@ def _inspect(items,limit=5):
             if snapshot.get("page_text"):fs[f].update(snapshot)
             elif snapshot.get('fetch_error'):fs[f]['live_fetch_error']=snapshot['fetch_error']
 
+def _inspect_discovery(items,query,limit=5):
+    # Initial and additional discovery also contain cached provider text. Mark
+    # hiring intent before inspection so those pages receive the same live fetch
+    # as candidate-specific research; provider snippets never become proof.
+    if is_hiring_query(query):
+        for item in items:
+            item['verification_intents']=list(dict.fromkeys([*(item.get('verification_intents') or []),'hiring']))
+    _inspect(items,limit)
+
 def _memory(q,loc):
     try:return [{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True,"research_tool":"rag"} for x in retrieve_context(q,loc,limit=4)]
     except Exception:return []
@@ -670,7 +679,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         calls=_company_discovery_calls(q,loc,calls)
         live,msg,used=_run_calls(calls,deadline,3);messages+=msg;tools+=used
         discovery=_dedupe(live+_memory(q,loc))
-        if time.monotonic()<deadline-9:_inspect(discovery,6)
+        if time.monotonic()<deadline-9:_inspect_discovery(discovery,q,6)
         candidates=extract_candidates(q,loc,discovery) if discovery and time.monotonic()<deadline-9 else []
         # The LLM is optional at this handoff: grounded business results become
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
@@ -709,7 +718,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             follow=_company_discovery_calls(q,loc,follow)
             seen_calls.update((c.get("tool"),c.get("query")) for c in follow)
             extra,msg2,used2=_run_calls(follow,deadline,2);messages+=msg2;tools+=used2
-            discovery=_dedupe(discovery+extra);_inspect(extra,4)
+            discovery=_dedupe(discovery+extra);_inspect_discovery(extra,q,4)
             new_candidates=extract_candidates(q,loc,extra) or _fallback_candidates(extra,target_count)
             known={_candidate_key(x.get("name")) for x in candidates}
             new_candidates=[x for x in new_candidates if _candidate_key(x.get("name")) not in known]

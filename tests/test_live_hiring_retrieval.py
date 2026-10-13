@@ -25,6 +25,14 @@ def test_cached_exa_hiring_text_must_be_live_fetched(monkeypatch,live_job_page):
     search._inspect([row],1)
     assert fetched==[row['url']] and row['directly_fetched'] is True
 
+def test_initial_cached_hiring_discovery_gets_live_fetch(monkeypatch,live_job_page):
+    row={'url':'https://acme.example/jobs/1','page_text':'cached snippet','research_tool':'exa_search'}
+    fetched=[]
+    monkeypatch.setattr(search,'_page_snapshot',lambda url:fetched.append(url) or live_job_page(url=url))
+    search._inspect_discovery([row],'companies hiring AI automation engineers',1)
+    assert fetched==[row['url']] and row['directly_fetched'] is True
+    assert 'hiring' in row['verification_intents']
+
 
 def test_job_detail_fetch_has_priority_over_generic_contact(monkeypatch,live_job_page):
     rows=[{'url':'https://acme.example/contact','verification_research':True},
