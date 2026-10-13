@@ -89,7 +89,9 @@ def _public_contact_evidence(result):
     priority_paths=("", "contact", "contact-us", "about", "about-us", "team", "staff", "leadership", "our-team", "locations", "careers", "privacy")
     # Keep these explicit probes as release-gate invariants while the loop below
     # interleaves all roots fairly: urljoin(root,"staff") urljoin(root,"locations") urljoin(root,"team")
-    fetch_urls=[]
+    # Re-fetch the actual verified source first: a dedicated job/contact page
+    # can contain a published mailbox absent from guessed /contact URLs.
+    fetch_urls=[u for u in urls if urlparse(u).path.rstrip('/') and any(owned_host(u,root) for root in roots)]
     for path in priority_paths:
         for root in roots:
             candidate=root if not path else urljoin(root,path)
@@ -109,7 +111,7 @@ def _public_contact_evidence(result):
         seen.add(url);attempted+=1
         connect_timeout=min(CONTACT_CONNECT_TIMEOUT,max(0.5,remaining/2))
         read_timeout=min(CONTACT_READ_TIMEOUT,max(0.5,remaining-connect_timeout))
-        try:r=public_get(url,timeout=min(remaining,connect_timeout+read_timeout))
+        try:r=public_get(url,timeout=min(remaining,connect_timeout+read_timeout),max_bytes=500000)
         except Exception:continue
         if getattr(r,"status_code",200)!=200:continue
         ct=(r.headers.get("content-type") or "").lower()

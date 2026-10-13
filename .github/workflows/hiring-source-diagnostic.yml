@@ -1,0 +1,28 @@
+name: Public Hiring Source Diagnostic
+on:
+  pull_request:
+    paths:
+      - scripts/diagnose_hiring_sources.py
+      - .github/workflows/hiring-source-diagnostic.yml
+permissions:
+  contents: read
+jobs:
+  public-pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install urllib3 tldextract
+      - name: Inspect public employer pages without credentials
+        run: |
+          cat > /tmp/job-sources.json <<'JSON'
+          [
+            {"url":"https://jobs.aus.com/job/chesapeake/security-officer-full-time-unarmed-patrol-incident-assessment/22950/101916108768","company":"Allied Universal","role":"security companies hiring security officers","location":"Chesapeake, Virginia"},
+            {"url":"https://etgresham.com/employment/accounting-assistant/","company":"E.T. Gresham Company","role":"construction companies hiring accounting assistants","location":"Norfolk, Virginia"},
+            {"url":"https://www.auxsecurity.com/apply-online","company":"Aux Security","role":"security companies hiring security officers","location":"Virginia Beach, Virginia"}
+          ]
+          JSON
+          python scripts/diagnose_hiring_sources.py /tmp/job-sources.json

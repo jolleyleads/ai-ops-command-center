@@ -74,10 +74,17 @@ def campaign_execution_status(job_id):
 
 @app.route("/api/operator/v1-1-acceptance-once",methods=["POST"])
 def v11_acceptance_once():
-    return enqueue_execution("acceptance",{},request.headers.get("Idempotency-Key"))
+    data=request.get_json(silent=True) or {}
+    payload={}
+    if 'campaign' in data:
+        if not isinstance(data['campaign'],dict):return jsonify({'ok':False,'error':'campaign_must_be_an_object'}),400
+        campaign,error=_campaign_payload(data['campaign'])
+        if error:return jsonify(error),400
+        payload={'campaign':campaign}
+    return enqueue_execution("acceptance",payload,request.headers.get("Idempotency-Key"))
 
 
-def _run_acceptance():
+def _run_acceptance(campaign=None):
     started=datetime.now(timezone.utc).isoformat()
     # Search a bounded set of distinct discovery pools. A pool that only
     # rediscovers already-queued companies remains a truthful non-pass; the
@@ -109,6 +116,10 @@ def _run_acceptance():
       {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1}
       for i,(target,kind) in enumerate(rotated[:4])
     ]
+    if campaign is not None:
+        controlled,error=_campaign_payload(campaign)
+        if error:return jsonify(error),400
+        campaign_pool=[controlled]
     # Keep each one-shot proof bounded to four campaigns while the catalog rotates
     # across industries and territories between runs.
     attempts=[]
