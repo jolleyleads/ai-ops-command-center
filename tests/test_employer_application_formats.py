@@ -90,3 +90,22 @@ def test_contact_fetch_starts_with_verified_owned_job_source(monkeypatch):
         'supporting_urls':[job,'https://other.example/contact'],'contact_location':'Norfolk VA'})
     assert seen==[job]
     assert rows[0]['validated_emails']==['mail@acme.example']
+
+
+def test_fax_is_not_a_call_contact_in_search_and_enrichment(live_job_page):
+    import smart_search as search
+    from src.enrichment import enrich_lead
+    row=live_job_page()
+    row['page_text']='Acme Norfolk VA Fax: (757) 625-7705. Phone: (757) 627-4583. mail@acme.example'
+    enriched=enrich_lead({'company':'Acme','website':'https://acme.example','target_location':'Norfolk VA'},[row])
+    assert enriched['fields']['phone']['value']=='(757) 627-4583'
+    assert enriched['fields']['email']['address_kind']=='shared_inbox'
+    result=search._attach_source_contacts([{'title':'Acme','supporting_urls':[row['url']]}],[row],'Norfolk VA')[0]
+    assert [c['phone'] for c in result['contacts'] if c.get('phone')]==['(757) 627-4583']
+
+
+def test_number_used_for_phone_and_fax_is_not_withheld_as_fax_only():
+    from src.contact_assessment import is_fax_number
+    number='(757) 627-4583'
+    assert is_fax_number('Fax to '+number,number)
+    assert not is_fax_number('Fax: '+number+'. Telephone: '+number,number)

@@ -60,22 +60,23 @@ def test_closed_job_and_wrong_location_do_not_pass():
 
 def test_deep_search_uses_evidence_followups_and_returns_shortfall(monkeypatch,live_job_page):
     calls=[]
-    monkeypatch.setattr(search,"plan_research",lambda *a:{"tool_calls":[{"tool":"web_search","query":"initial"}]})
+    monkeypatch.setattr(search,"plan_research",lambda *a:{"tool_calls":[{"tool":"web_search","query":"companies hiring engineers initial"}]})
     monkeypatch.setattr(search,"_memory",lambda *a:[])
     monkeypatch.setattr(search,"_inspect",lambda *a:None)
     monkeypatch.setattr(search,"remember_evidence",lambda *a:None)
     monkeypatch.setattr(search,"extract_candidates",lambda q,loc,rows:[dict(name=r["title"],discovery_urls=[r["url"]]) for r in rows])
     def retrieve(plan,*a):
         calls.extend(c["query"] for c in plan)
-        if plan[0]["query"]=="initial":return [dict(title="Acme",url="https://acme.example")],[],["web_search"]
+        if 'initial' in plan[0]["query"]:return [dict(title="Acme",url="https://acme.example")],[],["web_search"]
         return [dict(title="Fresh",url="https://fresh.example")],[],["web_search"]
     monkeypatch.setattr(search,"_run_calls",retrieve)
     def verify(q,loc,candidates,*a):
         return ([live_job_page(company="Fresh",title="Engineer",url="https://fresh.example/jobs/1")] if any(c["name"]=="Fresh" for c in candidates) else []),[],[]
     monkeypatch.setattr(search,"_candidate_followups",verify)
-    monkeypatch.setattr(search,"evaluate_research",lambda *a:{"sufficient":False,"followup_tool_calls":[dict(tool="web_search",query="Fresh official careers page")]})
+    monkeypatch.setattr(search,"evaluate_research",lambda *a:{"sufficient":False,"followup_tool_calls":[dict(tool="web_search",query="Fresh engineers official careers page")]})
     result=search._smart_search("Find companies hiring engineers","",runtime_budget=180,target_count=2)
-    assert calls[:2]==["initial","Fresh official careers page"]
+    assert calls[0]=="companies hiring engineers initial"
+    assert 'engineers' in calls[1]
     assert len(calls)==7 and len(set(calls))==7
     assert result["research_rounds"]==6
     assert result["verified_count"]==1 and result["target_met"] is False

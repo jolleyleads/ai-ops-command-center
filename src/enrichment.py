@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable
 from urllib.parse import urlparse
 from src.company_identity import identity_proof, host, owned_host, email_on_domain, contact_context_matches
 from src.company_identity import current_contact_source
-from src.contact_assessment import assess_people, is_shared_email, current_email_context
+from src.contact_assessment import assess_people, is_shared_email, current_email_context, is_fax_number
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
 PHONE_RE=re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
@@ -85,7 +85,7 @@ def enrich_lead(lead:Dict[str,Any],evidence_rows:Iterable[Dict[str,Any]], *, ema
                 out["fields"].setdefault("email",email_candidates[-1])
         if "phone" not in out["fields"]:
             for match in PHONE_RE.finditer(text):
-                if contact_context_matches(text,match.group(0),location):
+                if not is_fax_number(text,match.group(0)) and contact_context_matches(text,match.group(0),location):
                     out["fields"]["phone"]={"value":_phone(match.group(0)),"source_url":u,"validated":True,"observed_at":row.get("observed_at")};break
         out["evidence"].append({"url":u,"title":_clean(row.get("title"),500),"snippet":_clean(row.get("subtitle") or row.get("snippet"),1500),"observed_at":row.get("observed_at"),"directly_fetched":True,"http_status":200})
 
