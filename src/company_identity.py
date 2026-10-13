@@ -157,7 +157,7 @@ def page_metadata(raw):
         href=re.search(r'''(?is)\bhref\s*=\s*["']([^"']+)["']''',anchor)
         image=re.search(r'''(?is)<img\b[^>]*\balt\s*=\s*["']([^"']+)["']''',anchor)
         if href and image:
-            brands.append({'name':re.sub(r'(?i)\s+logo$','',clean(image.group(1))), 'url':html.unescape(href.group(1))})
+            brands.append({'name':re.sub(r'(?i)(?:\s+logo|\s*\(home\))$','',clean(image.group(1))), 'url':html.unescape(href.group(1))})
     return {"source_title": clean(title.group(1)) if title else "", "source_heading": clean(heading.group(1)) if heading else "", "source_organizations": organizations, "source_brand_links":brands[:40]}
 
 

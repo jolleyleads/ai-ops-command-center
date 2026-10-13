@@ -11,10 +11,11 @@ def test_source_heading_whitespace_matches_visible_job(live_job_page):
     assert check_job_evidence(row,'companies hiring AI automation engineers','Norfolk VA','Acme')['ok']
 
 
-def test_named_logo_proves_abbreviated_owned_domain_not_directory(live_job_page):
+@pytest.mark.parametrize('alt',['Example Services logo','Example Services (Home)'])
+def test_named_logo_proves_abbreviated_owned_domain_not_directory(live_job_page,alt):
     row=live_job_page(company='Example Services',url='https://jobs.es.example/jobs/1')
     row['source_organizations']=[]
-    row.update(page_metadata('<a href="https://es.example/"><img alt="Example Services logo"></a>'))
+    row.update(page_metadata('<a href="https://es.example/"><img alt="'+alt+'"></a>'))
     assert identity_proof('Example Services',row)['basis']=='named_logo_on_owned_root'
     assert not identity_proof('Different Services',row)
     row['resolved_url']='https://directory.example/jobs/1'
