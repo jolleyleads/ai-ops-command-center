@@ -13,7 +13,7 @@ from src.record_evidence import check_record_evidence, record_receipt_is_current
 from src.company_identity import current_contact_source
 from src.company_identity import name_key
 from src.public_fetch import public_get
-from src.contact_assessment import contact_sections, assess_people, is_shared_email, current_email_context
+from src.contact_assessment import contact_sections, assess_people, is_shared_email, current_email_context, is_fax_number
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -156,7 +156,7 @@ def _inspect(items,limit=5):
     targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (not x.get("directly_fetched") and (x.get("research_tool")=="public_records" or "permit_license" in (x.get("verification_intents") or []) or "hiring" in (x.get("verification_intents") or []) or x.get("verification_research") and not shared_host(host(x["url"]))))) ]
     # Cached search text is never live page proof. Prefer actual job-detail URLs
     # over generic contact/home pages when the request requires hiring evidence.
-    targets.sort(key=lambda x:(not bool(re.search(r'(?i)/job[s]?/|/career[s]?/|/position[s]?/|/requisition/|jobid=|gh_jid=',x['url'])),not x.get('verification_research')))
+    targets.sort(key=lambda x:(shared_host(host(x['url'])),not bool(re.search(r'(?i)/job[s]?/|/career[s]?/|/employment/|/position[s]?/|/requisition/|jobid=|gh_jid=',x['url'])),not x.get('verification_research')))
     targets=targets[:limit]
     if not targets:return
     with ThreadPoolExecutor(max_workers=min(5,len(targets))) as pool:
@@ -257,21 +257,45 @@ def _verification_queries(name,q,intents=None):
 def _company_discovery_calls(q,loc,calls):
     """Hiring requests always retrieve job evidence, even after a business-only plan."""
     if not _needs_candidate_verification(q):return calls
-    if any(c.get('tool') in {'web_search','exa_search'} for c in calls) and not any(c.get('tool')=='job_search' for c in calls):return calls
     intents=_verification_intent(q);role=" ".join(_requested_role_terms(q))
+    primary=[c for c in calls if c.get('tool') in {'web_search','exa_search'}]
+    if primary and not any(c.get('tool')=='job_search' for c in calls):
+        if 'hiring' not in intents or any(role_matches(c.get('query'),_requested_role_terms(q)) for c in primary):return calls
     kept=[c for c in calls if c.get("tool")!="job_search"]
     focused=[]
     if "hiring" in intents:
-        focused.append({"tool":"web_search","query":f'{loc} employers hiring {role} official job detail careers apply current openings',"location":loc})
+        focused.append({"tool":"web_search","query":f'{loc} {_clean(q,450)} official employer job detail careers apply current openings',"location":loc})
     if "response_complaints" in intents:
         focused.append({"tool":"exa_search","query":f'{loc} business reviews "never called back" "unanswered calls" dates',"location":loc})
     elif "hiring" in intents:
-        focused.append({"tool":"exa_search","query":f'{loc} {role} employer job posting application',"location":loc})
+        focused.append({"tool":"exa_search","query":f'{loc} {_clean(q,450)} official employer job posting application',"location":loc})
     unique=[];seen=set()
     for call in focused+kept:
         key=(call.get('tool'),call.get('query'))
         if key not in seen:unique.append(call);seen.add(key)
     return unique[:3] if focused else calls
+
+
+def _bind_primary_hiring_candidates(sources,candidates,query,location):
+    """Join directly verified page-authored employer names without model labels."""
+    verified=set();known={_candidate_key(c.get('name')) for c in candidates}
+    preferred=[]
+    for source in sources:
+        if not current_contact_source(source):continue
+        organizations=list(source.get('source_organizations') or [])
+        for posting in source.get('source_job_postings') or []:
+            if isinstance(posting,dict) and isinstance(posting.get('hiringOrganization'),dict):organizations.append(posting['hiringOrganization'])
+        for organization in organizations:
+            name=organization.get('name') if isinstance(organization,dict) else None
+            if not isinstance(name,str) or not name.strip():continue
+            proof=check_job_evidence(source,query,location,name)
+            if not proof['ok']:continue
+            source.update(candidate_name=name.strip(),verification_research=True,job_validation=proof)
+            key=_candidate_key(name);verified.add(key)
+            if key not in known:
+                preferred.append({'name':name.strip(),'discovery_urls':[source['url']]});known.add(key)
+            break
+    return preferred+[c for c in candidates if _candidate_key(c.get('name')) in verified]+[c for c in candidates if _candidate_key(c.get('name')) not in verified],verified
 
 
 def _company_discovery_rows(candidates,discovery):
@@ -371,7 +395,7 @@ def _attach_source_contacts(rows,evidence,location="",query=""):
                 if not contact_context_matches(text,email,location) or not current_email_context(text,email):continue
                 contacts.append({"email":email.lower(),"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_deliverability_unconfirmed","address_kind":"shared_inbox" if is_shared_email(email) else "individual_or_unknown","mailbox_status":"unconfirmed","person_status":"unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
             for phone in dict.fromkeys(re.findall(r"(?<!\d)(?:\+1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)",text)):
-                if not contact_context_matches(text,phone,location):continue
+                if is_fax_number(text,phone) or not contact_context_matches(text,phone,location):continue
                 contacts.append({"phone":phone,"source_url":proof["source_url"],"observed_at":item.get("observed_at"),"status":"source_observed_reachability_unconfirmed","company_identity":proof,"location":location,"location_status":"source_context_matched" if location else "not_requested"})
         row["contacts"]=list({(c.get("email") or c.get("phone"),c["source_url"]):c for c in contacts}.values())
         people,person,person_status=assess_people([(item,proof["source_url"],str(item.get("page_text") or item.get("text") or "")) for item,proof in proofs],name,official_site,location,query)
@@ -694,8 +718,11 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
                         known.add(_candidate_key(name))
         if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
+        already_verified=set()
+        if is_hiring_query(q):candidates,already_verified=_bind_primary_hiring_candidates(discovery,candidates,q,loc)
         # Reserve time to evaluate company-specific proof after retrieval.
-        joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-25 if runtime_budget>25 else deadline,min(6,target_count*2)) if candidates else ([],[],[])
+        pending=[c for c in candidates if _candidate_key(c.get('name')) not in already_verified]
+        joined,msgc,usedc=_candidate_followups(q,loc,pending,deadline-25 if runtime_budget>25 else deadline,min(6,target_count*2)) if pending and len(already_verified)<target_count else ([],[],[])
         messages+=msgc;tools+=usedc
         for source in discovery:
             owners=[c for c in candidates if source.get('url') in c.get('discovery_urls',[])]
@@ -720,10 +747,13 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             extra,msg2,used2=_run_calls(follow,deadline,2);messages+=msg2;tools+=used2
             discovery=_dedupe(discovery+extra);_inspect_discovery(extra,q,4)
             new_candidates=extract_candidates(q,loc,extra) or _fallback_candidates(extra,target_count)
+            confirmed_extra=set()
+            if is_hiring_query(q):new_candidates,confirmed_extra=_bind_primary_hiring_candidates(extra,new_candidates,q,loc)
             known={_candidate_key(x.get("name")) for x in candidates}
             new_candidates=[x for x in new_candidates if _candidate_key(x.get("name")) not in known]
             candidates+=new_candidates
-            verified_extra,msg3,used3=_candidate_followups(q,loc,new_candidates,deadline,target_count)
+            pending_extra=[c for c in new_candidates if _candidate_key(c.get('name')) not in confirmed_extra]
+            verified_extra,msg3,used3=_candidate_followups(q,loc,pending_extra,deadline,target_count) if pending_extra else ([],[],[])
             messages+=msg3;tools+=used3;evidence=_dedupe(evidence+extra+verified_extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-15 else evaluation
             research_rounds+=1

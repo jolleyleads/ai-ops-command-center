@@ -17,6 +17,45 @@ def test_business_only_hiring_plan_adds_current_job_retrieval():
     assert {x['tool'] for x in calls}=={'web_search','exa_search','business_search'}
 
 
+def test_hiring_plan_without_requested_role_gets_focused_queries():
+    calls=search._company_discovery_calls('construction companies hiring accounting assistants','Norfolk VA',[
+        {'tool':'exa_search','query':'construction assistant managers Norfolk'}])
+    assert 'accounting assistants' in calls[0]['query'] and 'construction' in calls[0]['query']
+
+
+def test_inspection_prioritizes_employer_over_shared_job_directory(monkeypatch,live_job_page):
+    seen=[]
+    monkeypatch.setattr(search,'_page_snapshot',lambda url:seen.append(url) or live_job_page(url=url))
+    employer={'url':'https://acme.example/employment/accounting-assistant','page_text':'cached','verification_intents':['hiring']}
+    shared={'url':'https://www.linkedin.com/jobs/view/1','verification_intents':['hiring']}
+    search._inspect([shared,employer],1)
+    assert seen==[employer['url']]
+
+
+def test_page_verified_employer_survives_omitted_model_candidate(monkeypatch,live_job_page):
+    row=live_job_page(title='Accounting Assistant')
+    row['source_job_postings']=[]
+    row['source_organizations']=[{'name':'Acme','url':'https://acme.example'}]
+    row['job_detail_text']='Accounting Assistant Acme Location: Norfolk, VA. Hiring now.'
+    q='construction companies hiring accounting assistants'
+    monkeypatch.setattr(search,'plan_research',lambda *a:{'tool_calls':[{'tool':'exa_search','query':q}]})
+    monkeypatch.setattr(search,'_run_calls',lambda *a:([row],[],['exa_search']))
+    monkeypatch.setattr(search,'_memory',lambda *a:[])
+    monkeypatch.setattr(search,'extract_candidates',lambda *a:[])
+    monkeypatch.setattr(search,'evaluate_research',lambda *a:{})
+    monkeypatch.setattr(search,'remember_evidence',lambda *a:None)
+    monkeypatch.setattr(search,'_contact_followups',lambda *a:[])
+    monkeypatch.setattr(search,'_candidate_followups',lambda *a:pytest.fail('Already verified employer should not need model retrieval'))
+    result=search._smart_search(q,'Norfolk VA',runtime_budget=240,target_count=1)
+    assert result['verified_count']==1 and result['results'][0]['title']=='Acme'
+
+
+def test_employer_metadata_does_not_override_wrong_city(live_job_page):
+    row=live_job_page(title='Accounting Assistant',city='Boston',state='MA')
+    candidates,verified=search._bind_primary_hiring_candidates([row],[],'companies hiring accounting assistants','Norfolk VA')
+    assert not candidates and not verified and not row.get('job_validation',{}).get('ok')
+
+
 def test_cached_exa_hiring_text_must_be_live_fetched(monkeypatch,live_job_page):
     row={'url':'https://acme.example/jobs/1','page_text':'cached snippet','research_tool':'exa_search',
          'verification_intents':['hiring']}

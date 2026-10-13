@@ -11,12 +11,22 @@ CARD_PAIR=re.compile(r"\b("+NAME+r")\s+((?i:"+ROLES+r"))\b")
 HIRING=re.compile(r"\b(?:hiring|jobs?|recruiting|careers?|openings?)\b",re.I)
 HIRING_RESPONSIBILITY_SYNONYMS=re.compile(r"\b(?:recruitment|staffing|talent)\b",re.I)
 EMAIL=re.compile(r"(?i)(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])")
-SHARED={"info","sales","support","contact","hello","office","admin","jobs","careers","hr","hiring","recruiting","recruitment","team","owner","service","billing","press","marketing","noreply","no-reply"}
+SHARED={"info","sales","support","contact","hello","office","mail","admin","jobs","careers","hr","hiring","recruiting","recruitment","team","owner","service","billing","press","marketing","noreply","no-reply"}
 
 
 def is_shared_email(email):
     local=str(email).split('@',1)[0].lower()
     return any(local==x or local.startswith(x+'.') or local.startswith(x+'-') for x in SHARED)
+
+
+def is_fax_number(text,value):
+    matches=list(re.finditer(re.escape(value),str(text),re.I))
+    if not matches:return False
+    for match in matches:
+        before=str(text)[max(0,match.start()-80):match.start()]
+        label=re.search(r'(?i)\b(fax|facsimile|telephone|phone|tel|call|mobile)\b[^.!?;\d]*$',before)
+        if not label or label.group(1).lower() not in {'fax','facsimile'}:return False
+    return True
 
 
 def email_name_consistent(email,name):
