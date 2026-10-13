@@ -131,7 +131,33 @@ def gmail_access_token():
         return direct
     stored = _stored_refresh_token()
     if stored:
-        return _refresh_access_token(stored)
+        try:
+            return _refresh_access_token(stored)
+        except RuntimeError as exc:
+            # Only a revoked grant may try an already configured alternative.
+            # Transient errors and client configuration failures keep their identity.
+            if 'invalid_grant' not in str(exc):raise
+            legacy = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
+            sender = os.getenv("GMAIL_FROM_EMAIL", "").strip().lower()
+            row = _stored_connection()
+            if not legacy or legacy==stored or not sender or not row or (row.email or '').strip().lower()!=sender:
+                raise
+            token = _refresh_access_token(legacy)
+            # Google's read-only profile verifies the replacement belongs to the
+            # exact existing sender, before it may power Gmail or Calendar.
+            profile = requests.get('https://gmail.googleapis.com/gmail/v1/users/me/profile',
+                headers={'Authorization':'Bearer '+token},timeout=8)
+            if not profile.ok or str(profile.json().get('emailAddress') or '').strip().lower()!=sender:
+                raise RuntimeError('Google recovery grant does not match the configured sender') from None
+            # Compare-and-swap: a concurrent fresh OAuth consent always wins.
+            changed = GmailOAuthConnection.query.filter_by(id=row.id,refresh_token=stored).update(
+                {'refresh_token':legacy},synchronize_session=False)
+            db.session.commit()
+            if not changed:
+                _token_cache.clear()
+                return _refresh_access_token(_stored_refresh_token())
+            app.logger.warning('GMAIL_OAUTH_RECOVERED same_sender=True persisted=True')
+            return token
     legacy = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
     if legacy:
         return _refresh_access_token(legacy)

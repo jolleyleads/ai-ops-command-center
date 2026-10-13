@@ -8,7 +8,7 @@ from research_agent import plan_research,recover_tool_plan,evaluate_research,ext
 from rag_research import retrieve_context,remember_evidence,annotate_evidence
 from universal_app import _search_public_records,_search_businesses,_normalize_jobs
 from src.company_identity import identity_proof, host, owned_host, email_on_domain, page_metadata, page_text, visible_page_text, contact_context_matches, shared_host, location_matches
-from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_current, requested_role_terms, is_hiring_query, requested_location, alternative_claim_allowed
+from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_current, requested_role_terms, is_hiring_query, requested_location, alternative_claim_allowed, role_matches, ATS_HOSTS
 from src.record_evidence import check_record_evidence, record_receipt_is_current
 from src.company_identity import current_contact_source
 from src.company_identity import name_key
@@ -144,15 +144,20 @@ def _page_snapshot(url):
     try:
         p=urlparse(_clean(url,1600));host=(p.hostname or "").lower()
         if p.scheme not in ("http","https") or not host or host in ("localhost","127.0.0.1","::1") or host.endswith(".local"):return {}
-        r=public_get(url,timeout=2)
-        if r.status_code>=400 or "text/html" not in (r.headers.get("content-type") or "").lower():return {}
-        raw=r.text[:100000];metadata={**page_metadata(raw),**job_page_metadata(raw,r.url)}
+        r=public_get(url,timeout=5,max_bytes=400000)
+        if r.status_code>=400:return {'fetch_error':'HTTP_'+str(r.status_code)}
+        if "text/html" not in (r.headers.get("content-type") or "").lower():return {'fetch_error':'NON_HTML_SOURCE'}
+        raw=r.text[:400000];metadata={**page_metadata(raw),**job_page_metadata(raw,r.url)}
         return {**metadata,"page_text":visible_page_text(raw)[:8000],"contact_sections":contact_sections(raw),"resolved_url":r.url,"observed_at":datetime.now(timezone.utc).isoformat(),"directly_fetched":True,"http_status":r.status_code,"job_page_fetched_at":datetime.now(timezone.utc).isoformat()}
-    except Exception:return {}
+    except Exception as exc:return {'fetch_error':type(exc).__name__}
 def _page(url):
     return _page_snapshot(url).get("page_text","")
 def _inspect(items,limit=5):
-    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (not x.get("directly_fetched") and (x.get("research_tool")=="public_records" or "permit_license" in (x.get("verification_intents") or []) or x.get("verification_research") and (not shared_host(host(x["url"])) or "hiring" in (x.get("verification_intents") or [])))))][:limit]
+    targets=[x for x in items if x.get("url") and not x.get("rag_retrieved") and (not x.get("page_text") or (not x.get("directly_fetched") and (x.get("research_tool")=="public_records" or "permit_license" in (x.get("verification_intents") or []) or "hiring" in (x.get("verification_intents") or []) or x.get("verification_research") and not shared_host(host(x["url"]))))) ]
+    # Cached search text is never live page proof. Prefer actual job-detail URLs
+    # over generic contact/home pages when the request requires hiring evidence.
+    targets.sort(key=lambda x:(not bool(re.search(r'(?i)/job[s]?/|/career[s]?/|/position[s]?/|/requisition/|jobid=|gh_jid=',x['url'])),not x.get('verification_research')))
+    targets=targets[:limit]
     if not targets:return
     with ThreadPoolExecutor(max_workers=min(5,len(targets))) as pool:
         fs={pool.submit(_page_snapshot,x["url"]):x for x in targets}
@@ -160,6 +165,7 @@ def _inspect(items,limit=5):
             try:snapshot=f.result()
             except Exception:snapshot={}
             if snapshot.get("page_text"):fs[f].update(snapshot)
+            elif snapshot.get('fetch_error'):fs[f]['live_fetch_error']=snapshot['fetch_error']
 
 def _memory(q,loc):
     try:return [{"title":x["title"],"url":x["url"],"subtitle":x["text"],"source":"RAG memory","last_seen":x["last_seen"],"rag_retrieved":True,"research_tool":"rag"} for x in retrieve_context(q,loc,limit=4)]
@@ -240,17 +246,23 @@ def _verification_queries(name,q,intents=None):
 
 
 def _company_discovery_calls(q,loc,calls):
-    """Company requests must discover employers rather than generic remote-job feeds."""
+    """Hiring requests always retrieve job evidence, even after a business-only plan."""
     if not _needs_candidate_verification(q):return calls
-    kept=[c for c in calls if c.get("tool")!="job_search"]
-    if len(kept)==len(calls):return calls
+    if any(c.get('tool') in {'web_search','exa_search'} for c in calls) and not any(c.get('tool')=='job_search' for c in calls):return calls
     intents=_verification_intent(q);role=" ".join(_requested_role_terms(q))
+    kept=[c for c in calls if c.get("tool")!="job_search"]
     focused=[]
     if "hiring" in intents:
-        focused.append({"tool":"web_search","query":f'{loc} employers hiring {role} careers apply current openings',"location":loc})
+        focused.append({"tool":"web_search","query":f'{loc} employers hiring {role} official job detail careers apply current openings',"location":loc})
     if "response_complaints" in intents:
         focused.append({"tool":"exa_search","query":f'{loc} business reviews "never called back" "unanswered calls" dates',"location":loc})
-    return (focused+kept)[:3]
+    elif "hiring" in intents:
+        focused.append({"tool":"exa_search","query":f'{loc} {role} employer job posting application',"location":loc})
+    unique=[];seen=set()
+    for call in focused+kept:
+        key=(call.get('tool'),call.get('query'))
+        if key not in seen:unique.append(call);seen.add(key)
+    return unique[:3] if focused else calls
 
 
 def _company_discovery_rows(candidates,discovery):
@@ -570,6 +582,32 @@ def _fallback_candidates(discovery,limit=10):
         if len(out)>=limit:break
     return out
 
+def _follow_job_links(rows,query,location,deadline):
+    """Follow bounded, source-advertised job URLs. No names/domains are generated."""
+    terms=requested_role_terms(query);tasks=[];seen={r.get('url') for r in rows}
+    for row in rows:
+        name=row.get('candidate_name')
+        if not name or not current_contact_source(row) or not identity_proof(name,row):continue
+        origin=row.get('resolved_url') or row.get('url')
+        for link in row.get('source_job_links') or []:
+            url=link.get('url');hostname=(urlparse(url or '').hostname or '').lower()
+            allowed=owned_host(url,origin) or any(hostname==h or hostname.endswith('.'+h) for h in ATS_HOSTS)
+            if not allowed or url in seen:continue
+            if not role_matches(link.get('label'),terms) and not re.search(r'(?i)career|opening|jobs',link.get('label','')):continue
+            tasks.append((url,name));seen.add(url)
+            if len(tasks)>=6:break
+        if len(tasks)>=6:break
+    if not tasks or time.monotonic()>deadline-6:return []
+    def fetch(task):
+        url,name=task
+        if time.monotonic()>deadline-5:return None
+        snapshot=_page_snapshot(url)
+        if not current_contact_source(snapshot):return None
+        return {**snapshot,'url':url,'candidate_name':name,'verification_research':True,'verification_intents':['hiring'],'source':'employer_advertised_job_link'}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        return [r for r in pool.map(fetch,tasks) if r]
+
+
 def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     # Verify three companies together rather than spending the whole budget
     # on the first company's sources. Child calls preserve candidate identity.
@@ -604,7 +642,10 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
             rows2,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc}],deadline,1);messages+=msg2;tools+=used2
             for x in rows2:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
+            if "hiring" in intents and time.monotonic()<deadline-6:_inspect(rows2,5)
             candidate_rows.extend(rows2)
+        if "hiring" in intents:
+            candidate_rows.extend(_follow_job_links(candidate_rows,q,loc,deadline))
         evidence.extend(candidate_rows)
     return _dedupe(evidence),messages,tools
 
@@ -633,11 +674,24 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         candidates=extract_candidates(q,loc,discovery) if discovery and time.monotonic()<deadline-9 else []
         # The LLM is optional at this handoff: grounded business results become
         # candidates deterministically so verification still runs when planning/extraction is unavailable.
+        if is_hiring_query(q):
+            known={_candidate_key(c.get('name')) for c in candidates}
+            for source in live:
+                for posting in source.get('source_job_postings') or []:
+                    org=posting.get('hiringOrganization') if isinstance(posting,dict) else None
+                    name=org.get('name') if isinstance(org,dict) else None
+                    if isinstance(name,str) and name.strip() and _candidate_key(name) not in known:
+                        candidates.append({'name':name.strip(),'discovery_urls':[source['url']]})
+                        known.add(_candidate_key(name))
         if not candidates and _needs_candidate_verification(q):
             candidates=_fallback_candidates(discovery,10)
         # Reserve time to evaluate company-specific proof after retrieval.
         joined,msgc,usedc=_candidate_followups(q,loc,candidates,deadline-25 if runtime_budget>25 else deadline,min(6,target_count*2)) if candidates else ([],[],[])
         messages+=msgc;tools+=usedc
+        for source in discovery:
+            owners=[c for c in candidates if source.get('url') in c.get('discovery_urls',[])]
+            if len(owners)==1 and current_contact_source(source):
+                source.setdefault('candidate_name',owners[0]['name']);source['verification_research']=True
         evidence=_dedupe(discovery+joined)
         if time.monotonic()<deadline-5:_inspect(evidence,8)
         evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {}
@@ -693,12 +747,19 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         rejected_count=sum(1 for x in visible if x.get("classification")=="Rejected")
         runtime=int((time.monotonic()-started)*1000);unique_tools=list(dict.fromkeys(t for t in tools if t))
         provider_message=" ".join(dict.fromkeys(messages))
+        verification_diagnostics={'live_pages_fetched':sum(1 for x in contact_evidence if x.get('directly_fetched')),
+            'fetch_failures':{},'job_failure_reasons':{}}
+        for source in contact_evidence:
+            if source.get('live_fetch_error'):
+                reason=source['live_fetch_error'];verification_diagnostics['fetch_failures'][reason]=verification_diagnostics['fetch_failures'].get(reason,0)+1
+            for reason in (source.get('job_validation') or {}).get('reasons',[]):
+                verification_diagnostics['job_failure_reasons'][reason]=verification_diagnostics['job_failure_reasons'].get(reason,0)+1
         scope_summary={"relevance_gate":True,"excluded_result_count":len(excluded),"excluded_results":excluded,"availability_status":"matching_results" if visible else "no_confirmed_matches"}
         answer_summary=evaluation.get("answer_summary") or ""
         if is_hiring_query(q) or _deterministic_route_intent(q) in {"permits","permit_leads"}:
             answer_summary=f"{len(visible)} source-confirmed matches for the requested role or record and location." if visible else "No source-confirmed matches for the requested role or record and location."
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {**scope_summary,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=total_deadline,"contact_followup_source_count":len(contact_followups),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
+        return {**scope_summary,"verification_diagnostics":verification_diagnostics,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=total_deadline,"contact_followup_source_count":len(contact_followups),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"intent":_deterministic_route_intent(q),"runtime_budget_seconds":runtime_budget,"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 

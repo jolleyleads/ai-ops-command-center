@@ -128,7 +128,19 @@ def job_page_metadata(raw, source_url):
     parser=_ApplyControls()
     try:parser.feed(detail)
     except (ValueError,RecursionError):pass
-    return {"source_job_postings":records[:40],"source_apply_controls":[{**c,"url":urljoin(source_url,c["url"]) if c["url"] else ""} for c in parser.controls[:30]],"job_detail_text":visible_page_text(detail)[:30000]}
+    # Page-authored links are discovery hints only. The destination must pass the
+    # complete live posting validator; a careers index never proves an opening.
+    links=[]
+    for anchor in re.findall(r"(?is)<a\b[^>]*>.*?</a>",detail):
+        href=re.search(r"""(?is)href=["']([^"']+)["']""",anchor)
+        if not href:continue
+        target=urljoin(source_url,html.unescape(href.group(1)))
+        label=visible_page_text(anchor)
+        if urlparse(target).scheme in {'https','http'} and re.search(r'(?i)job|career|position|opening|requisition|vacanc|employment',target+' '+label):
+            links.append({'url':target,'label':label})
+    for record in records:
+        if isinstance(record.get('url'),str):links.append({'url':urljoin(source_url,record['url']),'label':str(record.get('title') or '')})
+    return {"source_job_links":list({x['url']:x for x in links}.values())[:80],"source_job_postings":records[:40],"source_apply_controls":[{**c,"url":urljoin(source_url,c["url"]) if c["url"] else ""} for c in parser.controls[:30]],"job_detail_text":visible_page_text(detail)[:30000]}
 
 
 def _addresses(record):
