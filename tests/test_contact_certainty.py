@@ -263,6 +263,21 @@ def test_finance_title_does_not_claim_hiring_authority_or_invent_email():
     assert 'decision_maker' not in result['fields']
 
 
+def test_inline_formatting_preserves_name_and_table_title_boundaries():
+    raw='<table><tr><td>Acme Norfolk VA <span>Sara</span>h Moro<br>Director of Finance</td><td>Acme Norfolk VA Billy Gresham<br>Vice President</td><td>Acme Norfolk VA Mike Oehler<br>Safety Director</td></tr></table>'
+    result=enrich_lead(lead(query='automate accounting workflows'),[source(visible_page_text(raw),contact_sections=contact_sections(raw))])
+    people={c['name']:c['title'] for c in result['decision_maker_candidates']}
+    assert people=={'Sarah Moro':'Director of Finance','Billy Gresham':'Vice President','Mike Oehler':'Safety Director'}
+    assert result['fields']['decision_maker']['value']=='Sarah Moro'
+    assert 'email' not in result['fields']
+
+
+def test_career_ladder_titles_do_not_become_person_names():
+    raw='<section>Acme Norfolk VA Regional Vice President<br>General Manager<br>Branch Manager<br>Director of Operations<br>Client Manager<br>Operations Manager</section>'
+    result=enrich_lead(lead(query='automate accounting workflows'),[source(visible_page_text(raw),contact_sections=contact_sections(raw))])
+    assert result['decision_maker_candidates']==[]
+
+
 def test_campaign_skips_disallowed_inbox_without_losing_allowed_company_contact(monkeypatch):
     import v1_orchestration as v1
     monkeypatch.setattr(v1,'_public_contact_evidence',lambda result:([source('Acme Norfolk VA careers@acme.com info@acme.com')],{}))
