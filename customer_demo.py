@@ -59,6 +59,47 @@ def _run_campaign(data):
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
     return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
 
+@app.route("/api/chat/lead-status",methods=["GET"])
+def chat_lead_status():
+    """Read-only, redacted qualification visibility; never triggers outreach."""
+    from flask import request as _req
+    from outreach_automation import _operator_authorized, _operator_session_authorized
+    if not (_operator_authorized() or _operator_session_authorized()):
+        return jsonify({"ok":False,"error":"Operator authentication required"}),401
+    from lead_recovery import recovery_snapshot
+    leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(50).all()
+    recoveries={row["lead_id"]:row for row in recovery_snapshot()}
+    items=[]
+    for lead in leads:
+        r=recoveries.get(lead.id) or {}
+        items.append({"id":lead.id,"company":lead.company,"status":lead.status,
+           "verification":lead.verification,"last_error":lead.last_error or "",
+           "has_contact_email":bool(lead.contact_email),"has_sent_message":bool(lead.gmail_message_id),
+           "recovery_state":r.get("state"),"reason_codes":r.get("reason_codes") or [],
+           "next_check_at":r.get("next_check_at")})
+    resp=jsonify({"ok":True,"leads":items})
+    resp.headers["Cache-Control"]="no-store"
+    return resp
+
+@app.route("/api/chat/campaigns/prepare",methods=["POST"])
+def chat_prepare_campaign():
+    """Explicit, authenticated draft-only campaign path; never authorizes live sends."""
+    from outreach_automation import _operator_authorized, _operator_session_authorized
+    from v1_orchestration import AUTOSEND_ENABLED
+    if not (_operator_authorized() or _operator_session_authorized()):
+        return jsonify({"ok":False,"error":"Operator authentication required"}),401
+    if AUTOSEND_ENABLED:
+        return jsonify({"ok":False,"error":"Draft-only campaign unavailable while automatic sending is enabled; no campaign started."}),409
+    data=request.get_json(silent=True) or {}
+    query=_text(data.get("target_customer") or data.get("prompt"),500)
+    campaign,error=_campaign_payload({
+        "target_customer":query,"territory":_text(data.get("territory"),200),
+        "offer":_text(data.get("offer") or "AI lead generation and customer follow-up automation",1200),
+        "sending_limit":1,"target_count":data.get("target_count") or 10,
+    })
+    if error:return jsonify(error),400
+    return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
+
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
