@@ -106,9 +106,15 @@ def page_text(row):
 def visible_page_text(raw):
     """Keep explicit mailto/tel values beside their visible source context."""
     raw=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",raw)
+    # Inline formatting does not insert spaces inside a rendered name or word.
+    raw=join_inline_markup(raw)
     raw=re.sub(r'''(?is)<a\b[^>]*href=["'](?:mailto|tel):([^"']+)["'][^>]*>''',
                lambda m:" "+html.unescape(m.group(1)).split("?",1)[0]+" ",raw)
     return re.sub(r"\s+"," ",html.unescape(re.sub(r"(?s)<[^>]+>"," ",raw))).strip()
+
+
+def join_inline_markup(raw):
+    return re.sub(r'(?is)</?(?:span|strong|b|em|i|u|font)\b[^>]*>', '', str(raw or ''))
 
 
 def location_matches(text, location):
