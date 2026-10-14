@@ -1,10 +1,10 @@
 """Separate person, responsibility, locality and email-association evidence."""
 import re
 from html.parser import HTMLParser
-from src.company_identity import contact_context_matches, email_on_domain, name_key
+from src.company_identity import contact_context_matches, email_on_domain, name_key, join_inline_markup
 
-NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?){1,2}"
-ROLES=r"(?:chief executive officer|chief technology officer|chief financial officer|human resources manager|talent acquisition manager|talent acquisition director|chief operating officer|operations manager|project manager|office manager|finance manager|accounting manager|financial controller|controller|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|technology|operations|finance|accounting|recruiting|talent acquisition|human resources|sales|customer service|customer success)|owner|founder|president|CEO|CTO|COO|CFO|recruiter|director|principal|partner)"
+NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?){1,2}?"
+ROLES=r"(?:regional vice president|vice president|safety director|branch manager|client manager|chief executive officer|chief technology officer|chief financial officer|human resources manager|talent acquisition manager|talent acquisition director|chief operating officer|operations manager|project manager|office manager|finance manager|accounting manager|financial controller|controller|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|technology|operations|finance|accounting|recruiting|talent acquisition|human resources|sales|customer service|customer success)|owner|founder|president|CEO|CTO|COO|CFO|recruiter|director|principal|partner)"
 # Names keep case; titles may use any case.
 PAIR=re.compile(r"\b("+NAME+r")\s*[,|:\-–—]\s*((?i:"+ROLES+r"))\b")
 CARD_PAIR=re.compile(r"\b("+NAME+r")\s+((?i:"+ROLES+r"))\b")
@@ -63,7 +63,7 @@ def contact_sections(raw):
                 _,parts=self.stack.pop();text=' '.join(' '.join(parts).split())
                 if (PAIR.search(text) or CARD_PAIR.search(text)) and len(text)<=4000:self.blocks.append(text)
             if tag in {'script','style','footer','nav','header','noscript','svg'}:self.ignore=max(0,self.ignore-1)
-    parser=Parser();parser.feed(str(raw or '')[:500000])
+    parser=Parser();parser.feed(join_inline_markup(str(raw or '')[:500000]))
     return list(dict.fromkeys(parser.blocks))[:100]
 
 
@@ -99,6 +99,8 @@ def assess_people(rows,company,website,location,query):
                 start=max(matches[i-1].end() if i else 0,match.start()-180)
                 stop=min(matches[i+1].start() if i+1<len(matches) else len(card),match.end()+180)
                 context=card[start:stop];name,title=match.groups()
+                # Career ladders and directory headings are not people's names.
+                if set(name.casefold().split()) & {'regional','vice','branch','client','manager','personnel','construction','safety','director','president','operations'}:continue
                 if name.casefold().startswith(company.casefold()+' '):
                     name=name[len(company):].strip()
                     if len(name.split())<2:continue
