@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import re
 from typing import Any, Dict, Iterable
 from urllib.parse import urlparse
+from src.job_evidence import is_hiring_query, receipt_is_current
 
 QUALIFIED="Qualified"
 NOT_QUALIFIED="Not Qualified"
@@ -100,7 +101,15 @@ def qualify_lead(validated:Dict[str,Any], *, verification_ok:bool=True, context:
     if intent_terms:
         matched=intent_terms & _terms(evidence_text)
         threshold=1 if len(intent_terms)<=2 else 2
-        if len(matched)>=threshold:passed.append("intent_signal_fit")
+        job_rows=[x for x in rows if isinstance(x.get('job_validation'),dict)] if is_hiring_query(intent) else []
+        if job_rows:
+            # The search already checked employer, role, city, application and
+            # dates. Qualification must consume that current bound receipt,
+            # rather than discard its meaning and count words in a summary.
+            supported=any(_clean(x.get('url') or x.get('source_url'),1800)==_clean(x['job_validation'].get('source_url'),1800)
+                and receipt_is_current(x['job_validation'],intent,target_location,now,company=company) for x in job_rows)
+        else:supported=len(matched)>=threshold
+        if supported:passed.append("intent_signal_fit")
         else:missing.append("INTENT_SIGNAL_UNPROVEN")
 
     max_age=int(context.get("max_evidence_age_days") or 180)

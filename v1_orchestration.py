@@ -123,6 +123,13 @@ def campaign_context(payload, result):
             "require_decision_maker": payload.get("require_decision_maker") is True or bool(re.search(r"(?i)\bdecision[ -]?makers?\b", query))}
 
 
+def unfinished_lead_reasons(qualification,mailbox):
+    # An opt-out mailbox receipt is informational: source-validated contacts
+    # can still fail another qualification check and must recover that check.
+    provider=[r for r in mailbox.get('reason_codes') or [] if r!='HUNTER_NOT_ENABLED']
+    return provider or qualification.get('reason_codes') or ['CONTACT_EVIDENCE_MISSING']
+
+
 def resume_discovery_lead(lead, result, lease_valid=None):
     """Refresh held discovery only, never rewrite a sent conversation."""
     email, source = _verified_public_email(result)
@@ -139,7 +146,7 @@ def resume_discovery_lead(lead, result, lease_valid=None):
     db.session.commit()
     receipt = _store_qualification(lead)
     if not receipt.get('ok') or not email:
-        return {'ok': False, 'reason_codes': mailbox.get('reason_codes') or receipt.get('reason_codes') or ['CONTACT_EVIDENCE_MISSING']}
+        return {'ok': False, 'reason_codes': unfinished_lead_reasons(receipt,mailbox)}
     drafted = _draft_email(lead)
     if not drafted.get('ok'):
         return {'ok': False, 'reason_codes': ['DRAFT_FAILED']}
@@ -195,7 +202,7 @@ def orchestrate_discovery(payload):
             if not qualification.get("ok"):
                 from lead_recovery import schedule_recovery
                 mailbox=(result.get('_contact_enrichment') or {}).get('contact_assessment',{}).get('mailbox_validation',{})
-                schedule_recovery(lead,result,mailbox.get('reason_codes') or qualification.get('reason_codes'))
+                schedule_recovery(lead,result,unfinished_lead_reasons(qualification,mailbox))
                 summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"qualification_failed","reason_codes":qualification.get("reason_codes") or []}); continue
             summary["qualified"]+=1
             if not email:
