@@ -225,6 +225,44 @@ def test_apostrophe_in_sourced_name_is_preserved():
     assert result['contact_assessment']['email_person_status']=='same_source_card'
 
 
+def test_finance_personnel_table_is_retrieved_from_advertised_link(monkeypatch):
+    import outreach_bridge as bridge
+    seen=[]
+    def fetch(url,**kwargs):
+        seen.append(url)
+        if url=='https://acme.com/':
+            body='<title>Acme</title>Acme Norfolk VA info@acme.com <a href="/key-personnel/">Key Personnel</a>'
+        elif url=='https://acme.com/key-personnel/':
+            body='<title>Acme</title><table><tr><td>Acme Norfolk VA Mary Jones<br>Director of Finance<br>mary@acme.com</td><td>Acme Boston MA Jane Doe<br>Hiring Manager<br>jane@acme.com</td></tr></table>'
+        else:raise AssertionError('Advertised personnel page must precede guessed paths')
+        return SimpleNamespace(url=url,status_code=200,text=body,headers={'content-type':'text/html'})
+    monkeypatch.setattr(bridge,'public_get',fetch)
+    rows,_=bridge._public_contact_evidence({'company':'Acme','website':'https://acme.com','contact_location':'Norfolk VA','query':'automate accounting workflows'})
+    result=enrich_lead(lead(query='automate accounting workflows'),rows)
+    assert seen==['https://acme.com/','https://acme.com/key-personnel/']
+    assert result['fields']['decision_maker']['value']=='Mary Jones'
+    assert result['fields']['decision_maker']['title']=='Director of Finance'
+    assert result['fields']['email']['value']=='mary@acme.com'
+    assert result['contact_assessment']['mailbox_status']=='unconfirmed'
+
+
+def test_personnel_table_cannot_borrow_city_or_email_from_adjacent_cell():
+    raw='<table><tr><td>Acme Mary Jones<br>Director of Finance</td><td>Acme Norfolk VA Jane Doe<br>Hiring Manager<br>jane@acme.com</td></tr></table>'
+    result=enrich_lead(lead(query='automate accounting workflows'),[source(visible_page_text(raw),contact_sections=contact_sections(raw))])
+    mary=next(c for c in result['decision_maker_candidates'] if c['name']=='Mary Jones')
+    assert mary['location_status']=='unconfirmed' and mary['email']==''
+    assert 'decision_maker' not in result['fields']
+
+
+def test_finance_title_does_not_claim_hiring_authority_or_invent_email():
+    raw='<table><tr><td>Acme Norfolk VA Mary Jones<br>Director of Finance</td></tr></table>'
+    result=enrich_lead(lead(query='companies hiring accounting assistants'),[source(visible_page_text(raw),contact_sections=contact_sections(raw))])
+    candidate=result['decision_maker_candidates'][0]
+    assert candidate['name']=='Mary Jones' and candidate['title']=='Director of Finance'
+    assert candidate['responsibility_status']=='unconfirmed' and candidate['email']==''
+    assert 'decision_maker' not in result['fields']
+
+
 def test_campaign_skips_disallowed_inbox_without_losing_allowed_company_contact(monkeypatch):
     import v1_orchestration as v1
     monkeypatch.setattr(v1,'_public_contact_evidence',lambda result:([source('Acme Norfolk VA careers@acme.com info@acme.com')],{}))
