@@ -132,14 +132,18 @@ def qualify_lead(validated:Dict[str,Any], *, verification_ok:bool=True, context:
     # Channel readiness is informational, not a bypass of the outreach gate.
     # A phone-only contact can be reviewed for manual sales calls without
     # being misrepresented as approved for automated email delivery.
+    # Requiring a named person's EMAIL must not disqualify a source-backed
+    # business telephone from the separate, manual-only calling queue.
+    call_missing = [code for code in missing
+                    if code != "NAMED_DECISION_MAKER_EMAIL_REQUIRED"]
     identity_ok = verification_ok and bool(company) and not hard
-    call_ready = bool(identity_ok and phone_ok and rows and not missing
-                      and not context.get("excluded") and not context.get("duplicate"))
+    call_ready = bool(identity_ok and phone_ok and rows and not call_missing)
     email_ready = bool(ok and email_ok)
     return {
         "call_ready":call_ready,"email_outreach_ready":email_ready,
         "call_ready_reason_codes":[] if call_ready else (
-            ["MISSING_VERIFIED_BUSINESS_PHONE"] if not phone_ok else hard+missing),
+            (["MISSING_VERIFIED_BUSINESS_PHONE"] if not phone_ok else [])
+            + hard + call_missing),
         "ok":ok,"qualified":ok,"status":status,
         "reason_codes":hard+missing,
         "passed_checks":passed,
