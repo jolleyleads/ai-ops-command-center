@@ -10,7 +10,7 @@ from app import db
 from outreach_automation import OutreachLead, _draft_email
 from src.enrichment import enrich_lead, validated_payload
 from src.email_validation import apply_email_domain_check
-from src.contact_assessment import contact_sections, PAIR, is_fax_number
+from src.contact_assessment import contact_sections, PAIR, CARD_PAIR, is_fax_number
 from src.qualification import qualify_lead, qualification_payload
 
 EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
@@ -131,12 +131,13 @@ def _public_contact_evidence(result):
         emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[owning_root])]
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if not is_fax_number(visible,m.group(0)) and contact_context_matches(visible,m.group(0),location)))
-        if proof and (emails or phones or PAIR.search(visible)):
+        sections=contact_sections(contact_html)
+        if proof and (emails or phones or PAIR.search(visible) or any(CARD_PAIR.search(card) for card in sections)):
             rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
-            # Email is the outreach requirement; stop once exact same-domain proof exists.
-            if emails:
-                query=result.get("query") or result.get("business_need") or ""
-                if not query:break
+            # Card-local evidence may disambiguate an email on a multi-office page.
+            query=result.get("query") or result.get("business_need") or ""
+            if emails and not query:break
+            if query:
                 assessed=enrich_lead({"company":company,"website":website or owning_root,"target_location":location,"query":query},rows)
                 if assessed.get("contact_assessment",{}).get("email_person_status")=="same_source_card":break
         # Discover explicit contact/about/team/careers links advertised by the
@@ -151,7 +152,7 @@ def _public_contact_evidence(result):
             if not ah or not owned_host(absolute,owning_root):continue
             path=(urlparse(absolute).path or "").lower()
             label_text=re.sub(r"<[^>]+>"," ",anchor).lower()
-            contactish=("contact","about","team","staff","people","leadership","career","location","reach","get in touch","connect","privacy")
+            contactish=("contact","about","team","staff","people","personnel","leadership","management","career","location","reach","get in touch","connect","privacy")
             if any(token in path or token in label_text for token in contactish) and absolute not in seen:
                 if absolute in fetch_urls:fetch_urls.remove(absolute)
                 fetch_urls.insert(0,absolute)
