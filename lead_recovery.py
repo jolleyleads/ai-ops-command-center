@@ -50,6 +50,18 @@ def process_recoverable_leads(limit=3):
     import outreach_automation as oa
     import v1_orchestration as v1
     now = datetime.utcnow()
+    # Repair only false disabled holds created by the old reason precedence.
+    # The worker still re-fetches contacts and re-runs signed qualification;
+    # this transition cannot approve, draft or send a lead on its own.
+    falsely_disabled=LeadRecovery.query.join(oa.OutreachLead,oa.OutreachLead.id==LeadRecovery.lead_id).filter(
+        LeadRecovery.state=='disabled',LeadRecovery.reason_json==json.dumps(['HUNTER_NOT_ENABLED']),
+        oa.OutreachLead.status=='needs_evidence',oa.OutreachLead.contact_email!='',
+        oa.OutreachLead.last_error=='INTENT_SIGNAL_UNPROVEN').limit(10).all()
+    for held in falsely_disabled:
+        LeadRecovery.query.filter_by(lead_id=held.lead_id,state='disabled').filter(
+            or_(LeadRecovery.lease_until.is_(None),LeadRecovery.lease_until<now)).update(
+            {'state':'retry_wait','reason_json':json.dumps(['INTENT_SIGNAL_UNPROVEN']),'next_check_at':now},synchronize_session=False)
+    if falsely_disabled:db.session.commit()
     # A killed contact research attempt is read-only and can be claimed again.
     candidates = LeadRecovery.query.filter(
         or_(LeadRecovery.next_check_at <= now,
