@@ -1,10 +1,10 @@
 """Separate person, responsibility, locality and email-association evidence."""
 import re
 from html.parser import HTMLParser
-from src.company_identity import contact_context_matches, email_on_domain, name_key
+from src.company_identity import contact_context_matches, email_on_domain, name_key, join_inline_markup
 
-NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?){1,2}"
-ROLES=r"(?:chief executive officer|chief technology officer|human resources manager|talent acquisition manager|talent acquisition director|chief operating officer|operations manager|project manager|office manager|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|technology|operations|recruiting|talent acquisition|human resources|sales|customer service|customer success)|owner|founder|president|CEO|CTO|COO|recruiter|director|principal|partner)"
+NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?){1,2}?"
+ROLES=r"(?:regional vice president|vice president|safety director|branch manager|client manager|chief executive officer|chief technology officer|chief financial officer|human resources manager|talent acquisition manager|talent acquisition director|chief operating officer|operations manager|project manager|office manager|finance manager|accounting manager|financial controller|controller|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|technology|operations|finance|accounting|recruiting|talent acquisition|human resources|sales|customer service|customer success)|owner|founder|president|CEO|CTO|COO|CFO|recruiter|director|principal|partner)"
 # Names keep case; titles may use any case.
 PAIR=re.compile(r"\b("+NAME+r")\s*[,|:\-–—]\s*((?i:"+ROLES+r"))\b")
 CARD_PAIR=re.compile(r"\b("+NAME+r")\s+((?i:"+ROLES+r"))\b")
@@ -51,7 +51,7 @@ def contact_sections(raw):
         def __init__(self):super().__init__(convert_charrefs=True);self.stack=[];self.blocks=[];self.ignore=0
         def handle_starttag(self,tag,attrs):
             if tag in {'script','style','footer','nav','header','noscript','svg'}:self.ignore+=1
-            if tag in {'div','section','article','li','p'}:self.stack.append([tag,[]])
+            if tag in {'div','section','article','li','p','td','th'}:self.stack.append([tag,[]])
             if not self.ignore and tag=='a':
                 href=dict(attrs).get('href','')
                 if href.lower().startswith('mailto:'):self.handle_data(href[7:].split('?',1)[0])
@@ -59,12 +59,15 @@ def contact_sections(raw):
             if not self.ignore:
                 for _,parts in self.stack:parts.append(data)
         def handle_endtag(self,tag):
-            if tag in {'div','section','article','li','p'} and self.stack and self.stack[-1][0]==tag:
+            if tag in {'div','section','article','li','p','td','th'} and self.stack and self.stack[-1][0]==tag:
                 _,parts=self.stack.pop();text=' '.join(' '.join(parts).split())
                 if (PAIR.search(text) or CARD_PAIR.search(text)) and len(text)<=4000:self.blocks.append(text)
             if tag in {'script','style','footer','nav','header','noscript','svg'}:self.ignore=max(0,self.ignore-1)
-    parser=Parser();parser.feed(str(raw or '')[:500000])
-    return list(dict.fromkeys(parser.blocks))[:100]
+    parser=Parser();parser.feed(join_inline_markup(str(raw or '')[:500000]))
+    blocks=list(dict.fromkeys(parser.blocks))
+    # A directory container repeats child names beside adjacent labels. Keep
+    # its individual cards, rather than reparsing that combined text as people.
+    return [block for block in blocks if not any(child!=block and child in block for child in blocks)][:100]
 
 
 def responsibility_matches(title,context,query,location="",company=""):
@@ -72,6 +75,8 @@ def responsibility_matches(title,context,query,location="",company=""):
     q=query.casefold();t=title.casefold()
     hiring=bool(HIRING.search(q))
     if hiring and re.search(r'hiring|recruit|human resources|talent acquisition',t):return 'hiring_function_title'
+    # A finance title supports financial workflow ownership, not hiring authority.
+    if not hiring and re.search(r'accounting|finance|financial|invoice|bookkeeping|accounts payable|accounts receivable',q) and re.search(r'finance|financial|accounting|controller|\bcfo\b',t):return 'finance_function_title'
     if re.search(r'engineering|automation|technical|software|\bai\b',q) and re.search(r'engineering|technology|\bcto\b',t):return 'technical_function_title'
     if not hiring and re.search(r'outreach|follow.up|call.?back|operations|automation',q) and re.search(r'operations|customer service|customer success|sales|office manager|owner|founder|president|ceo|chief executive',t):return 'business_function_title'
     # Explicit responsibility statements can support other relevant titles.
@@ -97,6 +102,8 @@ def assess_people(rows,company,website,location,query):
                 start=max(matches[i-1].end() if i else 0,match.start()-180)
                 stop=min(matches[i+1].start() if i+1<len(matches) else len(card),match.end()+180)
                 context=card[start:stop];name,title=match.groups()
+                # Career ladders and directory headings are not people's names.
+                if set(name.casefold().split()) & {'regional','vice','branch','client','manager','personnel','construction','safety','director','president','operations'}:continue
                 if name.casefold().startswith(company.casefold()+' '):
                     name=name[len(company):].strip()
                     if len(name.split())<2:continue
