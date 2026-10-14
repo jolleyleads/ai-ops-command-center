@@ -264,7 +264,7 @@ def test_finance_title_does_not_claim_hiring_authority_or_invent_email():
 
 
 def test_inline_formatting_preserves_name_and_table_title_boundaries():
-    raw='<table><tr><td>Acme Norfolk VA <span>Sara</span>h Moro<br>Director of Finance</td><td>Acme Norfolk VA Billy Gresham<br>Vice President</td><td>Acme Norfolk VA Mike Oehler<br>Safety Director</td></tr></table>'
+    raw='<section>Key Personnel<table><tr><td>Acme Norfolk VA <span>Sara</span>h Moro<br>Director of Finance<br>Finance Department</td><td>Acme Norfolk VA Billy Gresham<br>Vice President<br>Management</td><td>Acme Norfolk VA Mike Oehler<br>Safety Director</td></tr></table></section>'
     result=enrich_lead(lead(query='automate accounting workflows'),[source(visible_page_text(raw),contact_sections=contact_sections(raw))])
     people={c['name']:c['title'] for c in result['decision_maker_candidates']}
     assert people=={'Sarah Moro':'Director of Finance','Billy Gresham':'Vice President','Mike Oehler':'Safety Director'}
