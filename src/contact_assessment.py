@@ -64,7 +64,10 @@ def contact_sections(raw):
                 if (PAIR.search(text) or CARD_PAIR.search(text)) and len(text)<=4000:self.blocks.append(text)
             if tag in {'script','style','footer','nav','header','noscript','svg'}:self.ignore=max(0,self.ignore-1)
     parser=Parser();parser.feed(join_inline_markup(str(raw or '')[:500000]))
-    return list(dict.fromkeys(parser.blocks))[:100]
+    blocks=list(dict.fromkeys(parser.blocks))
+    # A directory container repeats child names beside adjacent labels. Keep
+    # its individual cards, rather than reparsing that combined text as people.
+    return [block for block in blocks if not any(child!=block and child in block for child in blocks)][:100]
 
 
 def responsibility_matches(title,context,query,location="",company=""):
