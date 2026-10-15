@@ -247,7 +247,9 @@ def scan_real_inbound_replies():
             previous_stage=json.loads(last.result_json).get("stage")
             # A newly supported FAQ may resume a prior review-only route. Its
             # persisted message identity still owns send idempotency.
-            if previous_stage not in {"unclear","question"} or not routine_answer(current_reply_text(latest.get("text"))):
+            from src.grounded_reply import scheduling_request
+            resumable = routine_answer(current_reply_text(latest.get("text"))) or (previous_stage == "unclear" and scheduling_request(current_reply_text(latest.get("text"))))
+            if previous_stage not in {"unclear","question"} or not resumable:
                 processed.append({"lead_id":lead.id,"ok":True,"stage":"already_processed"});continue
         if not message_id:
             processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_message_id"});continue

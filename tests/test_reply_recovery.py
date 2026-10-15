@@ -26,6 +26,54 @@ def test_scheduling_question_and_mixed_question_remain_distinct():
     assert not routine_answer("How long is the call, and what is your price?")
 
 
+@pytest.mark.parametrize("text", [
+    "Let’s do October 31 1:30 PM Eastern time",
+    "October 31 2026 at 1:30 PM Eastern time",
+    "2030-01-10 at 2 pm America/New_York",
+    "Tuesday at noon",
+])
+def test_date_time_proposal_needs_no_booking_keyword(text):
+    assert classify_reply(text)["classification"] == "interested"
+
+
+@pytest.mark.parametrize("text, label", [
+    ("Unsubscribe. October 31 at 1:30 PM Eastern time", "not_interested"),
+    ("Not interested. October 31 at 1:30 PM", "not_interested"),
+    ("October 31 at 1:30 PM, and how much does it cost?", "question"),
+    ("Received.\n> October 31 2026 at 1:30 PM Eastern", "unclear"),
+])
+def test_date_time_intent_preserves_stops_questions_and_quotes(text, label):
+    assert classify_reply(text)["classification"] == label
+
+
+def test_natural_scheduling_reply_clarifies_missing_year(env, monkeypatch):
+    lead=oa.OutreachLead(company="Example", contact_email="owner@example.com", subject="Hello", status="interested")
+    oa.db.session.add(lead);oa.db.session.commit()
+    text="Let’s do October 31 1:30 PM Eastern time"
+    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id, message_id="natural", body_text=text));oa.db.session.commit()
+    monkeypatch.setattr(oa,"_qualification_gate",lambda lead:{"ok":True})
+    calls=[]
+    monkeypatch.setattr(oa,"_safe_send",lambda *a,**k:calls.append(k) or {"ok":True})
+    monkeypatch.setattr(oa,"check_availability",lambda *a:pytest.fail("missing year must be clarified before booking"))
+    result=oa._route_persisted_reply(lead,{"reply_evidence":[{"message_id":"natural","text":text}]},datetime.utcnow())
+    assert result["ok"] and result["stage"] == "interested"
+    assert not result["booking_attempted"] and lead.follow_up_due_at is None
+    assert "year" in calls[0]["body"] and "October 31" in calls[0]["body"]
+
+
+def test_previously_unclear_date_proposal_resumes_only_once(env, monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company="Example", contact_email="owner@example.com", gmail_thread_id="thread", status="responded")
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa._audit_actor(lead.id,"inbound_processed",{"message_id":"date"},{"stage":"unclear"},"scheduler");oa.db.session.commit()
+    monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda _:{"ok":True,"replied":True,"reply_evidence":[{"message_id":"date","from_email":lead.contact_email,"text":"October 31 at 1:30 PM Eastern"}]})
+    calls=[]
+    monkeypatch.setattr(scanner,"_route_persisted_reply",lambda *a:calls.append(1) or {"ok":True,"stage":"interested"})
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"] == "interested"
+    assert scanner.scan_real_inbound_replies()["processed"][0]["stage"] == "already_processed"
+    assert calls == [1]
+
+
 def test_missing_schedule_sends_reply_using_persisted_message_identity(env, monkeypatch):
     lead=oa.OutreachLead(company="Example",contact_email="owner@example.com",subject="Hello",status="sent")
     oa.db.session.add(lead);oa.db.session.commit()

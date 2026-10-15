@@ -40,6 +40,10 @@ def interpret_booking(text,now=None):
         except ValueError:return fail("INVALID_DATE")
     else:
         if re.search(r"\b(?:today|tomorrow|next\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",raw,re.I):return fail("RELATIVE_DATE_REQUIRES_CONFIRMATION")
+        if not re.search(r"\b20\d{2}\b",raw):
+            partial=re.search(r"\b(?:"+"|".join(MONTHS)+r")\s+\d{1,2}(?:st|nd|rd|th)?\b",raw,re.I)
+            if partial:
+                return {**empty,"ready":False,"reason":"MISSING_YEAR","clarification":f"What year do you mean for {partial.group(0)}? Please confirm the full date, keeping your proposed time and timezone."}
         if len(FULL_DATE.findall(raw))!=1:return fail("ONE_FULL_DATE_AND_TIME_REQUIRED")
         month=r"("+"|".join(MONTHS)+r")"
         time=r"\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b"
