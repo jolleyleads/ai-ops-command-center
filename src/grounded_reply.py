@@ -87,7 +87,13 @@ def routine_answer(text):
 
 
 def scheduling_request(text):
-    text = str(text or "")
+    # Only the new reply supplies intent; quoted invitations are not proposals.
+    text = re.split(r"\s+On\s+.{0,500}?wrote:\s*", str(text or ""), maxsplit=1, flags=re.I|re.S)[0]
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
     if routine_answer(text) or re.search(r"\b(?:price|pricing|cost|how much|what|how|where|who|security|guarantee)\b", text, re.I):
         return False
-    return bool(re.search(r"\b(?:schedule|reschedule|book|move (?:the |our )?call)\b", text, re.I)) or bool(re.search(r"\b(?:meeting|available)\b", text, re.I) and re.search(r"\b(?:am|pm|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)\b", text, re.I))
+    # A calendar date paired with a time is a scheduling proposal in its own
+    # right. Recognizing intent does not waive date/availability validation.
+    date = re.search(r"\b(?:20\d{2}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?|today|tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", text, re.I)
+    time = re.search(r"\b(?:\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)|noon|midnight)\b", text, re.I)
+    return bool(date and time) or bool(re.search(r"\b(?:schedule|reschedule|book|move (?:the |our )?call)\b", text, re.I)) or bool(re.search(r"\b(?:meeting|available)\b", text, re.I) and re.search(r"\b(?:am|pm|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)\b", text, re.I))

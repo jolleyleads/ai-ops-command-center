@@ -16,7 +16,10 @@ TIME_SIGNAL=re.compile(r"(?i)\b(today|tomorrow|monday|tuesday|wednesday|thursday
 
 ALLOWED={"interested","not_interested","question","unclear"}
 
-def _clean(v:Any,limit:int=8000)->str:return " ".join(str(v or "").strip().split())[:limit]
+def _clean(v:Any,limit:int=8000)->str:
+    text=re.split(r"\s+On\s+.{0,500}?wrote:\s*",str(v or ""),maxsplit=1,flags=re.I|re.S)[0]
+    text="\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+    return " ".join(text.strip().split())[:limit]
 
 def deterministic_signals(reply_text:Any)->Dict[str,bool]:
     text=_clean(reply_text)
