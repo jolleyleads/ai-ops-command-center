@@ -6,16 +6,20 @@ and read-only Calendar availability against an explicitly controlled recipient.
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import app, gmail_access_token, send_gmail
+from app import app, send_gmail
+# Bootstrap the same persisted OAuth resolver used by production cron workers.
+import gmail_connect
+from gmail_connect import gmail_access_token
 from src.google_calendar_provider import check_availability
 
 
 def _result(ok, stage, **extra):
-    return {"ok": bool(ok), "stage": stage, "timestamp": datetime.now(timezone.utc).isoformat(), **extra}
+    return {"ok": bool(ok), "stage": stage, "timestamp": datetime.now(ZoneInfo('UTC')).isoformat(), **extra}
 
 
 def run_provider_integration_acceptance(recipient=None):
@@ -49,8 +53,8 @@ def run_provider_integration_acceptance(recipient=None):
         if not message_id or not thread_id:
             return _result(False, "gmail_send", reason="REAL_GMAIL_RECEIPT_REQUIRED", provider=sent)
 
-        start = datetime.now(timezone.utc) + timedelta(days=1)
-        start = start.replace(hour=14, minute=0, second=0, microsecond=0)
+        local_tz = ZoneInfo('America/New_York')
+        start = (datetime.now(local_tz) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
         end = start + timedelta(minutes=30)
         availability = check_availability({"start": start.isoformat(), "end": end.isoformat(), "timezone": "America/New_York"})
         if not isinstance(availability, dict) or availability.get("ok") is not True:
