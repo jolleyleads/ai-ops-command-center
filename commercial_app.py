@@ -33,6 +33,13 @@ import db_diagnostic  # noqa: F401
 import provider_acceptance_ui  # noqa: F401
 import customer_demo  # noqa: F401
 
+
+# Reuse this service's existing EXA_API_KEY for database-independent,
+# read-only research. Do not initialize a second Flask server.
+from live_discovery_app import live_discovery as _live_discovery, health as _discovery_health
+app.add_url_rule('/api/live-discovery', endpoint='integrated_live_discovery', view_func=_live_discovery, methods=['POST'])
+app.add_url_rule('/api/live-discovery/health', endpoint='integrated_discovery_health', view_func=_discovery_health, methods=['GET'])
+
 rag_research.init_rag_tables()
 
 if __name__ == "__main__":
