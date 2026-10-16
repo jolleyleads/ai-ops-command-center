@@ -5,12 +5,29 @@ No PostgreSQL imports, persistence, contact enrichment, or outreach.
 """
 import json
 import os
+import time
+import threading
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
+_rate_lock = threading.Lock()
+_recent = {}
+def allow_request(ip):
+    now = time.monotonic()
+    with _rate_lock:
+        if len(_recent) > 10000:
+            _recent.clear()
+        hits = [t for t in _recent.get(ip, []) if now - t < 60]
+        if len(hits) >= 3:
+            _recent[ip] = hits
+            return False
+        hits.append(now)
+        _recent[ip] = hits
+        return True
+
 
 def discover(prompt, location="United States", limit=10):
     """Return source-backed research references, NOT verified businesses or leads."""
@@ -46,6 +63,8 @@ def discover(prompt, location="United States", limit=10):
 
 @app.post("/api/live-discovery")
 def live_discovery():
+    if not allow_request(request.remote_addr or "unknown"):
+        return jsonify({"error": "Research limit reached. Try again in one minute.", "results": []}), 429
     data = request.get_json(silent=True) or {}
     try:
         result, status = discover(data.get("prompt"), data.get("location"), data.get("target_count", 10))
