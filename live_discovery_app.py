@@ -8,7 +8,7 @@ import os
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
 
@@ -56,3 +56,11 @@ def live_discovery():
 @app.get("/api/live-discovery/health")
 def health():
     return jsonify({"service": "live-discovery", "database_required": False, "provider_configured": bool(os.environ.get("EXA_API_KEY"))})
+
+@app.get("/chat-operator")
+def chat_operator():
+    return send_from_directory("demo", "index.html")
+
+@app.get("/chat-operator/automake-logo.svg")
+def chat_logo():
+    return send_from_directory("demo", "automake-logo.svg", mimetype="image/svg+xml")
