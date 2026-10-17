@@ -79,7 +79,7 @@ def test_controlled_acceptance_campaign_is_validated_and_persisted(env,monkeypat
     assert env.post('/api/operator/v1-1-acceptance-once',json={'campaign':[]}).status_code==400
     body={'target_customer':'construction companies hiring accounting assistants','territory':'Norfolk, Virginia','target_count':1,'sending_limit':1}
     calls=[]
-    monkeypatch.setattr(demo,'_run_acceptance',lambda campaign:calls.append(campaign) or ({'ok':False,'pass':False,'reason':'NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED'},409))
+    monkeypatch.setattr(demo,'_run_acceptance',lambda campaign,progress_callback=None:calls.append(campaign) or ({'ok':False,'pass':False,'reason':'NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED'},409))
     first=env.post('/api/operator/v1-1-acceptance-once',json={'campaign':body},headers={'Idempotency-Key':'controlled-acceptance'})
     second=env.post('/api/operator/v1-1-acceptance-once',json={'campaign':body},headers={'Idempotency-Key':'controlled-acceptance'})
     assert first.status_code==202 and first.json['job_id']==second.json['job_id']
@@ -98,7 +98,7 @@ def test_stale_execution_is_not_replayed(env,monkeypatch):
 
 
 def test_acceptance_persists_real_nonpass_receipt(env,monkeypatch):
-    monkeypatch.setattr(demo,"_run_acceptance",lambda:({"ok":False,"pass":False,"stage":"fresh_lead_proof","reason":"NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED"},409))
+    monkeypatch.setattr(demo,"_run_acceptance",lambda campaign=None,progress_callback=None:({"ok":False,"pass":False,"stage":"fresh_lead_proof","reason":"NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED"},409))
     launch=env.post("/api/operator/v1-1-acceptance-once",headers={"Idempotency-Key":"acceptance-test"})
     assert launch.status_code==202
     assert not jobs.process_next_execution_job()["ok"]
