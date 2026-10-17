@@ -177,7 +177,7 @@ def resume_discovery_lead(lead, result, lease_valid=None):
 
 def orchestrate_discovery(payload, *, authorized_send=False):
     send_enabled=AUTOSEND_ENABLED or authorized_send is True
-    summary={"enabled":True,"autosend_enabled":send_enabled,"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
+    summary={"enabled":True,"autosend_enabled":send_enabled,"lead_ids":[],"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
     except (TypeError,ValueError): outreach_limit=0
     if not _outreach_search(payload):
@@ -199,6 +199,7 @@ def orchestrate_discovery(payload, *, authorized_send=False):
             existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
             result={**result,"contact_location":payload.get("location") or result.get("contact_location") or result.get("location"),"query":payload.get("query") or payload.get("goal") or payload.get("intent_signal"),"_campaign_context":campaign_context(payload,result)}
             if existing:
+                summary["lead_ids"].append(existing.id)
                 from lead_recovery import LeadRecovery, schedule_recovery
                 held = db.session.get(LeadRecovery, existing.id)
                 if existing.status=='needs_evidence' and not existing.gmail_message_id and not held:
@@ -212,7 +213,7 @@ def orchestrate_discovery(payload, *, authorized_send=False):
             evidence=_evidence_with_contact(result,email,email_source)
             evidence.append({'source':'campaign_context','context':result['_campaign_context']})
             lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
-            db.session.add(lead); db.session.commit(); summary["saved"]+=1
+            db.session.add(lead); db.session.commit(); summary["saved"]+=1; summary["lead_ids"].append(lead.id)
             qualification=_store_qualification(lead)
             if not qualification.get("ok"):
                 from lead_recovery import schedule_recovery
