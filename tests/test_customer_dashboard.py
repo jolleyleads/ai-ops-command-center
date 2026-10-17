@@ -100,7 +100,7 @@ def test_settings_do_not_disclose_tokens_or_start_work(workspace,monkeypatch):
 
 
 def test_dashboard_script_is_served_and_chat_stays_the_home_screen(workspace):
-    result=workspace.get('/chat-operator')
+    result=workspace.get('/chat-operator',headers=AUTH)
     assert b'id="workspace-menu"' in result.data
     assert b'id="workspace-panel" aria-label="Workspace results" hidden' in result.data
     script=workspace.get('/chat-operator/dashboard.js')

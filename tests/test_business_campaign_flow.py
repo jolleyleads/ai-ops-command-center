@@ -100,8 +100,7 @@ def test_authenticated_campaign_authorization_is_durable_and_idempotent(env,monk
     jobs.process_next_execution_job();jobs.process_next_execution_job()
     assert len(calls)==1 and calls[0]['send_authorized'] is True
     public=env.post('/api/demo/campaigns/launch',json={**body,'send_authorized':True})
-    public_job=oa.db.session.get(jobs.CampaignExecutionJob,public.json['job_id'])
-    assert 'send_authorized' not in json.loads(public_job.payload_json)
+    assert public.status_code==401
 
 
 def test_session_campaign_requires_csrf(env):
@@ -204,7 +203,7 @@ def test_authorized_job_runs_real_qualification_send_and_followup_handoff(env,mo
     job=env.post('/api/chat/campaigns/launch',json=body,headers=headers)
     assert job.status_code==202
     assert jobs.process_next_execution_job()['ok']
-    outcome=env.get(job.json['poll_url']).json['result']['outreach']
+    outcome=env.get(job.json['poll_url'],headers=headers).json['result']['outreach']
     assert outcome['qualified']==outcome['drafted']==outcome['sent']==1
     lead=oa.OutreachLead.query.one()
     from src.outreach_copy import primary_copy_sources

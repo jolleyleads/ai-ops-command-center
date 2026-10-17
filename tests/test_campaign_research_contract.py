@@ -12,11 +12,14 @@ from scripts.smart_search_smoke import validate_payload, CASES
 
 @pytest.fixture
 def env(monkeypatch):
+    monkeypatch.setenv("OPERATOR_CONTROL_TOKEN", "campaign-contract-test")
     monkeypatch.setattr(jobs,"kick_execution_worker",lambda:None)
     monkeypatch.setattr(research,"kick_worker",lambda:None)
     with jobs.app.app_context():
         jobs.db.session.remove();jobs.db.drop_all();jobs.db.create_all()
-        yield jobs.app.test_client()
+        client=jobs.app.test_client()
+        client.environ_base["HTTP_X_OPERATOR_TOKEN"]="campaign-contract-test"
+        yield client
         jobs.db.session.remove();jobs.db.drop_all()
 
 
