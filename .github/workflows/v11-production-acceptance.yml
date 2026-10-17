@@ -16,17 +16,17 @@ concurrency:
 jobs:
   production-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Wait for live service readiness
         shell: bash
-        timeout-minutes: 3
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           BASE="https://ai-ops-command-center.onrender.com"
           consecutive=0
-          for i in {1..36}; do
+          for i in {1..72}; do
             code=$(curl --silent --connect-timeout 5 --max-time 10 -o health.json -w '%{http_code}' "$BASE/api/health" || true)
             live_sha=$(python - <<'PY'
           import json
