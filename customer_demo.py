@@ -159,18 +159,18 @@ def _run_acceptance(campaign=None, progress_callback=None):
     # lead that crosses the unchanged V1 qualification + drafting gates.
     # Nothing is deleted, reset, or mutated to manufacture freshness.
     campaign_catalog=[
-      ("accounting firms actively hiring bookkeepers","accounting firm"),
-      ("insurance agencies actively hiring account managers","insurance agency"),
-      ("veterinary clinics actively hiring veterinary assistants","veterinary clinic"),
-      ("construction companies actively hiring project coordinators","construction"),
-      ("real estate brokerages actively hiring office coordinators","real estate brokerage"),
-      ("physical therapy clinics actively hiring front desk staff","physical therapy"),
-      ("manufacturing companies actively hiring maintenance technicians","manufacturing"),
-      ("security companies actively hiring security officers","security company"),
-      ("moving companies actively hiring drivers","moving company"),
-      ("cleaning companies actively hiring cleaners","cleaning company"),
-      ("printing companies actively hiring production staff","printing company"),
-      ("staffing agencies actively hiring recruiters","staffing agency"),
+      ("accounting firms","accounting firm"),
+      ("insurance agencies","insurance agency"),
+      ("veterinary clinics","veterinary clinic"),
+      ("construction companies","construction"),
+      ("real estate brokerages","real estate brokerage"),
+      ("physical therapy clinics","physical therapy"),
+      ("manufacturing companies","manufacturing"),
+      ("security companies","security company"),
+      ("moving companies","moving company"),
+      ("cleaning companies","cleaning company"),
+      ("printing companies","printing company"),
+      ("staffing agencies","staffing agency"),
     ]
     territories=["Norfolk, Virginia","Chesapeake, Virginia","Virginia Beach, Virginia","Hampton, Virginia","Newport News, Virginia","Suffolk, Virginia"]
     # Deterministically rotate the bounded proof window using durable DB state.

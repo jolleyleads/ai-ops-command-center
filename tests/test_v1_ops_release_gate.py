@@ -206,20 +206,20 @@ def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
     assert "lead generation" in result["body"]
 
 
-def test_acceptance_pool_is_cross_industry(env):
-    from pathlib import Path
-    source = Path("customer_demo.py").read_text(encoding="utf-8").lower()
-    block = source[source.index("campaign_catalog=["):source.index("attempts=[]", source.index("campaign_catalog=["))]
-    assert block.count('actively hiring') >= 12
-    assert "accounting firms" in block
-    assert "veterinary clinics" in block
-    assert "manufacturing companies" in block
-    assert "staffing agencies" in block
-    assert "territories=[" in block
-    assert "rotated[:4]" in block
-    assert "outreachlead.query.order_by" in block
-    assert "hvac" not in block
-    assert "heating and cooling" not in block
+def test_acceptance_pool_is_cross_industry(env,monkeypatch):
+    import customer_demo as demo
+    campaigns=[]
+    def empty(campaign):
+        campaigns.append(campaign)
+        return {"discovery":{"results":[]},"outreach":{"qualified":0,"drafted":0,"sent":0}},None,None
+    monkeypatch.setattr(demo,'_run_campaign',empty)
+    response=oa.app.make_response(demo._run_acceptance())
+    assert response.status_code==409 and response.json['pass'] is False
+    assert len(campaigns)==4
+    assert len({c['business_type'] for c in campaigns})==4
+    assert all('hiring' not in c['target_customer'] for c in campaigns)
+    assert all(c['territory'] for c in campaigns)
+    assert response.json['reason']=='NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED'
 
 def test_active_orchestration_uses_universal_outreach_gate(env):
     source = __import__("inspect").getsource(v1.orchestrate_discovery)

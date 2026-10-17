@@ -442,7 +442,7 @@ def _deterministic_need_verification(evidence,q,location=""):
             proof=identity_proof(name,item,item.get("website") or "")
             text=" ".join(str(item.get(k) or "") for k in ("page_text","source_title","source_heading"))
             if not proof or not location_matches(text,location):continue
-            if not terms or not any(re.search(r"\b"+re.escape(t)+r"\b",text,re.I) for t in terms):continue
+            if not terms or not all(re.search(r"\b"+re.escape(t[:-1] if t.endswith('s') and not t.endswith('ss') else t)+r"(?:s|es)?\b",text,re.I) for t in terms):continue
             x=_source_summary(item)
             x.update(title=name,candidate_name=name,company=name,website="https://"+proof["official_host"],location=location,
                      company_identity=proof,classification="Verified Lead",promotion_status="verified",verification_gate="passed",

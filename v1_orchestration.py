@@ -210,7 +210,9 @@ def orchestrate_discovery(payload, *, authorized_send=False):
                 from lead_recovery import schedule_recovery
                 mailbox=(result.get('_contact_enrichment') or {}).get('contact_assessment',{}).get('mailbox_validation',{})
                 schedule_recovery(lead,result,unfinished_lead_reasons(qualification,mailbox))
-                summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"qualification_failed","reason_codes":qualification.get("reason_codes") or []}); continue
+                assessment=(result.get('_contact_enrichment') or {}).get('contact_assessment') or {}
+                provider_reasons=list(dict.fromkeys(((assessment.get('hunter_discovery') or {}).get('reason_codes') or [])+((assessment.get('mailbox_validation') or {}).get('reason_codes') or [])))
+                summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"qualification_failed","reason_codes":qualification.get("reason_codes") or [],"provider_reason_codes":provider_reasons}); continue
             summary["qualified"]+=1
             if not email:
                 summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"no_verified_public_email"}); continue

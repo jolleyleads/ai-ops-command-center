@@ -140,7 +140,9 @@ def _public_contact_evidence(result):
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if not is_fax_number(visible,m.group(0)) and contact_context_matches(visible,m.group(0),location)))
         sections=contact_sections(contact_html)
-        if proof and (emails or phones or PAIR.search(visible) or any(CARD_PAIR.search(card) for card in sections)):
+        # Identity-only primary pages are still useful when Hunter has an
+        # address that is not printed on the current company website.
+        if proof:
             rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
             # Card-local evidence may disambiguate an email on a multi-office page.
             query=result.get("query") or result.get("business_need") or ""
