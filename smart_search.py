@@ -228,6 +228,14 @@ def _needs_candidate_verification(q):
     discovery_terms=("business","businesses","company","companies","firm","firms","contractor","contractors","clinic","clinics","agency","agencies","shop","shops")
     return any(x in ql for x in discovery_terms) and _verification_intent(q)!=("claim",)
 
+def _plain_business_query(q):
+    return _verification_intent(q)==("claim",) and bool(re.search(r"(?i)\b(?:businesses|companies|firms|contractors|clinics|agencies|shops|business|company|firm)\b",q))
+
+def _business_terms(q,location):
+    stop=set("find show give list me us get current currently active operating real local nearby businesses business companies company firms firm contractors contractor clinics clinic agencies agency shops shop prospects prospect leads lead in near around at the a an and or of for with please email emails decision maker makers contact contacts information owner owners send them then to outreach".split())
+    stop.update(re.findall(r"[a-z]+",location.lower()))
+    return [t for t in re.findall(r"[a-z]+",q.lower()) if len(t)>2 and t not in stop]
+
 
 def _requested_role_terms(q):
     return requested_role_terms(q)
@@ -256,6 +264,9 @@ def _verification_queries(name,q,intents=None):
 
 def _company_discovery_calls(q,loc,calls):
     """Hiring requests always retrieve job evidence, even after a business-only plan."""
+    if _plain_business_query(q):
+        # A plain company list must not depend on hiring evidence or one provider.
+        return [{"tool":tool,"query":q,"location":loc} for tool in ("web_search","exa_search","business_search")]
     if not _needs_candidate_verification(q):return calls
     intents=_verification_intent(q);role=" ".join(_requested_role_terms(q))
     primary=[c for c in calls if c.get('tool') in {'web_search','exa_search'}]
@@ -423,7 +434,23 @@ def _deterministic_need_verification(evidence,q,location=""):
         "response_complaints":r"\b(?:unanswered calls?|never called (?:me |us )?back|did(?:n't| not) (?:answer|call back)|missed calls?|slow responses?|no (?:response|callback))\b",
     }
     if intents==("claim",):
-        return []
+        if not _plain_business_query(q):return []
+        out=[];terms=_business_terms(q,location)
+        for item in evidence:
+            name=_clean(item.get("candidate_name"),300)
+            if not name or not current_contact_source(item):continue
+            proof=identity_proof(name,item,item.get("website") or "")
+            text=" ".join(str(item.get(k) or "") for k in ("page_text","source_title","source_heading"))
+            if not proof or not location_matches(text,location):continue
+            if not terms or not any(re.search(r"\b"+re.escape(t)+r"\b",text,re.I) for t in terms):continue
+            x=_source_summary(item)
+            x.update(title=name,candidate_name=name,company=name,website="https://"+proof["official_host"],location=location,
+                     company_identity=proof,classification="Verified Lead",promotion_status="verified",verification_gate="passed",
+                     verified_channels=["business_identity"],supporting_urls=[proof["source_url"]],
+                     verified_claim="Current company page supports the requested business type and location.",
+                     evidence_basis="directly fetched company identity, business type and location")
+            out.append(x)
+        return out
     out=[];seen=set()
     for item in evidence:
         url=_clean(item.get("url"),1600)
@@ -477,6 +504,8 @@ def _verified_results(evidence,evaluation,q,location=""):
         supporting=[_clean(u,1600) for u in (verdict.get("supporting_urls") or []) if _clean(u,1600) in by_url]
         if not entity or not claim or not supporting or item.get("rag_retrieved"):continue
         if _candidate_key(entity)!=_candidate_key(item.get("candidate_name")):continue
+        if _plain_business_query(q):
+            if not current_contact_source(item) or not identity_proof(entity,item,item.get('website') or '') or not location_matches(item.get('page_text') or '',location):continue
         if is_hiring_query(q) or "permit_license" in _verification_intent(q):
             supported=_deterministic_need_verification([item],q,location)
             if not supported:continue
@@ -608,11 +637,15 @@ def _scope_search_results(rows,query,location,evidence):
 def _fallback_candidates(discovery,limit=10):
     out=[];seen=set()
     for item in discovery or []:
-        if item.get("research_tool")!="business_search":continue
-        name=_clean(item.get("title") or item.get("name"),300);url=_clean(item.get("url"),1600);key=_candidate_key(name)
-        if not name or not url or key in seen:continue
-        seen.add(key);out.append({"name":name,"discovery_urls":[url],"candidate_source":"deterministic_business_discovery"})
-        if len(out)>=limit:break
+        url=_clean(item.get("url"),1600)
+        names=[item.get("title") or item.get("name")] if item.get("research_tool")=="business_search" else []
+        if current_contact_source(item):
+            names += [org.get("name") for org in item.get("source_organizations") or [] if isinstance(org,dict) and identity_proof(org.get("name"),item)]
+        for value in names:
+            name=_clean(value,300);key=_candidate_key(name)
+            if not name or not url or key in seen:continue
+            seen.add(key);out.append({"name":name,"discovery_urls":list(dict.fromkeys([url]+([item['website']] if item.get('website') else []))),"candidate_source":"deterministic_business_discovery"})
+            if len(out)>=limit:return out
     return out
 
 def _follow_job_links(rows,query,location,deadline):
@@ -658,6 +691,15 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
         name=_clean(cand.get("name"),300)
         if not name:continue
         candidate_rows=[]
+        if _plain_business_query(q):
+            for source_url in cand.get("discovery_urls") or []:
+                if time.monotonic()>=deadline-4:break
+                if shared_host(host(source_url)):continue
+                snapshot=_page_snapshot(source_url)
+                row={**snapshot,"url":source_url,"candidate_name":name,"verification_research":True}
+                candidate_rows.append(row)
+            if _deterministic_need_verification(candidate_rows,q,loc):
+                evidence.extend(candidate_rows);continue
         queries=_verification_queries(name,q,intents)
         for verify_query in queries:
             if time.monotonic()>=deadline-4:break
@@ -668,14 +710,14 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
             for x in rows:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
             candidate_rows.extend(rows)
-        if "hiring" in intents and time.monotonic()<deadline-3:_inspect(candidate_rows,5)
+        if ("hiring" in intents or _plain_business_query(q)) and time.monotonic()<deadline-3:_inspect(candidate_rows,5)
         # Irrelevant Exa hits are not success. Try the other provider for missing proof.
         if not _deterministic_need_verification(candidate_rows,q,loc) and time.monotonic()<deadline-20:
             verify_query=queries[0]
             rows2,msg2,used2=_run_calls([{"tool":"web_search","query":verify_query,"location":loc}],deadline,1);messages+=msg2;tools+=used2
             for x in rows2:
                 x["candidate_name"]=name;x["candidate_discovery_urls"]=cand.get("discovery_urls") or [];x["verification_research"]=True;x["verification_query"]=verify_query;x["verification_intents"]=list(intents)
-            if "hiring" in intents and time.monotonic()<deadline-6:_inspect(rows2,5)
+            if ("hiring" in intents or _plain_business_query(q)) and time.monotonic()<deadline-6:_inspect(rows2,5)
             candidate_rows.extend(rows2)
         if "hiring" in intents:
             candidate_rows.extend(_follow_job_links(candidate_rows,q,loc,deadline))
@@ -716,13 +758,13 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
                     if isinstance(name,str) and name.strip() and _candidate_key(name) not in known:
                         candidates.append({'name':name.strip(),'discovery_urls':[source['url']]})
                         known.add(_candidate_key(name))
-        if not candidates and _needs_candidate_verification(q):
-            candidates=_fallback_candidates(discovery,10)
+        known={_candidate_key(c.get('name')) for c in candidates}
+        candidates += [c for c in _fallback_candidates(discovery,20) if _candidate_key(c.get('name')) not in known]
         already_verified=set()
         if is_hiring_query(q):candidates,already_verified=_bind_primary_hiring_candidates(discovery,candidates,q,loc)
         # Reserve time to evaluate company-specific proof after retrieval.
         pending=[c for c in candidates if _candidate_key(c.get('name')) not in already_verified]
-        joined,msgc,usedc=_candidate_followups(q,loc,pending,deadline-25 if runtime_budget>25 else deadline,min(6,target_count*2)) if pending and len(already_verified)<target_count else ([],[],[])
+        joined,msgc,usedc=_candidate_followups(q,loc,pending,deadline-25 if runtime_budget>25 else deadline,min(20 if _plain_business_query(q) else 6,target_count*2)) if pending and len(already_verified)<target_count else ([],[],[])
         messages+=msgc;tools+=usedc
         for source in discovery:
             owners=[c for c in candidates if source.get('url') in c.get('discovery_urls',[])]
@@ -773,7 +815,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             promoted=_dedupe(promoted+deterministic_promoted)
         # Never discard grounded discovery just because semantic promotion found zero verified claims.
         # Verified entities stay first-class; otherwise expose source-backed candidates explicitly as unverified.
-        discovery_visible=_company_discovery_rows(candidates,discovery) if _needs_candidate_verification(q) else discovery[:10]
+        discovery_visible=_company_discovery_rows(candidates,discovery) if (_needs_candidate_verification(q) or _plain_business_query(q)) else discovery[:target_count]
         visible=_verification_gate(discovery_visible,promoted,evaluation,q,loc,contact_evidence)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q,loc)

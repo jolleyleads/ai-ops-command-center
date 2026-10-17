@@ -689,6 +689,9 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     stage=result.get("stage")
     if stage=="booked":
         lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
+        # The provider has created the event. Persist that state before any
+        # separate-session mailbox check or confirmation-message side effect.
+        db.session.commit()
         start=datetime.fromisoformat(booking["start"])
         end=datetime.fromisoformat(booking["end"])
         subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject

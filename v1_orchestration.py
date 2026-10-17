@@ -35,7 +35,7 @@ def _purpose_mailbox_allowed(email):
 
 
 def _verified_public_email(result):
-    """Return only a source-visible email on the prospect's explicit company website domain.
+    """Return a source-observed or independently Hunter-verified company address.
 
     Third-party evidence may verify intent, but it can never establish the outreach recipient domain.
     """
@@ -50,12 +50,16 @@ def _verified_public_email(result):
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
     company=result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title")
     location=result.get("contact_location") or result.get("target_location") or result.get("location") or ""
-    query=result.get("query") or result.get("business_need") or ""
+    query=(result.get("_campaign_context") or {}).get("offer") or result.get("query") or result.get("business_need") or ""
+    if query and not re.search(r'(?i)\b(?:hiring|jobs?|careers?)\b',query):query += " business outreach and follow-up automation"
     enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
+    from src.hunter_discovery import enrich_contact
+    enrich_contact(enrichment,website,required_person=(result.get('_campaign_context') or {}).get('require_decision_maker') is True,email_allowed=_purpose_mailbox_allowed)
     apply_email_domain_check(enrichment)
     if (result.get('_campaign_context') or {}).get('require_decision_maker') is True:
         assessment=enrichment.get('contact_assessment') or {}
-        if assessment.get('email_person_status')!='same_source_card' or assessment.get('decision_maker_status')!='source_supported':
+        from src.contact_assessment import person_email_supported
+        if not person_email_supported(assessment,(enrichment.get('fields',{}).get('email') or {}).get('value')):
             if enrichment.get('fields',{}).get('email'):
                 enrichment['fields']['email']['validated']=False
             assessment.setdefault('reason_codes',[]).append('NAMED_DECISION_MAKER_EMAIL_REQUIRED')
@@ -65,7 +69,8 @@ def _verified_public_email(result):
     result["_contact_name"]=""
     if email and _purpose_mailbox_allowed(email) and _same_company_domain(email,company_urls) and owned_host(url,website):
         assessment=enrichment.get("contact_assessment") or {}
-        if assessment.get("decision_maker_status")=="source_supported" and assessment.get("person_email")==email and assessment.get("email_person_status")=="same_source_card":
+        from src.contact_assessment import person_email_supported
+        if person_email_supported(assessment,email):
             result["_contact_name"]=validated.get("decision_maker") or ""
         source=next((row for row in rows or [] if row.get("url")==url),{})
         result["_contact_identity"]={"company_identity":source.get("company_identity") or {"company_name":company},"identity_version":"company-domain-v1","contact_location":location,"contact_assessment":assessment,"enrichment":enrichment}
@@ -80,7 +85,8 @@ def _evidence_with_contact(result, email, email_source):
         if isinstance(raw, dict):
             item = dict(raw); item.setdefault("observed_at", observed); evidence.append(item)
     if email and email_source:
-        evidence.append({"email": email, "url": email_source, "source": "verified_public_contact", "observed_at": observed,**(result.get("_contact_identity") or {})})
+        hunter=((result.get('_contact_enrichment') or {}).get('fields',{}).get('email') or {}).get('observation_status')=='hunter_discovered'
+        evidence.append({"email": email, "url": email_source, "source": "hunter_verified_contact" if hunter else "verified_public_contact", "observed_at": observed,**(result.get("_contact_identity") or {})})
     elif isinstance(result.get("_contact_enrichment"),dict):
         enrichment=result["_contact_enrichment"]
         source=(enrichment.get("fields",{}).get("email") or {}).get("source_url") or result.get("website") or result.get("url") or ""
@@ -116,7 +122,7 @@ def discovery_lock(company, source_url):
 
 def campaign_context(payload, result):
     query = _clean(payload.get("query") or payload.get("goal") or payload.get("intent_signal"), 1000)
-    return {"target_location": _clean(payload.get("location") or result.get("contact_location"), 300),
+    return {"target_location": _clean(payload.get("location") or result.get("contact_location"), 300),"offer":_clean(payload.get("offer"),1200),
             "query": query, "intent_signal": query,
             "business_type": _clean(payload.get("business_type"), 300),
             "candidate_type": _clean(result.get("category") or result.get("type"), 300),
@@ -161,8 +167,9 @@ def resume_discovery_lead(lead, result, lease_valid=None):
     return {'ok': True, 'stage': 'drafted'}
 
 
-def orchestrate_discovery(payload):
-    summary={"enabled":True,"autosend_enabled":AUTOSEND_ENABLED,"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
+def orchestrate_discovery(payload, *, authorized_send=False):
+    send_enabled=AUTOSEND_ENABLED or authorized_send is True
+    summary={"enabled":True,"autosend_enabled":send_enabled,"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
     except (TypeError,ValueError): outreach_limit=0
     if not _outreach_search(payload):
@@ -213,7 +220,7 @@ def orchestrate_discovery(payload):
                 schedule_recovery(lead,result,['DRAFT_FAILED'])
                 lead.last_error=_clean(drafted.get("error"),2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"draft_failed"}); continue
             lead.subject=drafted["subject"]; lead.body=drafted["body"]; lead.status="drafted"; lead.last_error=""; db.session.commit(); summary["drafted"]+=1
-            if not AUTOSEND_ENABLED:
+            if not send_enabled:
                 summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"autosend_disabled","status":"drafted"}); continue
             execution=_safe_send(lead,kind="initial",sequence=0,subject=lead.subject,body=lead.body)
             if not execution.get("ok"):

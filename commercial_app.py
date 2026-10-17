@@ -35,5 +35,8 @@ import customer_demo  # noqa: F401
 
 rag_research.init_rag_tables()
 
+from configured_campaign import start_configured_campaign
+start_configured_campaign()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

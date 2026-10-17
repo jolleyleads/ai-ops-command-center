@@ -84,6 +84,14 @@ def _public_contact_evidence(result):
             if root not in roots:roots.append(root)
     # Multiple unbound domains indicate conflicting identities, not more contacts.
     roots=roots if len(roots)==1 else []
+    hunter_sources=[]
+    if roots:
+        from src.hunter_discovery import discover_contacts
+        hunter=discover_contacts(website or roots[0])
+        result["_hunter_discovery"]=hunter
+        hunter_sources=[u for c in hunter.get("contacts") or [] for u in c.get("source_urls") or [] if owned_host(u,roots[0])]
+        # Provider time has its own HTTP bounds. Preserve the page-fetch budget.
+        started=time.monotonic()
     identities={}
     # Spend the bounded fetch budget on the resolved company's contact pages.
     priority_paths=("", "contact", "contact-us", "about", "about-us", "team", "staff", "leadership", "our-team", "locations", "careers", "privacy")
@@ -91,7 +99,7 @@ def _public_contact_evidence(result):
     # interleaves all roots fairly: urljoin(root,"staff") urljoin(root,"locations") urljoin(root,"team")
     # Re-fetch the actual verified source first: a dedicated job/contact page
     # can contain a published mailbox absent from guessed /contact URLs.
-    fetch_urls=[u for u in urls if urlparse(u).path.rstrip('/') and any(owned_host(u,root) for root in roots)]
+    fetch_urls=list(dict.fromkeys(hunter_sources[:4]+[u for u in urls if urlparse(u).path.rstrip('/') and any(owned_host(u,root) for root in roots)]))
     for path in priority_paths:
         for root in roots:
             candidate=root if not path else urljoin(root,path)
