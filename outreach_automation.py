@@ -794,6 +794,9 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
         }
 
     workflow_data["recipient_name"]=lead.contact_name or ""
+    workflow_data["sender_name"]=os.getenv('OUTREACH_SENDER_NAME') or 'Matthew Jolley'
+    workflow_data["sender_company"]=os.getenv('OUTREACH_SENDER_COMPANY') or 'AutoMake AI'
+    instructions += " Use sender_name and sender_company for the closing. Never leave a blank signature or insert sender placeholders."
     instructions += " Use only recipient_name for a personal greeting. If it is empty, address the company team. Names elsewhere in evidence may be unconfirmed or belong to another contact. Never describe a published address or DNS mail route as a confirmed deliverable mailbox."
 
     result = run_ai(
@@ -817,6 +820,8 @@ def _draft_email(lead: OutreachLead, follow_up_number: int = 0) -> Dict[str, Any
 
     subject = _clean(parsed.get("subject"), 160)
     body = _clean(parsed.get("body"), 5000)
+    if re.search(r'(?i)(?:best regards|best|regards|sincerely|thanks|thank you)[,!.]?\s*$',body):
+        body += '\n'+workflow_data['sender_name']+'\n'+workflow_data['sender_company']
     if not subject or not body:
         return _fallback_draft(lead, follow_up_number)
     enrichments=[evidence.get("enrichment") or {}] if isinstance(evidence,dict) else [e.get("enrichment") or {} for e in evidence if isinstance(e,dict)] if isinstance(evidence,list) else []
