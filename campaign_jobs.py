@@ -61,6 +61,9 @@ def process_next_execution_job():
         job.result_http_status = code
         job.status = "completed" if code == 200 and result.get("ok") is True else "failed"
         job.error = "" if job.status == "completed" else str(result.get("reason") or "EXECUTION_FAILED")[:200]
+        discovery=result.get('discovery') or {}
+        outreach=result.get('outreach') or {}
+        app.logger.warning('CAMPAIGN_EXECUTION_RECEIPT %s',json.dumps({'job_id':job_id,'kind':job.kind,'status':job.status,'reason':job.error,'verified':discovery.get('verified'),'result_count':len(discovery.get('results') or []),'qualified':outreach.get('qualified'),'drafted':outreach.get('drafted'),'sent':outreach.get('sent'),'skipped':outreach.get('skipped') or [],'provider_message':discovery.get('provider_message') or ''}))
     except Exception:
         app.logger.exception("CAMPAIGN_EXECUTION_FAILED")
         db.session.rollback()

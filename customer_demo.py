@@ -39,11 +39,14 @@ def _campaign_payload(data):
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"target_count":target_count,"business_type":_text(data.get("business_type"),300),"query":target},None
 def _orchestration_payload(discovery,campaign):
     payload=dict(discovery);target=campaign["target_customer"]
-    payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"]})
+    payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"offer":campaign.get("offer") or "AI lead generation and customer follow-up automation","business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"],"require_decision_maker":campaign.get("require_decision_maker") is True})
     return payload
 def _run_campaign(data):
     campaign,error=_campaign_payload(data)
     if error:return None,"configuration",error["error"]
+    # This bit exists only in the server-created authenticated job payload.
+    campaign["send_authorized"]=data.get("send_authorized") is True
+    campaign["require_decision_maker"]=data.get("require_decision_maker") is True
     try:discovery=_smart_search(campaign["query"],campaign["territory"],runtime_budget=research_budget_seconds(campaign["target_count"]),target_count=campaign["target_count"])
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
     if not isinstance(discovery,dict):return None,"discovery","DISCOVERY_NOT_OBJECT"
@@ -51,13 +54,15 @@ def _run_campaign(data):
     if not isinstance(discovery.get("results",[]),list):return None,"discovery","DISCOVERY_RESULTS_NOT_LIST"
     try:discovery=enhance_discovery(discovery,campaign["query"],campaign["territory"])
     except Exception as exc:app.logger.exception("V11_EVIDENCE_UPGRADE_ERROR");return None,"verification",f"{type(exc).__name__}: {exc}"
-    try:outreach=orchestrate_discovery(_orchestration_payload(discovery,campaign))
+    try:
+        payload=_orchestration_payload(discovery,campaign)
+        outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] else orchestrate_discovery(payload)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
     visible=[]
     for result in discovery.get("results") or []:
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
-    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
+    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"provider_message":discovery.get("provider_message", ""),"live_source_count":discovery.get("live_source_count",0),"candidate_count":discovery.get("candidate_count",0),"excluded_result_count":discovery.get("excluded_result_count",0),"verification_diagnostics":discovery.get("verification_diagnostics",{}),"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
 
 @app.route("/api/chat/lead-status",methods=["GET"])
 def chat_lead_status():
@@ -103,6 +108,27 @@ def chat_prepare_campaign():
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
     leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
+
+@app.route("/api/chat/campaigns/launch",methods=["POST"])
+def chat_launch_campaign():
+    """Explicit operator authorization applies only to this durable campaign."""
+    from outreach_automation import _operator_authorized, _operator_session_authorized, _csrf_ok
+    if not (_operator_authorized() or _operator_session_authorized()):return jsonify({"ok":False,"error":"Operator authentication required"}),401
+    if not _operator_authorized() and not _csrf_ok():return jsonify({"ok":False,"error":"Invalid session request token"}),403
+    data=request.get_json(silent=True) or {}
+    campaign,error=_campaign_payload({**data,"target_customer":data.get("target_customer") or data.get("prompt")})
+    if error:return jsonify(error),400
+    if data.get("send_emails") is not True:return jsonify({"ok":False,"error":"Choose campaign sending to launch outreach."}),400
+    campaign.update(send_authorized=True,require_decision_maker=data.get("require_decision_maker") is True)
+    return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
+
+@app.route("/api/chat/campaign-settings",methods=["GET"])
+def chat_campaign_settings():
+    from outreach_automation import _operator_authorized, _operator_session_authorized, _csrf_token
+    if not (_operator_authorized() or _operator_session_authorized()):return jsonify({"ok":False,"error":"Operator authentication required"}),401
+    response=jsonify({"ok":True,"csrf_token":_csrf_token()})
+    response.headers['Cache-Control']='no-store'
+    return response
 @app.route("/api/demo/campaigns/launch",methods=["POST"])
 def launch_demo_campaign():
     campaign,error=_campaign_payload(request.get_json(silent=True) or {})
@@ -186,7 +212,7 @@ def _run_acceptance(campaign=None, progress_callback=None):
             if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started,"attempts":attempts}),500
             fresh=OutreachLead.query.filter(OutreachLead.id>before_max).order_by(OutreachLead.id.asc()).all()
             fresh_receipt=[{"lead_id":x.id,"company":x.company,"status":x.status,"validated_contact":bool(x.contact_email),"gmail_message_id":x.gmail_message_id or ""} for x in fresh]
-            attempt={"campaign":controlled,"discovery":{"verified":d.get("verified",0),"candidates":d.get("candidates",0),"rejected":d.get("rejected",0),"result_count":len(d.get("results") or [])},"outreach":{"eligible":o.get("eligible",0),"saved":o.get("saved",0),"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0),"skipped":o.get("skipped",[])},"fresh_leads":fresh_receipt}
+            attempt={"campaign":controlled,"discovery":{**d,"result_count":len(d.get("results") or [])},"outreach":{"eligible":o.get("eligible",0),"saved":o.get("saved",0),"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0),"skipped":o.get("skipped",[])},"fresh_leads":fresh_receipt}
             attempts.append(attempt)
             report("campaign_evaluated", index)
             # Acceptance now proves a genuinely new DB lead crossed qualification
