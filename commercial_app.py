@@ -5,6 +5,12 @@ from flask import send_from_directory
 def chat_operator_ui():
     return send_from_directory('demo', 'index.html')
 
+@app.route('/chat-operator/dashboard.js')
+def customer_dashboard_script():
+    response = send_from_directory('demo', 'dashboard.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
 @app.route('/chat-operator/automake-logo.svg')
 def automake_logo():
     return send_from_directory('demo', 'automake-logo.svg', mimetype='image/svg+xml')
@@ -32,6 +38,7 @@ import outreach_scheduler  # noqa: F401
 import db_diagnostic  # noqa: F401
 import provider_acceptance_ui  # noqa: F401
 import customer_demo  # noqa: F401
+import customer_dashboard  # noqa: F401
 
 rag_research.init_rag_tables()
 
