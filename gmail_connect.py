@@ -6,7 +6,7 @@ import threading
 from urllib.parse import urlencode
 
 import requests
-from flask import jsonify, redirect, request
+from flask import jsonify, redirect, request, session
 
 import app as app_module
 from app import app, db
@@ -194,6 +194,13 @@ def connect_gmail():
 
 @app.route("/oauth/google/callback", methods=["GET"])
 def gmail_oauth_callback():
+    # Identity sign-in may reuse this already-registered callback. Dispatch only
+    # a matching browser-bound identity state; never change the mailbox grant.
+    pending = session.get('google_login')
+    if isinstance(pending, dict) and pending.get('state') and hmac.compare_digest(
+            str(pending['state']), request.args.get('state', '')):
+        from customer_auth import google_callback
+        return google_callback()
     if request.args.get("error"):
         app.logger.warning("GMAIL_OAUTH_CALLBACK error=%s", request.args.get("error")); return redirect("/gmail?error=google_denied")
     if not _valid_state(request.args.get("state")):

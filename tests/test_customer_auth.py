@@ -128,3 +128,32 @@ def test_token_verification_failure_never_creates_session(client, monkeypatch):
     monkeypatch.setattr(auth, 'verify_oauth2_token', Mock(side_effect=ValueError('bad signature')))
     assert callback(client, pending).status_code == 502
     assert not client.get('/auth/session', base_url='https://automakeai.live').json['signed_in']
+
+
+def test_existing_google_callback_supports_identity_without_touching_gmail(client, monkeypatch):
+    import gmail_connect
+    origin = 'https://ai-ops-command-center.onrender.com'
+    uri = origin + '/oauth/google/callback'
+    monkeypatch.setenv('GOOGLE_LOGIN_REDIRECT_URI', uri)
+    initial = client.get('/auth/google', base_url='https://automakeai.live')
+    assert initial.location == origin + '/auth/google'
+    response = client.get('/auth/google', base_url=origin)
+    assert parse_qs(urlsplit(response.location).query)['redirect_uri'] == [uri]
+    with client.session_transaction(base_url=origin) as session:
+        pending = dict(session['google_login'])
+    post, verify = mock_google(monkeypatch, pending)
+    monkeypatch.setattr(gmail_connect, '_valid_state', Mock(side_effect=AssertionError('Mailbox callback must not run')))
+    result = client.get('/oauth/google/callback', query_string={'state':pending['state'],'code':'test-code'}, base_url=origin)
+    assert result.status_code == 303 and result.location == '/chat-operator'
+    assert post.call_args.kwargs['data']['redirect_uri'] == uri
+    assert client.get('/auth/session', base_url=origin).json['signed_in']
+
+
+def test_nonmatching_identity_state_cannot_enter_shared_callback(client, monkeypatch):
+    import gmail_connect
+    pending = start(client)
+    monkeypatch.setattr(gmail_connect, '_valid_state', lambda value:False)
+    post = Mock(side_effect=AssertionError('No token exchange permitted'))
+    monkeypatch.setattr(auth.requests, 'post', post)
+    result = client.get('/oauth/google/callback', query_string={'state':'wrong','code':'test-code'}, base_url='https://automakeai.live')
+    assert result.status_code == 400 and post.call_count == 0
