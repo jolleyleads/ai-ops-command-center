@@ -6,6 +6,17 @@ connect a new Gmail mailbox, or grant access to arbitrary Google users.
 
 ## Production activation
 
+When Google Cloud is unavailable, the identity flow can reuse the existing
+approved Gmail callback by setting `GOOGLE_LOGIN_REDIRECT_URI` to the current
+`GOOGLE_OAUTH_REDIRECT_URI` (for this service,
+`https://ai-ops-command-center.onrender.com/oauth/google/callback`). Identity
+login starts and finishes on that origin, then opens the same `/chat-operator`
+interface there. Its host-only session cookie stays on that origin. Matching
+browser-bound identity state is dispatched to identity verification before the
+mailbox callback; Gmail grants and database records are untouched. The custom
+domain remains available, but sessions do not transfer between the two hosts.
+Use the custom-domain callback below when it can be registered with Google.
+
 1. In the existing Google OAuth web client's authorized redirect URIs, **add**
    `https://automakeai.live/auth/google/callback`. Preserve the existing Gmail
    callback and all other redirect URIs. This is an identity-only flow using
