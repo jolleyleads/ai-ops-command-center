@@ -1,5 +1,7 @@
 """Submit once and poll the durable acceptance job; never retry campaign execution."""
 import json
+import socket
+import urllib.error
 import os
 import time
 import urllib.request
@@ -22,7 +24,16 @@ def main():
     while state.get("status") in {"queued","running"} and time.monotonic() < deadline:
         print("Acceptance job",state["job_id"],state["status"],flush=True)
         time.sleep(10)
-        state = get_json(ORIGIN+state["poll_url"])
+        try:
+            state = get_json(ORIGIN+state["poll_url"])
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            # Retry only the GET; never resubmit the durable campaign.
+            print("Transient acceptance poll failure:", type(exc).__name__, flush=True)
+            continue
+    if state.get("status") in {"queued", "running"}:
+        state = {"status": "timeout", "job_id": state.get("job_id"),
+                 "poll_url": state.get("poll_url"),
+                 "error": "ACCEPTANCE_DEADLINE_EXCEEDED_WITHOUT_COMPLETED_RECEIPT"}
     result = state.get("result") or state
     Path("acceptance.json").write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
