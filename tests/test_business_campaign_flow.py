@@ -153,3 +153,33 @@ def test_unverified_mailbox_never_becomes_a_hunter_contact(active,monkeypatch):
     monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:mailbox.base_receipt(email,'HUNTER_RESULT_PENDING'))
     item=enrichment();hunter.enrich_contact(item,'https://acme.example',required_person=True)
     assert 'email' not in item['fields']
+
+
+def test_authorized_job_runs_real_qualification_send_and_followup_handoff(env,monkeypatch):
+    """Only external discovery/DNS/Gmail are mocked; all durable gates execute."""
+    import v1_orchestration as orchestration
+    import src.email_validation as email_validation
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEY_VERSION','v1')
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEYS','v1=integration-test-only')
+    monkeypatch.setattr(orchestration,'AUTOSEND_ENABLED',False)
+    page=company_page()
+    from src.company_identity import identity_proof
+    page['company_identity']=identity_proof('Acme',page,'https://acme.example/')
+    result={**page,'title':'Acme','company':'Acme','website':'https://acme.example/','location':'Norfolk, Virginia','classification':'Verified Lead','promotion_status':'verified','verification_gate':'passed','intent_score':80,'evidence':[{'url':page['url'],'title':'Acme HVAC services','snippet':page['page_text'],'observed_at':page['observed_at']}]}
+    monkeypatch.setattr(demo,'_smart_search',lambda *a,**k:{'results':[result],'verified_count':1})
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(email_validation,'check_email_domain',lambda *a,**k:{'domain_status':'mx_published'})
+    sends=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *args:sends.append(args) or {'ok':True,'message_id':'provider-message','thread_id':'provider-thread'})
+    body={'target_customer':'Find 1 current HVAC business','territory':'Norfolk, Virginia','target_count':1,'sending_limit':1,'send_emails':True}
+    headers={'X-Operator-Token':'operator-unit-test','Idempotency-Key':'integrated-send'}
+    job=env.post('/api/chat/campaigns/launch',json=body,headers=headers)
+    assert job.status_code==202
+    assert jobs.process_next_execution_job()['ok']
+    outcome=env.get(job.json['poll_url']).json['result']['outreach']
+    assert outcome['qualified']==outcome['drafted']==outcome['sent']==1
+    lead=oa.OutreachLead.query.one()
+    assert lead.status=='sent' and lead.gmail_message_id=='provider-message'
+    assert lead.follow_up_due_at and lead.gmail_thread_id=='provider-thread'
+    assert env.post('/api/chat/campaigns/launch',json=body,headers=headers).json['job_id']==job.json['job_id']
+    assert jobs.process_next_execution_job()['processed']==0 and len(sends)==1
