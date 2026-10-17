@@ -38,3 +38,11 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.8.0
 Werkzeug==3.1.9
+
+# Google identity token verification (including its pinned dependencies).
+cffi==2.1.1
+cryptography==50.0.2
+google-auth==2.62.0
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
+pycparser==3.11

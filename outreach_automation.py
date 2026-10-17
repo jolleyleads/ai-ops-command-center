@@ -36,6 +36,8 @@ MAX_FOLLOWUPS = int(os.getenv("OUTREACH_MAX_FOLLOWUPS", "2"))
 
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SESSION_COOKIE_SECURE=True,PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
 
+import customer_auth  # noqa: E402,F401 - register login routes before requests
+
 
 from src.hunter_mailbox import HunterMailboxCheck  # Register before startup create_all.
 
@@ -990,6 +992,9 @@ def _session_proof() -> str:
     return hmac.new(expected.encode(),"operator-session-v1".encode(),hashlib.sha256).hexdigest() if expected else ""
 
 def _operator_session_authorized() -> bool:
+    from customer_auth import google_session_authorized
+    if google_session_authorized():
+        return True
     expected=_session_proof()
     supplied=str(session.get("operator_auth") or "")
     return bool(expected and supplied and hmac.compare_digest(expected,supplied))
@@ -1026,6 +1031,9 @@ def _operator_login_page(error: str = "") -> Response:
 @app.route("/operator/login",methods=["GET","POST"])
 def operator_login():
     if request.method=="GET":
+        from customer_auth import configured
+        if configured():
+            return redirect('/login',303)
         return _operator_login_page()
     if not _csrf_ok():
         return _operator_login_page("Invalid or expired form token."),403

@@ -14,7 +14,7 @@
   function badge(n){n=score(n);return n===null?'Score pending':n+'/100 · '+(n>=80?'Strong match':n>=60?'Potential match':'Needs more research');}
   function load(){return requestJSON(API+'/api/chat/dashboard',{cache:'no-store'}).then(function(result){data=result;return result;});}
   function heading(title,subtitle){return '<div class="workspace-heading"><div><h1>'+e(title)+'</h1><p class="meta">'+e(subtitle)+'</p></div><button type="button" class="ghost" data-refresh>Refresh</button></div>';}
-  function error(err){panel.innerHTML=heading(labels[view],'Your workspace')+'<div class="workspace-empty"><p>'+e(err.message)+'</p><a href="/operator/login">Sign in to your workspace</a></div>';}
+  function error(err){panel.innerHTML=heading(labels[view],'Your workspace')+'<div class="workspace-empty"><p>'+e(err.message)+'</p><a href="/login">Sign in to your workspace</a></div>';}
   function open(name){
     view=labels[name]?name:'chat';var version=++requestVersion;
     menu.open=false;

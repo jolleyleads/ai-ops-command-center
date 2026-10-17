@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · AutoMake AI</title>
+<style> *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f7f7f8;color:#202123;font-family:system-ui,-apple-system,sans-serif}.card{width:100%;max-width:410px;padding:40px 30px;background:white;border:1px solid #e4e4e8;border-radius:20px;text-align:center}.logo{width:64px;height:64px}h1{font-size:27px;margin-bottom:8px}p{color:#62626b;line-height:1.6}.google{display:block;margin:28px 0;padding:14px;border:1px solid #d9d9de;border-radius:10px;color:#202123;text-decoration:none;font-weight:600}.google:hover{background:#f7f7f8}.error{color:#a61b1b;font-size:14px}.small{font-size:13px}a:focus-visible{outline:2px solid #10a37f;outline-offset:4px}</style>
+</head><body><main class="card"><img class="logo" src="/chat-operator/automake-logo.svg" alt="AutoMake AI"><h1>Welcome to AutoMake AI</h1><p>Ask. Automate. Execute.</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if configured %}<a class="google" href="/auth/google">Continue with Google</a><p class="small">Use the Google account approved for your workspace.</p>
+{% else %}<p class="small">Google sign-in is being set up. Please contact your workspace owner for access.</p>{% endif %}
+</main></body></html>
