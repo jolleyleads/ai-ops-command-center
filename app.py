@@ -835,21 +835,11 @@ def workflows_page():
 
 @app.route(
     "/login",
-    methods=["GET", "POST"]
+    methods=["GET"]
 )
 def login():
-    if request.method == "POST":
-        session["user"] = request.form.get(
-            "email"
-        )
-
-        return redirect(
-            url_for("index")
-        )
-
-    return render_template(
-        "login.html"
-    )
+    from customer_auth import customer_login
+    return customer_login()
 
 @app.route("/logout")
 def logout():
