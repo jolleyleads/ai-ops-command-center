@@ -5,7 +5,7 @@ import time
 from urllib.parse import urljoin,urlparse
 from src.public_fetch import public_get
 from datetime import datetime, timezone
-from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, visible_page_text, contact_context_matches, shared_host
+from src.company_identity import identity_proof, owned_host, email_on_domain, page_metadata, visible_page_text, contact_context_matches, shared_host, location_matches
 from app import db
 from outreach_automation import OutreachLead, _draft_email
 from src.enrichment import enrich_lead, validated_payload
@@ -69,7 +69,7 @@ def _candidate_urls(result):
     return list(dict.fromkeys(vals))[:8]
 def _public_contact_evidence(result):
     """Fetch bounded candidate-owned pages and retain exact public contact evidence."""
-    started=time.monotonic();urls=_candidate_urls(result);rows=[];attempted=0
+    started=time.monotonic();urls=_candidate_urls(result);rows=[];identity_rows=[];attempted=0
     company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title"),300)
     location=_clean(result.get("contact_location") or result.get("location"),300)
     website=_clean(result.get("website"),1800)
@@ -143,7 +143,9 @@ def _public_contact_evidence(result):
         # Identity-only primary pages are still useful when Hunter has an
         # address that is not printed on the current company website.
         if proof:
-            rows.append({**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"})
+            entry={**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"}
+            if emails or phones or PAIR.search(visible) or any(CARD_PAIR.search(card) for card in sections):rows.append(entry)
+            elif not location or location_matches(visible,location):identity_rows.append(entry)
             # Card-local evidence may disambiguate an email on a multi-office page.
             query=result.get("query") or result.get("business_need") or ""
             if emails and not query:break
@@ -166,7 +168,7 @@ def _public_contact_evidence(result):
             if any(token in path or token in label_text for token in contactish) and absolute not in seen:
                 if absolute in fetch_urls:fetch_urls.remove(absolute)
                 fetch_urls.insert(0,absolute)
-    return rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
+    return rows+identity_rows,{"attempted":attempted,"max_urls":CONTACT_MAX_URLS,"budget_seconds":CONTACT_BUDGET_SECONDS,"elapsed_seconds":round(time.monotonic()-started,3),"budget_exhausted":budget_exhausted,"candidate_owned_roots":len(roots)}
 
 def _evidence_score(result):
     raw=result.get("intent_score")

@@ -58,6 +58,17 @@ def test_snippets_cannot_become_business_identity_proof():
     assert search._deterministic_need_verification([row],'Find 10 HVAC businesses','Norfolk, Virginia')==[]
 
 
+def test_primary_identity_is_retained_when_site_does_not_publish_email(env,monkeypatch):
+    import outreach_bridge as bridge
+    from src.enrichment import enrich_lead
+    raw='<title>Acme</title><h1>Acme</h1><p>HVAC services in Norfolk, Virginia.</p>'
+    monkeypatch.setattr(bridge,'public_get',lambda url,**kw:SimpleNamespace(status_code=200,url=url,headers={'content-type':'text/html'},text=raw))
+    rows,_=bridge._public_contact_evidence({'title':'Acme','website':'https://acme.example/','location':'Norfolk, Virginia'})
+    enriched=enrich_lead({'company':'Acme','website':'https://acme.example/'},rows)
+    assert enriched['identity_status']=='source_bound'
+    assert 'email' not in enriched['fields']
+
+
 def test_places_website_survives_model_candidate_extraction(env,monkeypatch):
     name='Acme Comfort'
     place={'title':name,'url':'https://maps.google.com/place/acme','website':'https://comfort.example/','research_tool':'business_search'}
