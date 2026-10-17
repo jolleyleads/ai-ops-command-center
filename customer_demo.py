@@ -245,4 +245,5 @@ def _run_acceptance(campaign=None, progress_callback=None):
     except Exception as exc:app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR");return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started,"attempts":attempts}),500
 @app.route("/demo",methods=["GET"])
 def customer_demo():
-    return render_template('launch.html', page='demo')
+    from commercial_app import chat_operator_ui
+    return chat_operator_ui(force_demo=True)

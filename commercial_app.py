@@ -1,12 +1,26 @@
 from app import app
-from flask import send_from_directory, redirect
+from flask import send_from_directory, Response
 
 @app.route('/chat-operator')
-def chat_operator_ui():
+def chat_operator_ui(force_demo=False):
     from outreach_automation import _operator_authorized, _operator_session_authorized
-    if not (_operator_authorized() or _operator_session_authorized()):
-        return redirect('/', 303)
-    return send_from_directory('demo', 'index.html')
+    if not force_demo and (_operator_authorized() or _operator_session_authorized()):
+        response = send_from_directory('demo', 'index.html')
+    else:
+        with app.open_resource('demo/index.html') as source:
+            html = source.read().decode('utf-8')
+        html = html.replace('<p>Ask.Automate.Execute</p>', '<p>Ask.Automate.Execute</p><p class="small" id="public-demo-note">Explore sample data. No emails are sent in this demo.</p>')
+        html = html.replace('<script src="/chat-operator/dashboard.js', '<script src="/chat-operator/public-demo.js" defer></script><script src="/chat-operator/dashboard.js', 1)
+        response = Response(html, mimetype='text/html')
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Vary'] = 'Cookie, X-Operator-Token'
+    return response
+
+@app.route('/chat-operator/public-demo.js')
+def public_demo_script():
+    response = send_from_directory('demo', 'public-demo.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
 
 @app.route('/chat-operator/dashboard.js')
 def customer_dashboard_script():

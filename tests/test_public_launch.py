@@ -27,17 +27,20 @@ def test_public_demo_is_sample_only_and_has_no_live_api_calls(client, monkeypatc
     monkeypatch.setattr(oa.db.session, 'execute', lambda *a, **k:pytest.fail('Public demo queried private records'))
     page=client.get('/demo')
     assert page.status_code==200
-    assert b'Illustrative sample data only' in page.data
-    assert b'Example Coastal HVAC' in page.data
-    assert b'fetch(' not in page.data and b'LAUNCH CAMPAIGN' not in page.data
+    assert b'Explore sample data. No emails are sent in this demo.' in page.data
+    assert b'id="workspace-menu"' in page.data
+    assert page.data.index(b'/chat-operator/public-demo.js') < page.data.index(b'<script src="/chat-operator/dashboard.js')
+    script=client.get('/chat-operator/public-demo.js')
+    assert script.status_code==200 and b'Example Coastal HVAC' in script.data
+    assert b'fetch(' not in script.data
     data=client.get('/api/demo/leads')
     assert data.json['is_demo'] is True
     assert all(str(row['id']).startswith('sample-') for row in data.json['leads'])
 
 
 def test_anonymous_visitors_cannot_enter_workspace_or_use_real_demo_endpoints(client):
-    assert client.get('/chat-operator').status_code==303
-    assert client.get('/chat-operator').location=='/'
+    page=client.get('/chat-operator')
+    assert page.status_code==200 and b'public-demo-note' in page.data
     assert client.get('/api/chat/dashboard').status_code==401
     assert client.post('/api/demo/campaigns/launch', json={'target_customer':'anything'}).status_code==401
     assert client.get('/api/demo/campaigns/jobs/private-job').status_code==401
@@ -47,6 +50,7 @@ def test_approved_operator_keeps_existing_workspace(client):
     page=client.get('/chat-operator',headers={'X-Operator-Token':'launch-test-secret'})
     assert page.status_code==200 and b'id="workspace-menu"' in page.data
     assert b'/api/chat/campaigns/launch' in page.data
+    assert b'/chat-operator/public-demo.js' not in page.data
 
 
 def test_existing_browser_session_keeps_demo_campaign_csrf_requirement(client):

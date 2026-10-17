@@ -762,11 +762,12 @@ def create_tables():
 
 @app.route("/")
 def index():
-    return render_template("launch.html", page="home")
+    from commercial_app import chat_operator_ui
+    return chat_operator_ui()
 
 @app.route("/book-demo")
 def book_demo():
-    return render_template("launch.html", page="booking")
+    return render_template("demo_booking.html")
 
 @app.route("/workflows")
 def workflows_page():
