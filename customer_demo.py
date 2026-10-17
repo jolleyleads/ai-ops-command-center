@@ -125,7 +125,7 @@ def v11_acceptance_once():
     return enqueue_execution("acceptance",payload,request.headers.get("Idempotency-Key"))
 
 
-def _run_acceptance(campaign=None):
+def _run_acceptance(campaign=None, progress_callback=None):
     started=datetime.now(timezone.utc).isoformat()
     # Search a bounded set of distinct discovery pools. A pool that only
     # rediscovers already-queued companies remains a truthful non-pass; the
@@ -164,20 +164,31 @@ def _run_acceptance(campaign=None):
     # Keep each one-shot proof bounded to four campaigns while the catalog rotates
     # across industries and territories between runs.
     attempts=[]
+    def report(stage, index=0):
+        if progress_callback:
+            progress_callback({"stage": stage, "campaign_index": index,
+                               "campaign_total": len(campaign_pool),
+                               "attempt_count": len(attempts),
+                               "updated_at": datetime.now(timezone.utc).isoformat()})
     try:
-        for controlled in campaign_pool:
+        report("starting")
+        for index, controlled in enumerate(campaign_pool, start=1):
+            report("researching", index)
             before_max=0
             latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
             if latest:before_max=latest.id
             payload,stage,reason=_run_campaign(controlled)
             if not payload:
-                attempts.append({"campaign":controlled,"stage":stage or "unknown","reason":reason or "UNKNOWN_FAILURE"});continue
+                attempts.append({"campaign":controlled,"stage":stage or "unknown","reason":reason or "UNKNOWN_FAILURE"})
+                report("campaign_failed", index)
+                continue
             d=payload.get("discovery") or {};o=payload.get("outreach") or {};required=("qualified","drafted","sent");missing=[k for k in required if k not in o]
             if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started,"attempts":attempts}),500
             fresh=OutreachLead.query.filter(OutreachLead.id>before_max).order_by(OutreachLead.id.asc()).all()
             fresh_receipt=[{"lead_id":x.id,"company":x.company,"status":x.status,"validated_contact":bool(x.contact_email),"gmail_message_id":x.gmail_message_id or ""} for x in fresh]
             attempt={"campaign":controlled,"discovery":{"verified":d.get("verified",0),"candidates":d.get("candidates",0),"rejected":d.get("rejected",0),"result_count":len(d.get("results") or [])},"outreach":{"eligible":o.get("eligible",0),"saved":o.get("saved",0),"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0),"skipped":o.get("skipped",[])},"fresh_leads":fresh_receipt}
             attempts.append(attempt)
+            report("campaign_evaluated", index)
             # Acceptance now proves a genuinely new DB lead crossed qualification
             # and drafting. Sending remains governed by the unchanged safe-send
             # gate; if production autosend is enabled, require its durable receipt.
@@ -192,6 +203,7 @@ def _run_acceptance(campaign=None):
                         return jsonify({"ok":False,"pass":False,"stage":"safe_send","reason":"FRESH_QUALIFIED_DRAFT_FAILED_SAFE_SEND","timestamp":started,"controlled_campaign":controlled,"discovery":attempt["discovery"],"outreach":attempt["outreach"],"fresh_proof":{"new_lead_ids":[x.id for x in fresh],"validated_contact_count":sum(1 for x in fresh if x.contact_email),"qualified_count":len(qualified_fresh),"drafted_count":len(drafted_fresh),"sent_count":0},"attempts":attempts,"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),409
                     continue
                 return jsonify({"ok":True,"pass":True,"stage":"complete","timestamp":started,"controlled_campaign":controlled,"discovery":attempt["discovery"],"outreach":attempt["outreach"],"fresh_proof":{"new_lead_ids":[x.id for x in fresh],"validated_contact_count":sum(1 for x in fresh if x.contact_email),"qualified_count":len(qualified_fresh),"drafted_count":len(drafted_fresh),"sent_count":len(sent_fresh)},"attempts":attempts,"safety":"V1 verification, qualification and safe-send gates remained authoritative"}),200
+        report("completed_without_fresh_proof", len(campaign_pool))
         return jsonify({"ok":False,"pass":False,"stage":"fresh_lead_proof","reason":"NO_FRESH_LEAD_REACHED_QUALIFIED_AND_DRAFTED","timestamp":started,"attempts":attempts,"safety":"V1 gates were not weakened; acceptance refused to count already-queued leads"}),409
     except Exception as exc:app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR");return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started,"attempts":attempts}),500
 @app.route("/demo",methods=["GET"])
