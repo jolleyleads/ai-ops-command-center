@@ -6,7 +6,7 @@ bypasses V1 verification, qualification, enrichment, or safe-send gates.
 """
 import json
 from datetime import datetime, timezone
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, render_template
 from app import app
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
@@ -107,7 +107,10 @@ def chat_prepare_campaign():
 
 @app.route("/api/demo/leads",methods=["GET"])
 def demo_leads():
-    leads=OutreachLead.query.order_by(OutreachLead.id.desc()).limit(20).all();return jsonify({"ok":True,"leads":[_lead_view(x) for x in leads]})
+    return jsonify(ok=True, is_demo=True, leads=[
+        {'id':'sample-1', 'company':'Example Coastal HVAC', 'status':'drafted', 'score':87},
+        {'id':'sample-2', 'company':'Example Harbor Electric', 'status':'review', 'score':76},
+    ])
 
 @app.route("/api/chat/campaigns/launch",methods=["POST"])
 def chat_launch_campaign():
@@ -131,12 +134,20 @@ def chat_campaign_settings():
     return response
 @app.route("/api/demo/campaigns/launch",methods=["POST"])
 def launch_demo_campaign():
+    from outreach_automation import _operator_authorized, _operator_session_authorized, _csrf_ok
+    if not (_operator_authorized() or _operator_session_authorized()):
+        return jsonify(ok=False, error='Sign in to start a real campaign.'), 401
+    if not _operator_authorized() and not _csrf_ok():
+        return jsonify(ok=False, error='Invalid session request token.'), 403
     campaign,error=_campaign_payload(request.get_json(silent=True) or {})
     if error:return jsonify(error),400
     return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
 
 @app.route("/api/demo/campaigns/jobs/<job_id>",methods=["GET"])
 def campaign_execution_status(job_id):
+    from outreach_automation import _operator_authorized, _operator_session_authorized
+    if not (_operator_authorized() or _operator_session_authorized()):
+        return jsonify(ok=False, error='Sign in to view campaign records.'), 401
     return execution_status(job_id)
 
 @app.route("/api/operator/v1-1-acceptance-once",methods=["POST"])
@@ -234,29 +245,4 @@ def _run_acceptance(campaign=None, progress_callback=None):
     except Exception as exc:app.logger.exception("V11_ACCEPTANCE_UNEXPECTED_ERROR");return jsonify({"ok":False,"pass":False,"stage":"unexpected_error","reason":f"{type(exc).__name__}: {exc}","timestamp":started,"attempts":attempts}),500
 @app.route("/demo",methods=["GET"])
 def customer_demo():
-    return Response('''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Automation AI — Customer Demo</title><style>:root{--panel:#0d1b2d;--line:#213653;--text:#f5f8ff;--muted:#9fb0c8;--accent:#66e3b4}*{box-sizing:border-box}body{margin:0;background:#07111f;color:var(--text);font-family:Inter,system-ui,sans-serif}.wrap{max-width:1100px;margin:auto;padding:32px 20px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:block;color:var(--muted);font-size:12px;font-weight:800;margin-bottom:6px}input,textarea{width:100%;background:#071321;border:1px solid #29415f;color:white;border-radius:11px;padding:12px}.wide{grid-column:1/-1}button{background:var(--accent);border:0;border-radius:11px;padding:13px 18px;font-weight:900}.muted{color:var(--muted)}@media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}</style></head><body><main class="wrap"><h1>Automation AI · V1.1</h1><p class="muted">Real campaign launch through the existing V1 verification, qualification and safe-send gates.</p><section class="card"><div class="grid"><div><label>TARGET CUSTOMER</label><input id="target" placeholder="e.g. law firms actively hiring paralegals"></div><div><label>TERRITORY</label><input id="territory" placeholder="Norfolk, Virginia"></div><div class="wide"><label>OFFER</label><textarea id="offer"></textarea></div><div><label>DAILY SENDING LIMIT</label><input id="limit" type="number" min="1" max="100" value="25"></div></div><p><button id="launch">LAUNCH CAMPAIGN</button></p><pre id="result" class="muted">Ready.</pre></section></main><script>
-const $=x=>document.getElementById(x);
-let campaignKey='',campaignBody='';
-$('launch').onclick=async()=>{
-  const button=$('launch');button.disabled=true;
-  $('result').textContent='Researching and verifying prospects…';
-  try{
-    const body=JSON.stringify({target_customer:$('target').value,territory:$('territory').value,offer:$('offer').value,sending_limit:$('limit').value});
-    if(body!==campaignBody||!campaignKey){campaignBody=body;campaignKey=crypto.randomUUID()}
-    const response=await fetch('/api/demo/campaigns/launch',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':campaignKey},body});
-    let data=await response.json();
-    if(!response.ok)throw new Error(data.error||data.reason||'Campaign launch failed');
-    while(data.status==='queued'||data.status==='running'){
-      $('result').textContent='Researching and verifying prospects… '+data.status;
-      await new Promise(resolve=>setTimeout(resolve,5000));
-      const poll=await fetch(data.poll_url);
-      if(!poll.ok)throw new Error('Could not read campaign status');
-      data=await poll.json();
-    }
-    $('result').textContent=JSON.stringify(data.status==='failed'?{status:data.status,error:data.error,result:data.result}:data.result||data,null,2);
-    if(data.status==='completed')campaignKey='';
-  }catch(error){
-    $('result').textContent='Connection or launch issue: '+error.message+'. A submitted campaign may still be running. Click again with the same fields to resume its status.';
-  }finally{button.disabled=false}
-};
-</script></body></html>''',mimetype="text/html")
+    return render_template('launch.html', page='demo')

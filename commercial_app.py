@@ -1,8 +1,11 @@
 from app import app
-from flask import send_from_directory
+from flask import send_from_directory, redirect
 
 @app.route('/chat-operator')
 def chat_operator_ui():
+    from outreach_automation import _operator_authorized, _operator_session_authorized
+    if not (_operator_authorized() or _operator_session_authorized()):
+        return redirect('/', 303)
     return send_from_directory('demo', 'index.html')
 
 @app.route('/chat-operator/dashboard.js')

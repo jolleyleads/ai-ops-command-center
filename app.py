@@ -762,69 +762,11 @@ def create_tables():
 
 @app.route("/")
 def index():
-    events = AutomationEvent.query.order_by(
-        AutomationEvent.created_at.desc()
-    ).limit(10).all()
+    return render_template("launch.html", page="home")
 
-    jobs = SavedJob.query.order_by(
-        SavedJob.created_at.desc()
-    ).limit(20).all()
-
-    workflow_count = Workflow.query.count()
-
-    leads = QualifiedLead.query.order_by(
-        QualifiedLead.created_at.desc()
-    ).limit(100).all()
-
-    pipeline_rows = LeadPipeline.query.all()
-
-    pipeline_by_lead = {
-        row.qualified_lead_id: row
-        for row in pipeline_rows
-    }
-
-    qualified_leads = []
-
-    for lead in leads:
-        pipeline = pipeline_by_lead.get(
-            lead.id
-        )
-
-        qualified_leads.append({
-            "id": lead.id,
-            "lead": lead.lead,
-            "ai_output": lead.ai_output,
-            "source": lead.source,
-            "created_at": lead.created_at,
-            "stage": pipeline.stage if pipeline else "New",
-            "notes": pipeline.notes if pipeline else "",
-            "follow_up_date": pipeline.follow_up_date if pipeline else ""
-        })
-
-    pipeline_counts = {
-        stage: sum(
-            1
-            for lead in qualified_leads
-            if lead["stage"] == stage
-        )
-        for stage in [
-            "New",
-            "Contacted",
-            "Qualified",
-            "Proposal Sent",
-            "Won",
-            "Lost"
-        ]
-    }
-
-    return render_template(
-        "index.html",
-        events=events,
-        jobs=jobs,
-        workflow_count=workflow_count,
-        qualified_leads=qualified_leads,
-        pipeline_counts=pipeline_counts
-    )
+@app.route("/book-demo")
+def book_demo():
+    return render_template("launch.html", page="booking")
 
 @app.route("/workflows")
 def workflows_page():
