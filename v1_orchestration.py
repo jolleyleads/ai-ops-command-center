@@ -48,6 +48,14 @@ def _verified_public_email(result):
     # contact proof. Always re-fetch the company pages before qualification.
     contact_result = _public_contact_evidence(result)
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
+    result['_outreach_copy_sources'] = [
+        {'url': row.get('url'), 'page_text': str(row.get('page_text') or row.get('text') or '')[:4000],
+         'directly_fetched': True, 'http_status': 200, 'source': 'outreach_primary_copy',
+         'observed_at': row.get('observed_at')}
+        for row in rows or [] if isinstance(row, dict) and row.get('company_identity')
+        and row.get('directly_fetched') is True and row.get('http_status') == 200
+        and owned_host(row.get('url', ''), website)
+    ][:4]
     company=result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title")
     location=result.get("contact_location") or result.get("target_location") or result.get("location") or ""
     query=(result.get("_campaign_context") or {}).get("offer") or result.get("query") or result.get("business_need") or ""
@@ -73,7 +81,7 @@ def _verified_public_email(result):
         if person_email_supported(assessment,email):
             result["_contact_name"]=validated.get("decision_maker") or ""
         source=next((row for row in rows or [] if row.get("url")==url),{})
-        result["_contact_identity"]={"company_identity":source.get("company_identity") or {"company_name":company},"identity_version":"company-domain-v1","contact_location":location,"contact_assessment":assessment,"enrichment":enrichment}
+        result["_contact_identity"]={"company_identity":source.get("company_identity") or {"company_name":company},"identity_version":"company-domain-v1","contact_location":location,"contact_assessment":assessment,"enrichment":enrichment,"outreach_copy_sources":result.get("_outreach_copy_sources") or []}
         return email,url
     return "",""
 

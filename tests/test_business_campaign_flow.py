@@ -207,6 +207,8 @@ def test_authorized_job_runs_real_qualification_send_and_followup_handoff(env,mo
     outcome=env.get(job.json['poll_url']).json['result']['outreach']
     assert outcome['qualified']==outcome['drafted']==outcome['sent']==1
     lead=oa.OutreachLead.query.one()
+    from src.outreach_copy import primary_copy_sources
+    assert primary_copy_sources(lead,json.loads(lead.evidence_json))
     assert lead.status=='sent' and lead.gmail_message_id=='provider-message'
     assert lead.follow_up_due_at and lead.gmail_thread_id=='provider-thread'
     assert env.post('/api/chat/campaigns/launch',json=body,headers=headers).json['job_id']==job.json['job_id']
@@ -217,4 +219,4 @@ def test_generated_email_never_leaves_a_blank_signature(env,monkeypatch):
     monkeypatch.setattr(oa,'run_ai',lambda **kw:{'ok':True,'output':json.dumps({'subject':'Automation for Acme','body':'Hello Acme team,\nWould a brief call help?\n\nBest regards,'})})
     lead=oa.OutreachLead(company='Acme',evidence_json='[]')
     draft=oa._draft_email(lead)
-    assert draft['ok'] and draft['body'].endswith('Matthew Jolley\nAutoMake AI')
+    assert draft['ok'] and draft['body'].endswith('Matthew Jolley\nAutoMake AI\n757 840 9648')
