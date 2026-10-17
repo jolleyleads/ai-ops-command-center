@@ -18,7 +18,6 @@ class CampaignExecutionJob(db.Model):
     result_json = db.Column(db.Text, default="{}")
     result_http_status = db.Column(db.Integer)
     error = db.Column(db.String(200), default="")
-    progress_json = db.Column(db.Text, default="{}")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)
@@ -50,7 +49,7 @@ def process_next_execution_job():
             campaign=json.loads(job.payload_json).get('campaign')
             def report_progress(progress):
                 # Persist visibility without triggering extra research or bypassing gates.
-                job.progress_json = json.dumps(progress, sort_keys=True)
+                job.result_json = json.dumps({"progress": progress}, sort_keys=True)
                 db.session.commit()
             response = app.make_response(demo._run_acceptance(campaign, progress_callback=report_progress))
             result, code = response.get_json(), response.status_code
@@ -93,7 +92,7 @@ def kick_execution_worker():
 
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
-    result["progress"] = json.loads(job.progress_json or "{}")
+    result["progress"] = (json.loads(job.result_json or "{}").get("progress") or {}) if job.status in {"queued", "running"} else {}
     if job.status in {"completed", "failed"}:
         result.update(result=json.loads(job.result_json or "{}"), result_http_status=job.result_http_status)
     return result
