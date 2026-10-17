@@ -644,7 +644,7 @@ def _fallback_candidates(discovery,limit=10):
         for value in names:
             name=_clean(value,300);key=_candidate_key(name)
             if not name or not url or key in seen:continue
-            seen.add(key);out.append({"name":name,"discovery_urls":list(dict.fromkeys([url]+([item['website']] if item.get('website') else []))),"candidate_source":"deterministic_business_discovery"})
+            seen.add(key);out.append({"name":name,"website":item.get('website') or '',"discovery_urls":list(dict.fromkeys([url]+([item['website']] if item.get('website') else []))),"candidate_source":"deterministic_business_discovery"})
             if len(out)>=limit:return out
     return out
 
@@ -696,7 +696,7 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
                 if time.monotonic()>=deadline-4:break
                 if shared_host(host(source_url)):continue
                 snapshot=_page_snapshot(source_url)
-                row={**snapshot,"url":source_url,"candidate_name":name,"verification_research":True}
+                row={**snapshot,"url":source_url,"candidate_name":name,"website":cand.get('website') or '',"verification_research":True}
                 candidate_rows.append(row)
             if _deterministic_need_verification(candidate_rows,q,loc):
                 evidence.extend(candidate_rows);continue
@@ -760,6 +760,14 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
                         known.add(_candidate_key(name))
         known={_candidate_key(c.get('name')) for c in candidates}
         candidates += [c for c in _fallback_candidates(discovery,20) if _candidate_key(c.get('name')) not in known]
+        for cand in candidates:
+            # Preserve an explicitly returned business website across the model
+            # extraction handoff; do not derive domains from company names.
+            matches=[s for s in live if s.get('research_tool')=='business_search' and _candidate_key(s.get('title'))==_candidate_key(cand.get('name')) and s.get('url') in (cand.get('discovery_urls') or []) and s.get('website')]
+            sites={s['website'] for s in matches}
+            if len(sites)==1:
+                cand['website']=next(iter(sites))
+                cand['discovery_urls']=list(dict.fromkeys([*(cand.get('discovery_urls') or []),cand['website']]))
         already_verified=set()
         if is_hiring_query(q):candidates,already_verified=_bind_primary_hiring_candidates(discovery,candidates,q,loc)
         # Reserve time to evaluate company-specific proof after retrieval.

@@ -58,6 +58,23 @@ def test_snippets_cannot_become_business_identity_proof():
     assert search._deterministic_need_verification([row],'Find 10 HVAC businesses','Norfolk, Virginia')==[]
 
 
+def test_places_website_survives_model_candidate_extraction(env,monkeypatch):
+    name='Acme Comfort'
+    place={'title':name,'url':'https://maps.google.com/place/acme','website':'https://comfort.example/','research_tool':'business_search'}
+    page={**company_page(),'source_title':name,'source_heading':name,'source_organizations':[],'url':place['website'],'resolved_url':place['website']}
+    monkeypatch.setattr(search,'plan_research',lambda *a:{'tool_calls':[{'tool':'business_search'}]})
+    monkeypatch.setattr(search,'_run_calls',lambda *a:([dict(place)],[],['business_search']))
+    monkeypatch.setattr(search,'_memory',lambda *a:[])
+    monkeypatch.setattr(search,'_inspect_discovery',lambda *a:None)
+    monkeypatch.setattr(search,'_inspect',lambda *a:None)
+    monkeypatch.setattr(search,'extract_candidates',lambda *a:[{'name':name,'discovery_urls':[place['url']]}])
+    monkeypatch.setattr(search,'evaluate_research',lambda *a:{})
+    monkeypatch.setattr(search,'remember_evidence',lambda *a:None)
+    monkeypatch.setattr(search,'_page_snapshot',lambda *a:dict(page))
+    result=search._smart_search('Find 1 HVAC business','Norfolk, Virginia',runtime_budget=25,target_count=1)
+    assert result['verified_count']==1
+
+
 def test_authenticated_campaign_authorization_is_durable_and_idempotent(env,monkeypatch):
     body={'target_customer':'Find 10 HVAC businesses','territory':'Norfolk, VA','target_count':10,'sending_limit':10,'send_emails':True}
     assert env.post('/api/chat/campaigns/launch',json=body).status_code==401
