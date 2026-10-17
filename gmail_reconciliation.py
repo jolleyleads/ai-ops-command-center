@@ -18,6 +18,7 @@ from flask import jsonify
 import outreach_automation as oa
 from app import app, db, gmail_access_token
 from src.outreach_execution import execute_outreach_send
+from src.outreach_copy import add_resume_attachment
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 
 NEGATIVE_GRACE_SECONDS = max(60, int(os.getenv("GMAIL_RECONCILIATION_GRACE_SECONDS", "180")))
@@ -38,7 +39,7 @@ def _gmail_send_identified(to_email: str, subject: str, body: str, *, command_ke
         msg["To"]=to_email;msg["Subject"]=subject;msg["Message-ID"]=identity;msg["X-AI-Ops-Command-ID"]=command_key
         from_email=os.environ.get("GMAIL_FROM_EMAIL","")
         if from_email: msg["From"]=from_email
-        msg.set_content(body);raw=base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=");payload={"raw":raw}
+        msg.set_content(body);add_resume_attachment(msg, body);raw=base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=");payload={"raw":raw}
         if thread_id: payload["threadId"]=thread_id
         response=requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},json=payload,timeout=30)
         if not response.ok:return {"ok":False,"error":f"Gmail error {response.status_code}: {response.text[:500]}","message_identity":identity}

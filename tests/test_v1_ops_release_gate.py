@@ -203,7 +203,7 @@ def test_draft_falls_back_deterministically_when_ai_fails(env, monkeypatch):
     assert result["fallback"] is True
     assert result["model"] == "deterministic-fallback"
     assert "Example Roofing" in result["subject"]
-    assert "lead generation" in result["body"]
+    assert "without you lifting a finger" in result["body"]
 
 
 def test_acceptance_pool_is_cross_industry(env,monkeypatch):
