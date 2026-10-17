@@ -1,0 +1,20 @@
+name: Isolated Live Discovery Tests
+on:
+  push:
+    branches:
+      - feature/discovery-first-customer-research
+  pull_request:
+    paths:
+      - 'live_discovery_app.py'
+      - 'tests/test_live_discovery_isolated.py'
+      - '.github/workflows/live-discovery-tests.yml'
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'flask>=3,<4'
+      - run: python -m unittest discover -s tests -p 'test_live_discovery_isolated.py' -v
