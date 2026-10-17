@@ -232,7 +232,7 @@ def test_acceptance_endpoint_iterates_defined_universal_campaign_pool(env):
     source = Path("customer_demo.py").read_text(encoding="utf-8")
     assert "campaign_catalog=[" in source
     assert "campaign_pool=[" in source
-    assert "for controlled in campaign_pool:" in source
+    assert "for index, controlled in enumerate(campaign_pool, start=1):" in source
     assert "for controlled in campaigns:" not in source
 
 def test_customer_demo_module_compiles(env):
