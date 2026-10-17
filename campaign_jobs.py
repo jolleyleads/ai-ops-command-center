@@ -18,6 +18,7 @@ class CampaignExecutionJob(db.Model):
     result_json = db.Column(db.Text, default="{}")
     result_http_status = db.Column(db.Integer)
     error = db.Column(db.String(200), default="")
+    progress_json = db.Column(db.Text, default="{}")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)
@@ -47,7 +48,11 @@ def process_next_execution_job():
         import customer_demo as demo
         if job.kind == "acceptance":
             campaign=json.loads(job.payload_json).get('campaign')
-            response = app.make_response(demo._run_acceptance(campaign) if campaign is not None else demo._run_acceptance())
+            def report_progress(progress):
+                # Persist visibility without triggering extra research or bypassing gates.
+                job.progress_json = json.dumps(progress, sort_keys=True)
+                db.session.commit()
+            response = app.make_response(demo._run_acceptance(campaign, progress_callback=report_progress))
             result, code = response.get_json(), response.status_code
         else:
             result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
@@ -88,6 +93,7 @@ def kick_execution_worker():
 
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
+    result["progress"] = json.loads(job.progress_json or "{}")
     if job.status in {"completed", "failed"}:
         result.update(result=json.loads(job.result_json or "{}"), result_http_status=job.result_http_status)
     return result
