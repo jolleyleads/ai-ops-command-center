@@ -43,6 +43,9 @@ import customer_auth  # noqa: F401
 
 rag_research.init_rag_tables()
 
+from owner_test_cleanup import run_startup_cleanup
+run_startup_cleanup()
+
 from configured_campaign import start_configured_campaign
 start_configured_campaign()
 
