@@ -93,7 +93,7 @@ def test_approved_template_recognition_keeps_source_compliment_and_rejects_old_c
 
 @pytest.mark.parametrize('saved_history', [False, True])
 def test_explicit_send_refreshes_legacy_unsent_copy_only(monkeypatch, saved_history):
-    oa.app.config.update(TESTING=True)
+    monkeypatch.setitem(oa.app.config, "TESTING", True)
     monkeypatch.setenv('OPERATOR_CONTROL_TOKEN', 'approved-copy-test')
     monkeypatch.setattr(oa, '_qualification_gate', lambda row: {'ok': True})
     monkeypatch.setattr(oa, 'run_ai', lambda **kw: {'ok': False})
