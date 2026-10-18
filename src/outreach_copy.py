@@ -64,3 +64,13 @@ def add_resume_attachment(message, body):
     message.add_attachment(content, maintype='application',
                            subtype='vnd.openxmlformats-officedocument.wordprocessingml.document',
                            filename=RESUME_PATH.name)
+
+
+def matches_initial_email(lead, evidence, subject, body):
+    """Recognize the approved template, allowing its source-backed compliment."""
+    quote = ''
+    match = re.search(r'^Your focus on “(.+)” really caught my attention!$', str(body or ''), re.M)
+    if match:
+        quote = match.group(1)
+    expected = initial_email(lead, evidence, quote)
+    return subject == expected['subject'] and body == expected['body']

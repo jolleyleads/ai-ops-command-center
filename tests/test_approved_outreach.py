@@ -78,3 +78,46 @@ def test_missing_resume_prevents_provider_send_and_followups_do_not_attach(monke
     message=EmailMessage();message.set_content('Following up on my earlier message.')
     copy.add_resume_attachment(message,'Following up on my earlier message.')
     assert not list(message.iter_attachments())
+
+
+def test_approved_template_recognition_keeps_source_compliment_and_rejects_old_copy():
+    x = lead()
+    rows = [{'url': x.source_url, 'directly_fetched': True, 'http_status': 200,
+             'page_text': 'heating and cooling services throughout Norfolk'}]
+    draft = copy.initial_email(x, rows, rows[0]['page_text'])
+    assert copy.matches_initial_email(x, rows, draft['subject'], draft['body'])
+    assert not copy.matches_initial_email(x, rows, 'Hello', 'Generic old message')
+    assert not copy.matches_initial_email(x, [], draft['subject'], draft['body'])
+    assert not copy.matches_initial_email(x, rows, draft['subject'], draft['body'].replace('757 840 9648', ''))
+
+
+@pytest.mark.parametrize('saved_history', [False, True])
+def test_explicit_send_refreshes_legacy_unsent_copy_only(monkeypatch, saved_history):
+    monkeypatch.setitem(oa.app.config, "TESTING", True)
+    monkeypatch.setenv('OPERATOR_CONTROL_TOKEN', 'approved-copy-test')
+    monkeypatch.setattr(oa, '_qualification_gate', lambda row: {'ok': True})
+    monkeypatch.setattr(oa, 'run_ai', lambda **kw: {'ok': False})
+    captured = []
+    monkeypatch.setattr(oa, '_safe_send', lambda row, **kw: captured.append(kw) or
+                        {'ok': False, 'stage': 'blocked', 'gate': {'reasons': ['TEST_NO_SEND']}})
+    with oa.app.app_context():
+        oa.db.session.remove(); oa.db.drop_all(); oa.db.create_all()
+        try:
+            row = oa.OutreachLead(company='Acme Comfort', contact_name='Jane Doe',
+                contact_email='jane@acme.example', source_url='https://acme.example/',
+                subject='Old subject', body='Old saved copy', gmail_message_id='prior-message' if saved_history else '')
+            oa.db.session.add(row); oa.db.session.commit()
+            result = oa.app.test_client().post('/api/outreach/leads/%s/send' % row.id,
+                headers={'X-Operator-Token': 'approved-copy-test'})
+            assert result.status_code == 409
+            if saved_history:
+                assert captured[0]['body'] == 'Old saved copy'
+            else:
+                expected = copy.initial_email(row, [])
+                assert captured[0]['body'] == expected['body']
+                assert captured[0]['subject'] == expected['subject']
+                assert row.body == expected['body']
+                assert row.body.count('👋') == row.body.count('🙂') == 1
+                assert copy.RESUME_LINE in row.body and '757 840 9648' in row.body
+        finally:
+            oa.db.session.remove(); oa.db.drop_all()
