@@ -25,7 +25,7 @@ def row(company, email='neyolabs@gmail.com', verification='', created=None):
 
 def test_only_requested_existing_owner_tests_are_archived_and_hidden(records):
     neo = row('Neo Labs', verification='controlled_real_inbound')
-    acceptance = row('AutoMake AI Acceptance')
+    acceptance = row('AutoMake AI Acceptance', email='acceptance@example.com')
     internal = row('AI Ops Production E2E abc', verification='controlled_e2e')
     real = row('Acme Electrical', email='owner@acme.example')
     similar = row('Neo Labs', email='owner@another.example')

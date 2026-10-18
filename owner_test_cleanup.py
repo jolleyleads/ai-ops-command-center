@@ -17,10 +17,10 @@ def is_requested_test(lead):
     email = (lead.contact_email or '').strip().casefold()
     name = re.sub(r'[^a-z0-9]', '', (lead.company or '').casefold())
     owner = email in OWNER_EMAILS
-    return owner and (lead.verification in CONTROLLED or name in {
+    internal_acceptance = 'acceptance' in name and name.startswith(('automake', 'aiautomate', 'aiautomation', 'aiops'))
+    return internal_acceptance or (owner and (lead.verification in CONTROLLED or name in {
         'neolabs', 'neyolabs', 'provideracceptancee2e', 'realinboundacceptancetest',
-        'automakecontrolledfollowuptest'} or
-        ('acceptance' in name and name.startswith(('automake', 'aiautomate', 'aiops'))))
+        'automakecontrolledfollowuptest'}))
 
 
 def archive_requested_tests():
@@ -48,6 +48,12 @@ def archive_requested_tests():
         names.append(lead.company)
     db.session.commit()
     app.logger.warning('OWNER_TEST_CLEANUP archived_count=%s lead_ids=%s companies=%s', len(ids), ids, names)
+    remaining = [{'id': lead.id, 'company': lead.company, 'verification': lead.verification}
+                 for lead in oa.OutreachLead.query.filter(oa.OutreachLead.created_at <= CUTOFF,
+                     oa.OutreachLead.status != 'archived').all()
+                 if 'acceptance' in (lead.company or '').casefold() or
+                     re.sub(r'[^a-z0-9]', '', (lead.company or '').casefold()) in {'neolabs', 'neyolabs'}]
+    app.logger.warning('OWNER_TEST_REMAINING_NAMED_RECORDS records=%s', remaining)
     return ids
 
 
