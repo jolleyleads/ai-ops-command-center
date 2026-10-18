@@ -6,7 +6,7 @@ from app import app, db
 import outreach_automation as oa
 from lead_recovery import LeadRecovery
 
-CUTOFF = datetime(2026, 10, 18, 3, 9, 21)
+CUTOFF = datetime(2026, 10, 18, 8, 52, 39)
 OWNER_EMAILS = {'neyolabs@gmail.com', 'jolleyleads@gmail.com'}
 CONTROLLED = {'controlled_e2e', 'controlled_real_inbound', 'controlled_followup_test'}
 
@@ -19,7 +19,9 @@ def is_requested_test(lead):
     owner = email in OWNER_EMAILS
     internal_acceptance = name in {'v1controlledacceptance', 'provideracceptancee2e'} or (
         'acceptance' in name and name.startswith(('automake', 'aiautomate', 'aiautomation', 'aiops')))
-    return internal_acceptance or (owner and (lead.verification in CONTROLLED or name in {
+    internal_e2e = lead.verification in {'controlled_e2e', 'controlled_followup_test', 'controlled_acceptance'} or name.startswith((
+        'aiopsproductione2e', 'aiopsproductionete', 'automakeaiproductione2e', 'automakeproductione2e'))
+    return internal_acceptance or internal_e2e or (owner and (lead.verification in CONTROLLED or name in {
         'neolabs', 'neyolabs', 'provideracceptancee2e', 'realinboundacceptancetest',
         'automakecontrolledfollowuptest'}))
 
@@ -52,7 +54,7 @@ def archive_requested_tests():
     remaining = [{'id': lead.id, 'company': lead.company, 'verification': lead.verification}
                  for lead in oa.OutreachLead.query.filter(oa.OutreachLead.created_at <= CUTOFF,
                      oa.OutreachLead.status != 'archived').all()
-                 if 'acceptance' in (lead.company or '').casefold() or
+                 if any(marker in (lead.company or '').casefold() for marker in ('acceptance', 'e2e', 'controlled', 'ai ops production')) or
                      re.sub(r'[^a-z0-9]', '', (lead.company or '').casefold()) in {'neolabs', 'neyolabs'}]
     app.logger.warning('OWNER_TEST_REMAINING_NAMED_RECORDS records=%s', remaining)
     return ids

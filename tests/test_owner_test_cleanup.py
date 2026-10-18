@@ -45,3 +45,15 @@ def test_only_requested_existing_owner_tests_are_archived_and_hidden(records):
     old = row('V1 Controlled Acceptance', email='old-test@example.com', verification='controlled_acceptance')
     provider = row('Provider Acceptance E2E', email='provider-test@example.com', verification='SOURCE_VERIFIED')
     assert archive_requested_tests() == [old.id, provider.id]
+
+
+def test_legacy_production_e2e_records_do_not_require_owner_email(records):
+    production = row('AI Ops Production E2E 20261015', email='test-recipient@example.com')
+    marked = row('Legacy workflow proof', email='old-inbox@example.com', verification='controlled_e2e')
+    real = row('E2E Electrical Services', email='office@e2eelectric.example')
+    future = row('AI Ops Production E2E later', email='test-recipient@example.com',
+                 created=CUTOFF+timedelta(seconds=1))
+    assert archive_requested_tests() == [production.id, marked.id]
+    assert production.follow_up_due_at is None
+    assert real.status == future.status == 'sent'
+    assert archive_requested_tests() == []
