@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import app, db, gmail_access_token, send_gmail
 from src.services import run_ai
-from src.outreach_copy import initial_email, primary_copy_sources, add_resume_attachment, RESUME_LINE
+from src.outreach_copy import initial_email, primary_copy_sources, add_resume_attachment, RESUME_LINE, matches_initial_email
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
@@ -1227,7 +1227,16 @@ def send_outreach(lead_id: int):
     if not lead.contact_email:
         return jsonify({"error": "verified contact_email is required before send"}), 409
 
-    if not lead.subject or not lead.body:
+    # Refresh legacy unsent first messages when the user explicitly sends them.
+    # Keep saved provider attempts and sent history intact for reconciliation.
+    untouched = not (lead.gmail_message_id or lead.gmail_thread_id or lead.sent_at or lead.follow_up_count)
+    has_attempt = OutreachSendAttempt.query.filter_by(lead_id=lead.id).first() is not None
+    try:
+        evidence = json.loads(lead.evidence_json or '[]')
+    except (ValueError, TypeError):
+        evidence = []
+    refresh_initial = untouched and not has_attempt and not matches_initial_email(lead, evidence, lead.subject, lead.body)
+    if not lead.subject or not lead.body or refresh_initial:
         drafted = _draft_email(lead)
         if not drafted.get("ok"):
             lead.last_error = drafted.get("error") or "OpenAI drafting failed"
