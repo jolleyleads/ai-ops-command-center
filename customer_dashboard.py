@@ -75,7 +75,7 @@ def campaign_view(job):
 @protected
 def dashboard():
     # Only persisted reads: opening the dashboard must never launch work.
-    leads = oa.OutreachLead.query.order_by(oa.OutreachLead.updated_at.desc()).limit(500).all()
+    leads = oa.OutreachLead.query.filter(oa.OutreachLead.status != 'archived').order_by(oa.OutreachLead.updated_at.desc()).limit(500).all()
     jobs = CampaignExecutionJob.query.filter_by(kind='campaign').order_by(CampaignExecutionJob.created_at.desc()).limit(100).all()
     campaigns = [campaign_view(job) for job in jobs]
     memberships = {}
@@ -100,7 +100,7 @@ def dashboard():
 @protected
 def lead_details(lead_id):
     lead = db.session.get(oa.OutreachLead, lead_id)
-    if not lead:
+    if not lead or lead.status == 'archived':
         return jsonify(ok=False, error='This lead was not found.'), 404
     rows, enrichment, context = evidence_parts(lead)
     fields = enrichment.get('fields') or {}
@@ -163,6 +163,7 @@ def appointments():
     for booking in bookings:
         if not booking.event_id:continue
         lead = db.session.get(oa.OutreachLead, booking.lead_id)
+        if lead and lead.status == 'archived':continue
         rows.append({'lead_id':booking.lead_id, 'company':lead.company if lead else 'Saved contact',
                      'start':booking.start, 'end':booking.end, 'timezone':booking.timezone,
                      'url':safe_url(booking.event_url), 'attendee':booking.attendee_email})
