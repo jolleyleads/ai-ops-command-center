@@ -42,3 +42,6 @@ def test_only_requested_existing_owner_tests_are_archived_and_hidden(records):
     assert {lead['id'] for lead in shown} == {real.id, similar.id, future.id}
     assert client.get('/api/chat/dashboard/leads/%s' % neo.id, headers=auth).status_code == 404
     assert oa.OperatorAuditEvent.query.filter_by(action='archive_owner_test').count() == 3
+    old = row('V1 Controlled Acceptance', email='old-test@example.com', verification='controlled_acceptance')
+    provider = row('Provider Acceptance E2E', email='provider-test@example.com', verification='SOURCE_VERIFIED')
+    assert archive_requested_tests() == [old.id, provider.id]

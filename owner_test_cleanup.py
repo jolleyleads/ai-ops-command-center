@@ -17,7 +17,8 @@ def is_requested_test(lead):
     email = (lead.contact_email or '').strip().casefold()
     name = re.sub(r'[^a-z0-9]', '', (lead.company or '').casefold())
     owner = email in OWNER_EMAILS
-    internal_acceptance = 'acceptance' in name and name.startswith(('automake', 'aiautomate', 'aiautomation', 'aiops'))
+    internal_acceptance = name in {'v1controlledacceptance', 'provideracceptancee2e'} or (
+        'acceptance' in name and name.startswith(('automake', 'aiautomate', 'aiautomation', 'aiops')))
     return internal_acceptance or (owner and (lead.verification in CONTROLLED or name in {
         'neolabs', 'neyolabs', 'provideracceptancee2e', 'realinboundacceptancetest',
         'automakecontrolledfollowuptest'}))
