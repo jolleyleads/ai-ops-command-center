@@ -13,6 +13,7 @@
   campaign.disabled=true;mode.value='research';document.getElementById('prepare').disabled=true;
   window.workspaceAccessReady=requestJSON(API+'/api/chat/access',{cache:'no-store'}).then(function(access){
     window.workspaceAccess=access;
+    if(window.applyWorkspacePreferences)window.applyWorkspacePreferences();
     campaign.disabled=!access.sending_available;
     document.getElementById('prepare').disabled=!access.drafting_available;
     document.getElementById('prepare').title=access.drafting_available?'Prepare verified drafts without sending':'Sign in to save leads and prepare drafts';
