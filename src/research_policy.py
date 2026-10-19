@@ -18,3 +18,11 @@ def requested_target_count(value=None):
     if str(value).strip() not in {str(count),'None'} or not 1<=count<=20:
         raise ValueError('This deployment supports 1–20 results per request. Split larger requests into batches of at most 20; no work has started.')
     return count
+
+
+def target_count_from_prompt(prompt, explicit=None):
+    """Count business targets, not route numbers, dates, or operating hours."""
+    import re
+    if explicit is not None:return requested_target_count(explicit)
+    match=re.search(r'(?:^\s*|\b(?:find|research|get|show|list)\s+(?:me\s+)?(?:up to\s+)?)(\d+)\s+(?:[a-z][a-z-]*\s+){0,4}(?:companies|company|businesses|business|prospects?|leads?)\b',str(prompt or ''),re.I)
+    return requested_target_count(int(match.group(1)) if match else None)

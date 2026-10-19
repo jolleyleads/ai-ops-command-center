@@ -2,12 +2,13 @@
 import json
 import secrets
 import threading
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from flask import jsonify, request
 from app import app, db
 from smart_search import _smart_search
-from src.research_policy import research_budget_seconds, research_target_count, requested_target_count
+from src.research_policy import research_budget_seconds, research_target_count, requested_target_count, target_count_from_prompt
 
 
 class ResearchJob(db.Model):
@@ -25,9 +26,23 @@ class ResearchJob(db.Model):
 
 
 with app.app_context():db.create_all()
-_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix="deep-research")
-_lock=threading.Lock()
-_future=None
+_pool = None
+_lock = threading.Lock()
+_future = None
+_pool_pid = None
+
+
+def reset_worker_pool():
+    """A preloaded Gunicorn fork must not inherit a dead executor or held lock."""
+    global _pool, _lock, _future, _pool_pid
+    _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deep-research")
+    _lock = threading.Lock()
+    _future = None
+    _pool_pid = os.getpid()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=reset_worker_pool)
 
 
 def process_next_research_job():
@@ -75,6 +90,8 @@ def _worker():
 
 def kick_worker():
     global _future
+    if _pool_pid != os.getpid():
+        reset_worker_pool()
     with _lock:
         if _future is None or _future.done():_future=_pool.submit(_worker)
 
@@ -84,7 +101,7 @@ def create_research_job():
     data=request.get_json(silent=True) or {}
     query=str(data.get("query") or data.get("prompt") or "").strip()[:1000]
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
-    try:target=requested_target_count(data.get("target_count"))
+    try:target=target_count_from_prompt(query,data.get("target_count"))
     except (TypeError,ValueError) as exc:return jsonify({"error":str(exc),"maximum_results":20,"work_started":False}),422
     if ResearchJob.query.filter(ResearchJob.status.in_(["queued","running"])).count()>=5 or ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429

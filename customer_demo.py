@@ -10,7 +10,7 @@ from flask import Response, jsonify, request
 from app import app
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
-from src.research_policy import research_budget_seconds, research_target_count, requested_target_count
+from src.research_policy import research_budget_seconds, research_target_count, requested_target_count, target_count_from_prompt
 from campaign_jobs import enqueue_execution, execution_status
 from v1_orchestration import orchestrate_discovery
 from v11_evidence_upgrade import enhance_discovery
@@ -32,7 +32,7 @@ def _campaign_payload(data):
     try:send_limit=int(data.get("sending_limit") or 25)
     except Exception:send_limit=25
     send_limit=max(1,min(send_limit,MAX_DEMO_SEND_LIMIT))
-    try:target_count=requested_target_count(data.get("target_count"))
+    try:target_count=target_count_from_prompt(target,data.get("target_count"))
     except (TypeError,ValueError) as exc:return None,{"ok":False,"error":str(exc),"maximum_results":20,"work_started":False}
     if not target:return None,{"ok":False,"error":"target_customer_required"}
     if not territory:return None,{"ok":False,"error":"territory_required"}
