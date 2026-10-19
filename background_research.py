@@ -2,6 +2,7 @@
 import json
 import secrets
 import threading
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from flask import jsonify, request
@@ -25,9 +26,23 @@ class ResearchJob(db.Model):
 
 
 with app.app_context():db.create_all()
-_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix="deep-research")
-_lock=threading.Lock()
-_future=None
+_pool = None
+_lock = threading.Lock()
+_future = None
+_pool_pid = None
+
+
+def reset_worker_pool():
+    """A preloaded Gunicorn fork must not inherit a dead executor or held lock."""
+    global _pool, _lock, _future, _pool_pid
+    _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deep-research")
+    _lock = threading.Lock()
+    _future = None
+    _pool_pid = os.getpid()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=reset_worker_pool)
 
 
 def process_next_research_job():
@@ -75,6 +90,8 @@ def _worker():
 
 def kick_worker():
     global _future
+    if _pool_pid != os.getpid():
+        reset_worker_pool()
     with _lock:
         if _future is None or _future.done():_future=_pool.submit(_worker)
 

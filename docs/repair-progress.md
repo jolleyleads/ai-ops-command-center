@@ -27,3 +27,7 @@ Rollback: revert repair commits; leave additive ownership/reporting tables and a
 Latest validation: 696 local tests passed, 6 PostgreSQL-only tests skipped; real child-process integration terminates an invalid campaign with a persisted configuration failure and no provider calls. JavaScript syntax checks passed. PostgreSQL CI for the combined follow-up is pending. Live draft proof is still queued; no send or booking has been performed.
 
 PR #151 initial head passed PostgreSQL CI. Follow-up adds narrow GitHub OIDC acceptance authentication so verification does not depend on manually copying a secret. Signed-token tests exercise tampering, expiry, branch/repository/workflow/SHA/audience restrictions, job binding, and denial of general operator access.
+
+## Fork-safety verification follow-up
+
+Live application logs show initialization before Gunicorn startup. Process-local ThreadPoolExecutor/Future/Lock state was not reset on forks, a possible cause of newly queued jobs never being claimed in a preloaded worker. Both research and campaign executors now initialize lazily, reset after fork, and check process identity before using a lock or Future. Regression checks simulate an inherited running Future and held lock and prove only a fresh executor is used. Final production qualification must still be demonstrated after deployment.
