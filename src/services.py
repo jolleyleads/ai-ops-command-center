@@ -55,7 +55,7 @@ def run_ai(
     if not api_key:
         return {"ok": False, "error": "OPENAI_API_KEY is not configured"}
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=20, max_retries=0)
     selected_model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     last_reason = ""
     try:

@@ -42,21 +42,26 @@ def _orchestration_payload(discovery,campaign):
     payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"offer":campaign.get("offer") or "AI lead generation and customer follow-up automation","business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"],"require_decision_maker":campaign.get("require_decision_maker") is True})
     return payload
 def _run_campaign(data):
+    from src.execution_deadline import checkpoint
+    checkpoint("configuration")
     campaign,error=_campaign_payload(data)
     if error:return None,"configuration",error["error"]
     # This bit exists only in the server-created authenticated job payload.
     campaign["send_authorized"]=data.get("send_authorized") is True
     campaign["require_decision_maker"]=data.get("require_decision_maker") is True
+    checkpoint("researching")
     try:discovery=_smart_search(campaign["query"],campaign["territory"],runtime_budget=research_budget_seconds(campaign["target_count"]),target_count=campaign["target_count"])
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
     if not isinstance(discovery,dict):return None,"discovery","DISCOVERY_NOT_OBJECT"
     if discovery.get("agent_error"):return None,"discovery","RESEARCH_AGENT_FAILED"
     if not isinstance(discovery.get("results",[]),list):return None,"discovery","DISCOVERY_RESULTS_NOT_LIST"
+    checkpoint("verifying_sources")
     try:discovery=enhance_discovery(discovery,campaign["query"],campaign["territory"])
     except Exception as exc:app.logger.exception("V11_EVIDENCE_UPGRADE_ERROR");return None,"verification",f"{type(exc).__name__}: {exc}"
     try:
+        checkpoint("qualifying_contacts")
         payload=_orchestration_payload(discovery,campaign)
-        outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] else orchestrate_discovery(payload)
+        outreach=orchestrate_discovery(payload,draft_only=True) if data.get("draft_only") is True else (orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] else orchestrate_discovery(payload))
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
     visible=[]
@@ -203,7 +208,7 @@ def _run_acceptance(campaign=None, progress_callback=None):
             before_max=0
             latest=OutreachLead.query.order_by(OutreachLead.id.desc()).first()
             if latest:before_max=latest.id
-            payload,stage,reason=_run_campaign(controlled)
+            payload,stage,reason=_run_campaign({**controlled,"draft_only":True})
             if not payload:
                 attempts.append({"campaign":controlled,"stage":stage or "unknown","reason":reason or "UNKNOWN_FAILURE"})
                 report("campaign_failed", index)

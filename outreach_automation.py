@@ -516,6 +516,8 @@ def _independent_mailbox_gate(lead):
 
 
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
+    from src.execution_deadline import checkpoint
+    checkpoint("sending")
     if not _recipient_matches_source_domain(lead):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     if not _recipient_mailbox_allowed(lead.contact_email):
