@@ -39,7 +39,10 @@ def main():
         state = json.load(response)
     deadline = time.monotonic()+2700
     while state.get("status") in {"queued","running"} and time.monotonic() < deadline:
-        print("Acceptance job",state["job_id"],state["status"],flush=True)
+        print(json.dumps({"job_id":state["job_id"],"status":state["status"],
+                          "stage":(state.get("progress") or {}).get("stage"),
+                          "queue_position":state.get("queue_position"),
+                          "active_executions":state.get("active_executions")}),flush=True)
         time.sleep(10)
         try:
             poll=urllib.request.Request(ORIGIN+state["poll_url"],headers={**authentication_headers()})

@@ -41,6 +41,10 @@ def execution_limit(kind):
 def expire_interrupted_jobs():
     """Polling also expires dead workers; no send-capable claim is replayed."""
     now = datetime.utcnow()
+    CampaignExecutionJob.query.filter(CampaignExecutionJob.status=="queued",
+        CampaignExecutionJob.created_at<now-timedelta(minutes=30)).update({
+        "status":"failed","error":"QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION",
+        "result_http_status":503,"result_json":json.dumps({"ok":False,"reason":"QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION"}),"finished_at":now})
     for kind in ("campaign", "acceptance"):
         CampaignExecutionJob.query.filter(
             CampaignExecutionJob.kind == kind,
