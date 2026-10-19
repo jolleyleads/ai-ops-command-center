@@ -19,7 +19,7 @@ def test_structured_outreach_regenerates_after_invalid_draft(monkeypatch):
     bad=json.dumps({"subject":"x"*161,"body":"hello"})
     good=json.dumps({"subject":"Short subject","body":"hello"})
     client=FakeClient([bad,good])
-    monkeypatch.setattr(services,"OpenAI",lambda api_key:client)
+    monkeypatch.setattr(services,"OpenAI",lambda api_key, timeout, max_retries:client)
     result=services.run_ai("source data",instructions="Return strict JSON with keys subject and body")
     assert result["ok"] is True
     assert result["generation_attempts"]==2
@@ -30,7 +30,7 @@ def test_structured_outreach_fails_closed_after_three_invalid_drafts(monkeypatch
     monkeypatch.setenv("OPENAI_API_KEY","test")
     bad=json.dumps({"subject":"x"*161,"body":"hello"})
     client=FakeClient([bad,bad,bad])
-    monkeypatch.setattr(services,"OpenAI",lambda api_key:client)
+    monkeypatch.setattr(services,"OpenAI",lambda api_key, timeout, max_retries:client)
     result=services.run_ai("source data",instructions="Return strict JSON with keys subject and body")
     assert result["ok"] is False
     assert "after 3 attempts" in result["error"]
@@ -40,7 +40,7 @@ def test_structured_outreach_fails_closed_after_three_invalid_drafts(monkeypatch
 def test_non_outreach_ai_call_remains_single_attempt(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY","test")
     client=FakeClient(["plain text response"])
-    monkeypatch.setattr(services,"OpenAI",lambda api_key:client)
+    monkeypatch.setattr(services,"OpenAI",lambda api_key, timeout, max_retries:client)
     result=services.run_ai("general task",instructions="Answer the question")
     assert result["ok"] is True
     assert result["output"]=="plain text response"
@@ -52,6 +52,17 @@ def test_unsupported_url_is_rejected_before_downstream_gate(monkeypatch):
     bad=json.dumps({"subject":"Hello","body":"See https://invented.invalid/path"})
     good=json.dumps({"subject":"Hello","body":"See https://evidence.example/path"})
     client=FakeClient([bad,good])
-    monkeypatch.setattr(services,"OpenAI",lambda api_key:client)
+    monkeypatch.setattr(services,"OpenAI",lambda api_key, timeout, max_retries:client)
     result=services.run_ai("Evidence: https://evidence.example/path",instructions="Return strict JSON with keys subject and body")
     assert result["ok"] is True and result["generation_attempts"]==2
+
+
+def test_sdk_has_finite_timeout_and_no_hidden_retries(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY','test')
+    options={}
+    def factory(**kwargs):
+        options.update(kwargs)
+        return FakeClient(['ok'])
+    monkeypatch.setattr(services,'OpenAI',factory)
+    assert services.run_ai('question')['ok']
+    assert options['timeout']==20 and options['max_retries']==0

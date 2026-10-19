@@ -164,3 +164,34 @@ def test_acceptance_key_is_unique_per_workflow_attempt():
     assert first==acceptance_request_key(env)
     assert first!=acceptance_request_key({**env,"GITHUB_RUN_ID":"124"})
     assert first!=acceptance_request_key({**env,"GITHUB_RUN_ATTEMPT":"2"})
+
+
+def test_poll_expires_killed_worker_before_acceptance_deadline(env,monkeypatch):
+    job=jobs.CampaignExecutionJob(id='killed',kind='campaign',payload_json='{}',status='running',
+        started_at=datetime.utcnow()-timedelta(minutes=21))
+    jobs.db.session.add(job);jobs.db.session.commit()
+    response=env.get('/api/demo/campaigns/jobs/killed')
+    assert response.json['status']=='failed'
+    assert response.json['result_http_status']==504
+    assert 'REVIEW_REQUIRED' in response.json['error']
+
+
+def test_isolated_worker_timeout_terminates_without_replay(env,monkeypatch):
+    import subprocess
+    class Process:
+        calls=0
+        terminated=False
+        def wait(self,timeout):
+            self.calls+=1
+            if self.calls==1:raise subprocess.TimeoutExpired('worker',timeout)
+            return -15
+        def terminate(self):self.terminated=True
+    child=Process()
+    monkeypatch.setattr(jobs.subprocess,'Popen',lambda *a,**k:child)
+    job=jobs.CampaignExecutionJob(id='bounded',kind='campaign',payload_json='{}',status='queued')
+    jobs.db.session.add(job);jobs.db.session.commit()
+    assert not jobs.process_next_execution_job(isolated=True)['ok']
+    assert child.terminated
+    job=jobs.db.session.get(jobs.CampaignExecutionJob,"bounded")
+    assert job.error=='EXECUTION_DEADLINE_EXCEEDED_REVIEW_REQUIRED'
+    assert jobs.process_next_execution_job(isolated=True)['processed']==0

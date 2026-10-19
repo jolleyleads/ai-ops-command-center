@@ -175,8 +175,8 @@ def resume_discovery_lead(lead, result, lease_valid=None):
     return {'ok': True, 'stage': 'drafted'}
 
 
-def orchestrate_discovery(payload, *, authorized_send=False):
-    send_enabled=AUTOSEND_ENABLED or authorized_send is True
+def orchestrate_discovery(payload, *, authorized_send=False, draft_only=False):
+    send_enabled=not draft_only and (AUTOSEND_ENABLED or authorized_send is True)
     summary={"enabled":True,"autosend_enabled":send_enabled,"lead_ids":[],"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
     except (TypeError,ValueError): outreach_limit=0
@@ -209,6 +209,8 @@ def orchestrate_discovery(payload, *, authorized_send=False):
                 else:
                     summary["skipped"].append({"company":company,"reason":"already_queued","lead_id":existing.id})
                 continue
+            from src.execution_deadline import checkpoint
+            checkpoint("enriching_contact")
             email,email_source=_verified_public_email(result)
             evidence=_evidence_with_contact(result,email,email_source)
             evidence.append({'source':'campaign_context','context':result['_campaign_context']})
@@ -225,6 +227,7 @@ def orchestrate_discovery(payload, *, authorized_send=False):
             summary["qualified"]+=1
             if not email:
                 summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"no_verified_public_email"}); continue
+            checkpoint("drafting")
             drafted=_draft_email(lead)
             if not drafted.get("ok"):
                 from lead_recovery import schedule_recovery

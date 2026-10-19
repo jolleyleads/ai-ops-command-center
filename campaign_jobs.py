@@ -2,6 +2,10 @@
 import json
 import secrets
 import threading
+import os
+import subprocess
+import sys
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from flask import jsonify
@@ -30,44 +34,69 @@ _lock = threading.Lock()
 _future = None
 
 
-def process_next_execution_job():
+def execution_limit(kind):
+    return 2400 if kind == "acceptance" else 1200
+
+
+def expire_interrupted_jobs():
+    """Polling also expires dead workers; no send-capable claim is replayed."""
     now = datetime.utcnow()
-    # Execution can have external effects. A stale claim requires review, never requeue.
-    CampaignExecutionJob.query.filter(CampaignExecutionJob.status == "running", CampaignExecutionJob.started_at < now-timedelta(minutes=60)).update({"status":"failed", "error":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED", "result_http_status":500, "result_json":json.dumps({"ok":False,"reason":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED"}), "finished_at":now})
+    for kind in ("campaign", "acceptance"):
+        CampaignExecutionJob.query.filter(
+            CampaignExecutionJob.kind == kind,
+            CampaignExecutionJob.status == "running",
+            CampaignExecutionJob.started_at < now-timedelta(seconds=execution_limit(kind)),
+        ).update({"status":"failed", "error":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED",
+                  "result_http_status":504,
+                  "result_json":json.dumps({"ok":False,"reason":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED"}),
+                  "finished_at":now})
     db.session.commit()
-    job = CampaignExecutionJob.query.filter_by(status="queued").order_by(CampaignExecutionJob.created_at).first()
-    if not job:
-        return {"processed":0}
-    job_id = job.id
-    claimed = CampaignExecutionJob.query.filter_by(id=job_id, status="queued").update({"status":"running", "started_at":now})
-    db.session.commit()
-    if not claimed:
+
+
+def execute_claimed_job(job_id):
+    job = db.session.get(CampaignExecutionJob, job_id)
+    if not job or job.status != "running":
         return {"processed":0}
     try:
         import customer_demo as demo
+        from src.execution_deadline import execution_scope
+        def report_stage(progress):
+            now=datetime.utcnow()
+            changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=job.started_at).update(
+                {"result_json":json.dumps({"progress":{**progress,"updated_at":now.isoformat()+"Z"}})},synchronize_session=False)
+            db.session.commit()
+            if not changed:
+                raise TimeoutError("EXECUTION_CLAIM_LOST_REVIEW_REQUIRED")
         if job.kind == "acceptance":
             campaign=json.loads(job.payload_json).get('campaign')
             def report_progress(progress):
                 # Persist visibility without triggering extra research or bypassing gates.
                 job.result_json = json.dumps({"progress": progress}, sort_keys=True)
                 db.session.commit()
-            response = app.make_response(demo._run_acceptance(campaign, progress_callback=report_progress))
+            with execution_scope(execution_limit(job.kind)-5, report_stage):
+                response = app.make_response(demo._run_acceptance(campaign, progress_callback=report_stage))
             result, code = response.get_json(), response.status_code
         else:
-            result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
+            with execution_scope(execution_limit(job.kind)-5, report_stage):
+                result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
             code = 200 if result else 500
             result = result or {"ok":False, "stage":stage, "reason":reason}
+        db.session.refresh(job)
+        if job.status != "running":
+            return {"processed":1,"job_id":job_id,"ok":False}
         job.result_json = json.dumps(result)
         job.result_http_status = code
         job.status = "completed" if code == 200 and result.get("ok") is True else "failed"
         job.error = "" if job.status == "completed" else str(result.get("reason") or "EXECUTION_FAILED")[:200]
         discovery=result.get('discovery') or {}
         outreach=result.get('outreach') or {}
-        app.logger.warning('CAMPAIGN_EXECUTION_RECEIPT %s',json.dumps({'job_id':job_id,'kind':job.kind,'status':job.status,'reason':job.error,'verified':discovery.get('verified'),'result_count':len(discovery.get('results') or []),'qualified':outreach.get('qualified'),'drafted':outreach.get('drafted'),'sent':outreach.get('sent'),'skipped':outreach.get('skipped') or [],'provider_message':discovery.get('provider_message') or ''}))
+        app.logger.warning('CAMPAIGN_EXECUTION_RECEIPT job_id=%s kind=%s status=%s qualified=%s drafted=%s sent=%s', job_id, job.kind, job.status, outreach.get('qualified',0), outreach.get('drafted',0), outreach.get('sent',0))
     except Exception:
         app.logger.exception("CAMPAIGN_EXECUTION_FAILED")
         db.session.rollback()
         job = db.session.get(CampaignExecutionJob, job_id)
+        if not job or job.status != "running":
+            return {"processed":1,"job_id":job_id,"ok":False}
         job.status = "failed"
         job.error = "EXECUTION_FAILED_REVIEW_REQUIRED"
         job.result_http_status = 500
@@ -77,10 +106,53 @@ def process_next_execution_job():
     return {"processed":1, "job_id":job_id, "ok":job.status == "completed"}
 
 
+def process_next_execution_job(*, isolated=False):
+    expire_interrupted_jobs()
+    job = CampaignExecutionJob.query.filter_by(status="queued").order_by(CampaignExecutionJob.created_at).first()
+    if not job:
+        return {"processed":0}
+    job_id, now = job.id, datetime.utcnow()
+    progress={"stage":"starting", "updated_at":now.isoformat()+"Z",
+              "deadline_at":(now+timedelta(seconds=execution_limit(job.kind))).isoformat()+"Z"}
+    claimed = CampaignExecutionJob.query.filter_by(id=job_id,status="queued").update(
+        {"status":"running","started_at":now,"result_json":json.dumps({"progress":progress})})
+    db.session.commit()
+    if not claimed:
+        return {"processed":0}
+    if not isolated:
+        return execute_claimed_job(job_id)
+    # A separate process gives provider/DNS stalls a hard wall-clock boundary.
+    # Terminating an uncertain external effect requires review, never a replay.
+    kind=job.kind
+    db.session.remove()
+    process=subprocess.Popen([sys.executable,"-m","scripts.execute_campaign_job",job_id],
+                             cwd=str(Path(__file__).resolve().parent))
+    reason=""
+    try:
+        code=process.wait(timeout=execution_limit(kind))
+        if code:
+            reason="EXECUTION_PROCESS_EXITED_REVIEW_REQUIRED"
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill();process.wait(timeout=5)
+        reason="EXECUTION_DEADLINE_EXCEEDED_REVIEW_REQUIRED"
+    finally:
+        db.session.remove()
+    job=db.session.get(CampaignExecutionJob,job_id)
+    if job and job.status=="running":
+        reason=reason or "EXECUTION_NO_TERMINAL_RECEIPT_REVIEW_REQUIRED"
+        job.status="failed";job.error=reason;job.result_http_status=504
+        job.result_json=json.dumps({"ok":False,"reason":reason})
+        job.finished_at=datetime.utcnow();db.session.commit()
+    return {"processed":1,"job_id":job_id,"ok":bool(job and job.status=="completed")}
+
+
 def _worker():
     with app.app_context():
         try:
-            while process_next_execution_job().get("processed"):
+            while process_next_execution_job(isolated=True).get("processed"):
                 pass
         finally:
             db.session.remove()
@@ -130,6 +202,7 @@ def enqueue_execution(kind, payload, request_key=None):
 
 
 def execution_status(job_id):
+    expire_interrupted_jobs()
     job = db.session.get(CampaignExecutionJob, job_id)
     if not job:
         return jsonify({"error":"Campaign not found."}),404
