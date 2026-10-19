@@ -1,6 +1,7 @@
 """Bounded child-process entrypoint; never runs commercial startup campaigns."""
 import sys
 from app import app, db
+import gmail_connect
 import customer_demo
 from campaign_jobs import execute_claimed_job
 

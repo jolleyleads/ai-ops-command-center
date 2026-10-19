@@ -725,6 +725,8 @@ def _candidate_followups(q,loc,candidates,deadline,max_candidates=10):
     return _dedupe(evidence),messages,tools
 
 def _smart_search(q,loc,runtime_budget=25,target_count=10):
+    from src.execution_deadline import checkpoint
+    checkpoint("planning")
     if is_hiring_query(q):loc=requested_location(q,loc)
     runtime_budget=max(8,min(int(runtime_budget or 25),540))
     target_count=max(1,min(int(target_count or 10),20))
@@ -768,6 +770,10 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             if len(sites)==1:
                 cand['website']=next(iter(sites))
                 cand['discovery_urls']=list(dict.fromkeys([*(cand.get('discovery_urls') or []),cand['website']]))
+        preview=[{'company':c.get('name'),'source_url':(c.get('discovery_urls') or [''])[0],
+                  'classification':'Candidate','verification':'Not yet verified'}
+                 for c in candidates[:20] if c.get('name') and c.get('discovery_urls')]
+        checkpoint('verifying_candidates',candidates=preview,discovered=len(candidates),requested=target_count)
         already_verified=set()
         if is_hiring_query(q):candidates,already_verified=_bind_primary_hiring_candidates(discovery,candidates,q,loc)
         # Reserve time to evaluate company-specific proof after retrieval.
@@ -783,6 +789,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         evaluation=evaluate_research(q,loc,evidence) if evidence and time.monotonic()<deadline-5 else {}
         research_rounds=0;seen_calls=set()
         while runtime_budget>25 and research_rounds<6 and time.monotonic()<deadline-35:
+            checkpoint("researching_more_sources",discovered=len(candidates),requested=target_count)
             promoted_so_far=_deterministic_need_verification(evidence,q,loc)
             if len({_candidate_key(x.get("candidate_name")) for x in promoted_so_far})>=target_count:break
             follow=evaluation.get("followup_tool_calls") or []
@@ -807,6 +814,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             messages+=msg3;tools+=used3;evidence=_dedupe(evidence+extra+verified_extra)
             evaluation=evaluate_research(q,loc,evidence) if time.monotonic()<deadline-15 else evaluation
             research_rounds+=1
+        checkpoint("checking_evidence",discovered=len(candidates),requested=target_count)
         contact_evidence=list(evidence)
         if evaluation:
             evidence=_semantic_keep(evidence,evaluation)
@@ -828,6 +836,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q,loc)
         visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
+        checkpoint("checking_contacts",discovered=len(candidates),requested=target_count)
         contact_followups=_contact_followups(visible,contact_evidence,total_deadline) if runtime_budget>25 else []
         contact_evidence+=contact_followups
         visible=_attach_source_contacts(visible,contact_evidence,loc,q)

@@ -12,11 +12,14 @@ from scripts.smart_search_smoke import validate_payload, CASES
 
 @pytest.fixture
 def env(monkeypatch):
+    monkeypatch.setenv("OPERATOR_CONTROL_TOKEN","campaign-contract-token")
     monkeypatch.setattr(jobs,"kick_execution_worker",lambda:None)
     monkeypatch.setattr(research,"kick_worker",lambda:None)
     with jobs.app.app_context():
         jobs.db.session.remove();jobs.db.drop_all();jobs.db.create_all()
-        yield jobs.app.test_client()
+        client=jobs.app.test_client()
+        client.environ_base["HTTP_X_OPERATOR_TOKEN"]="campaign-contract-token"
+        yield client
         jobs.db.session.remove();jobs.db.drop_all()
 
 
@@ -195,3 +198,13 @@ def test_isolated_worker_timeout_terminates_without_replay(env,monkeypatch):
     job=jobs.db.session.get(jobs.CampaignExecutionJob,"bounded")
     assert job.error=='EXECUTION_DEADLINE_EXCEEDED_REVIEW_REQUIRED'
     assert jobs.process_next_execution_job(isolated=True)['processed']==0
+
+
+def test_old_queued_work_expires_without_execution(env,monkeypatch):
+    monkeypatch.setattr(demo,'_run_campaign',lambda *a:pytest.fail('Expired queued work must not execute'))
+    job=jobs.CampaignExecutionJob(id='old-queue',kind='campaign',payload_json='{}',status='queued',created_at=datetime.utcnow()-timedelta(minutes=31))
+    jobs.db.session.add(job);jobs.db.session.commit()
+    response=env.get('/api/demo/campaigns/jobs/old-queue')
+    assert response.json['status']=='failed'
+    assert response.json['error']=='QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION'
+    assert jobs.process_next_execution_job()['processed']==0

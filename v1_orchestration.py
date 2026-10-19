@@ -215,7 +215,10 @@ def orchestrate_discovery(payload, *, authorized_send=False, draft_only=False):
             evidence=_evidence_with_contact(result,email,email_source)
             evidence.append({'source':'campaign_context','context':result['_campaign_context']})
             lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
-            db.session.add(lead); db.session.commit(); summary["saved"]+=1; summary["lead_ids"].append(lead.id)
+            db.session.add(lead); db.session.flush();
+            from src.campaign_reporting import attribute_new_lead
+            attribute_new_lead(lead)
+            db.session.commit(); summary["saved"]+=1; summary["lead_ids"].append(lead.id)
             qualification=_store_qualification(lead)
             if not qualification.get("ok"):
                 from lead_recovery import schedule_recovery

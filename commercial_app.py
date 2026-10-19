@@ -11,6 +11,12 @@ def customer_dashboard_script():
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
+@app.route('/chat-operator/access.js')
+def customer_access_script():
+    response = send_from_directory('demo', 'access.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
 @app.route('/chat-operator/automake-logo.svg')
 def automake_logo():
     return send_from_directory('demo', 'automake-logo.svg', mimetype='image/svg+xml')
@@ -40,6 +46,9 @@ import provider_acceptance_ui  # noqa: F401
 import customer_demo  # noqa: F401
 import customer_dashboard  # noqa: F401
 import customer_auth  # noqa: F401
+
+import workspace_security  # noqa: F401
+import src.campaign_reporting  # noqa: F401
 
 rag_research.init_rag_tables()
 

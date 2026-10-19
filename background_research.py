@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from flask import jsonify, request
 from app import app, db
 from smart_search import _smart_search
-from src.research_policy import research_budget_seconds, research_target_count
+from src.research_policy import research_budget_seconds, research_target_count, requested_target_count
 
 
 class ResearchJob(db.Model):
@@ -43,7 +43,16 @@ def process_next_research_job():
     if not claimed:return {"ok":True,"processed":0}
     try:
         budget=research_budget_seconds(job.target_count)
-        result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
+        from src.execution_deadline import execution_scope
+        def progress(details):
+            previous=json.loads(db.session.get(ResearchJob,job_id).result_json or '{}').get('progress') or {}
+            details={**previous,**details,'updated_at':datetime.utcnow().isoformat()+'Z'}
+            changed=ResearchJob.query.filter_by(id=job_id,status='running',started_at=now).update(
+                {'result_json':json.dumps({'progress':details})},synchronize_session=False)
+            db.session.commit()
+            if not changed:raise TimeoutError('Research cancelled or claim lost')
+        with execution_scope(budget+30,progress):
+            result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
         result_json=json.dumps(result)
         status="failed" if result.get("agent_error") else "completed"
         error="Research could not finish. Please try again." if status=="failed" else ""
@@ -75,12 +84,13 @@ def create_research_job():
     data=request.get_json(silent=True) or {}
     query=str(data.get("query") or data.get("prompt") or "").strip()[:1000]
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
-    try:target=research_target_count(data.get("target_count"))
-    except (TypeError,ValueError):return jsonify({"error":"Result count must be a number."}),400
-    if ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
+    try:target=requested_target_count(data.get("target_count"))
+    except (TypeError,ValueError) as exc:return jsonify({"error":str(exc),"maximum_results":20,"work_started":False}),422
+    if ResearchJob.query.filter(ResearchJob.status.in_(["queued","running"])).count()>=5 or ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429
     job=ResearchJob(id=secrets.token_urlsafe(24),prompt_text=query,location=str(data.get("location") or "").strip()[:200],target_count=target)
-    db.session.add(job);db.session.commit();job_id=job.id
+    from workspace_security import claim, research_workspace
+    db.session.add(job);claim("research",job.id,research_workspace(create=True));db.session.commit();job_id=job.id
     kick_worker()
     return jsonify({"job_id":job_id,"status":"queued","poll_url":"/api/research/jobs/"+job_id}),202
 
@@ -90,7 +100,17 @@ def get_research_job(job_id):
     job=db.session.get(ResearchJob,job_id)
     if not job:return jsonify({"error":"Search not found."}),404
     payload={"job_id":job.id,"status":job.status,"target_count":job.target_count,"error":job.error}
+    payload["progress"]=(json.loads(job.result_json or "{}").get("progress") or {})
     if job.status=="completed":payload["result"]=json.loads(job.result_json)
     if job.status in {"queued","running"}:kick_worker()
     response=jsonify(payload);response.headers["Cache-Control"]="no-store"
     return response
+
+
+@app.route('/api/research/jobs/<job_id>/cancel',methods=['POST'])
+def cancel_research_job(job_id):
+    job=db.session.get(ResearchJob,job_id)
+    if not job:return jsonify({'error':'Search not found.'}),404
+    if job.status in {'queued','running'}:
+        job.status='cancelled';job.error='Research cancelled';job.finished_at=datetime.utcnow();db.session.commit()
+    return jsonify({'job_id':job.id,'status':job.status})

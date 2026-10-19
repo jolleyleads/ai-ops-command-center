@@ -157,3 +157,17 @@ def test_nonmatching_identity_state_cannot_enter_shared_callback(client, monkeyp
     monkeypatch.setattr(auth.requests, 'post', post)
     result = client.get('/oauth/google/callback', query_string={'state':'wrong','code':'test-code'}, base_url='https://automakeai.live')
     assert result.status_code == 400 and post.call_count == 0
+
+
+def test_public_access_hint_and_pending_request_preservation(client):
+    response=client.get('/api/chat/access')
+    assert response.status_code==200 and response.json['signed_in'] is False
+    assert response.json['research_available'] is True
+    assert response.headers['Cache-Control']=='no-store'
+    assert 'csrf_token' not in response.json
+    assert client.get('/api/chat/dashboard').status_code==401
+    page=client.get('/chat-operator').text
+    assert '/chat-operator/access.js' in page
+    script=client.get('/chat-operator/access.js').text
+    assert 'sessionStorage' in script and 'automake-pending-prompt' in script
+    assert 'campaign.disabled=!access.sending_available' in script

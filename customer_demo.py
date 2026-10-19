@@ -10,7 +10,7 @@ from flask import Response, jsonify, request
 from app import app
 from outreach_automation import OutreachLead
 from smart_search import _smart_search
-from src.research_policy import research_budget_seconds, research_target_count
+from src.research_policy import research_budget_seconds, research_target_count, requested_target_count
 from campaign_jobs import enqueue_execution, execution_status
 from v1_orchestration import orchestrate_discovery
 from v11_evidence_upgrade import enhance_discovery
@@ -32,8 +32,8 @@ def _campaign_payload(data):
     try:send_limit=int(data.get("sending_limit") or 25)
     except Exception:send_limit=25
     send_limit=max(1,min(send_limit,MAX_DEMO_SEND_LIMIT))
-    try:target_count=research_target_count(data.get("target_count"))
-    except (TypeError,ValueError):return None,{"ok":False,"error":"target_count_must_be_a_number"}
+    try:target_count=requested_target_count(data.get("target_count"))
+    except (TypeError,ValueError) as exc:return None,{"ok":False,"error":str(exc),"maximum_results":20,"work_started":False}
     if not target:return None,{"ok":False,"error":"target_customer_required"}
     if not territory:return None,{"ok":False,"error":"territory_required"}
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"target_count":target_count,"business_type":_text(data.get("business_type"),300),"query":target},None
@@ -185,7 +185,7 @@ def _run_acceptance(campaign=None, progress_callback=None):
     rotation=(latest.id if latest else 0)%len(campaign_catalog)
     rotated=campaign_catalog[rotation:]+campaign_catalog[:rotation]
     campaign_pool=[
-      {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1}
+      {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1,"target_count":1}
       for i,(target,kind) in enumerate(rotated[:4])
     ]
     if campaign is not None:
