@@ -185,7 +185,7 @@ def _run_acceptance(campaign=None, progress_callback=None):
     rotation=(latest.id if latest else 0)%len(campaign_catalog)
     rotated=campaign_catalog[rotation:]+campaign_catalog[:rotation]
     campaign_pool=[
-      {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1}
+      {"target_customer":target,"business_type":kind,"territory":territories[(rotation+i)%len(territories)],"offer":"AI lead generation and follow-up automation","sending_limit":1,"target_count":1}
       for i,(target,kind) in enumerate(rotated[:4])
     ]
     if campaign is not None:

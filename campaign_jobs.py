@@ -60,6 +60,7 @@ def execute_claimed_job(job_id):
     try:
         import customer_demo as demo
         from src.execution_deadline import execution_scope
+        from src.campaign_reporting import reporting_campaign
         def report_stage(progress):
             now=datetime.utcnow()
             previous=json.loads(db.session.get(CampaignExecutionJob,job_id).result_json or "{}").get("progress") or {}
@@ -71,15 +72,11 @@ def execute_claimed_job(job_id):
                 raise TimeoutError("EXECUTION_CLAIM_LOST_REVIEW_REQUIRED")
         if job.kind == "acceptance":
             campaign=json.loads(job.payload_json).get('campaign')
-            def report_progress(progress):
-                # Persist visibility without triggering extra research or bypassing gates.
-                job.result_json = json.dumps({"progress": progress}, sort_keys=True)
-                db.session.commit()
-            with execution_scope(execution_limit(job.kind)-5, report_stage):
+            with execution_scope(execution_limit(job.kind)-5, report_stage), reporting_campaign(job_id):
                 response = app.make_response(demo._run_acceptance(campaign, progress_callback=report_stage))
             result, code = response.get_json(), response.status_code
         else:
-            with execution_scope(execution_limit(job.kind)-5, report_stage):
+            with execution_scope(execution_limit(job.kind)-5, report_stage), reporting_campaign(job_id):
                 result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
             code = 200 if result else 500
             result = result or {"ok":False, "stage":stage, "reason":reason}
@@ -126,6 +123,7 @@ def process_next_execution_job(*, isolated=False):
     # A separate process gives provider/DNS stalls a hard wall-clock boundary.
     # Terminating an uncertain external effect requires review, never a replay.
     kind=job.kind
+    app.logger.warning("CAMPAIGN_WORKER_CLAIM job_id=%s kind=%s",job_id,kind)
     db.session.remove()
     process=subprocess.Popen([sys.executable,"-m","scripts.execute_campaign_job",job_id],
                              cwd=str(Path(__file__).resolve().parent))
@@ -156,6 +154,9 @@ def _worker():
         try:
             while process_next_execution_job(isolated=True).get("processed"):
                 pass
+        except Exception as exc:
+            db.session.rollback()
+            app.logger.error("CAMPAIGN_WORKER_FAILURE type=%s",type(exc).__name__)
         finally:
             db.session.remove()
 
@@ -170,6 +171,9 @@ def kick_execution_worker():
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
     result["progress"] = (json.loads(job.result_json or "{}").get("progress") or {}) if job.status in {"queued", "running"} else {}
+    if job.status=="queued":
+        result["queue_position"]=CampaignExecutionJob.query.filter(CampaignExecutionJob.status=="queued",CampaignExecutionJob.created_at<=job.created_at).count()
+        result["active_executions"]=CampaignExecutionJob.query.filter_by(status="running").count()
     if job.status in {"completed", "failed"}:
         result.update(result=json.loads(job.result_json or "{}"), result_http_status=job.result_http_status)
     return result
@@ -190,7 +194,9 @@ def enqueue_execution(kind, payload, request_key=None):
     if CampaignExecutionJob.query.filter(CampaignExecutionJob.status.in_(["queued", "running"])).count() >= 5:
         return jsonify({"error":"Several campaigns are already running. Please try shortly."}),429
     job = CampaignExecutionJob(id=secrets.token_urlsafe(24), kind=kind, payload_json=serialized, request_key=key)
+    from workspace_security import claim, current_workspace, OWNER
     db.session.add(job)
+    claim("campaign",job.id,current_workspace() or OWNER)
     try:
         db.session.commit()
     except IntegrityError:

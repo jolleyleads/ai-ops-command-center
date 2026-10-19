@@ -589,6 +589,8 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     text=current_reply_text(_clean(item.get("text"),20000))
     classification=classify_reply(text)
     label=classification.get("classification")
+    from src.campaign_reporting import record_reply_outcome
+    record_reply_outcome(lead.id,_clean(item.get("message_id"),255),label)
     if label=="not_interested":
         lead.status="opted_out" if classification.get("signals",{}).get("opt_out") else "not_interested"
         lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""

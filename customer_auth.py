@@ -162,9 +162,10 @@ def protect_login_response(response):
 def chat_access():
     """Public capability hints; private data and tokens remain protected."""
     from outreach_automation import _operator_session_authorized
+    from workspace_security import current_workspace, OWNER
     signed_in=_operator_session_authorized()
     response=app.json.response({'signed_in':signed_in,'research_available':True,
-                               'workspace_available':signed_in,'sending_available':signed_in,
+                               'workspace_available':signed_in,'sending_available':signed_in and current_workspace()==OWNER,
                                'login_url':'/login','return_url':'/chat-operator'})
     response.headers['Cache-Control']='no-store'
     return response

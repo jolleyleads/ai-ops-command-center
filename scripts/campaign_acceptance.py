@@ -17,7 +17,10 @@ def acceptance_request_key(environ):
 
 
 def main():
-    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ)})
+    token=os.getenv('OPERATOR_CONTROL_TOKEN','').strip()
+    if not token:
+        raise SystemExit('BLOCKED: OPERATOR_CONTROL_TOKEN is required for authenticated production acceptance; no campaign was started.')
+    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ),"X-Operator-Token":token})
     with urllib.request.urlopen(req, timeout=60) as response:
         state = json.load(response)
     deadline = time.monotonic()+2700
@@ -25,7 +28,8 @@ def main():
         print("Acceptance job",state["job_id"],state["status"],flush=True)
         time.sleep(10)
         try:
-            state = get_json(ORIGIN+state["poll_url"])
+            poll=urllib.request.Request(ORIGIN+state["poll_url"],headers={"X-Operator-Token":token})
+            with urllib.request.urlopen(poll,timeout=60) as response:state=json.load(response)
         except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
             # Retry only the GET; never resubmit the durable campaign.
             print("Transient acceptance poll failure:", type(exc).__name__, flush=True)

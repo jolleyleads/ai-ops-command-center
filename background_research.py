@@ -86,10 +86,11 @@ def create_research_job():
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
     try:target=requested_target_count(data.get("target_count"))
     except (TypeError,ValueError) as exc:return jsonify({"error":str(exc),"maximum_results":20,"work_started":False}),422
-    if ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
+    if ResearchJob.query.filter(ResearchJob.status.in_(["queued","running"])).count()>=5 or ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429
     job=ResearchJob(id=secrets.token_urlsafe(24),prompt_text=query,location=str(data.get("location") or "").strip()[:200],target_count=target)
-    db.session.add(job);db.session.commit();job_id=job.id
+    from workspace_security import claim, research_workspace
+    db.session.add(job);claim("research",job.id,research_workspace(create=True));db.session.commit();job_id=job.id
     kick_worker()
     return jsonify({"job_id":job_id,"status":"queued","poll_url":"/api/research/jobs/"+job_id}),202
 

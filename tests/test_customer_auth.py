@@ -170,4 +170,4 @@ def test_public_access_hint_and_pending_request_preservation(client):
     assert '/chat-operator/access.js' in page
     script=client.get('/chat-operator/access.js').text
     assert 'sessionStorage' in script and 'automake-pending-prompt' in script
-    assert 'campaign.disabled=!access.signed_in' in script
+    assert 'campaign.disabled=!access.sending_available' in script

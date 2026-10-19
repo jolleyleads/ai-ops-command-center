@@ -13,7 +13,7 @@
   campaign.disabled=true;mode.value='research';document.getElementById('prepare').disabled=true;
   window.workspaceAccessReady=requestJSON(API+'/api/chat/access',{cache:'no-store'}).then(function(access){
     window.workspaceAccess=access;
-    campaign.disabled=!access.signed_in;
+    campaign.disabled=!access.sending_available;
     document.getElementById('prepare').disabled=!access.signed_in;
     document.getElementById('prepare').title=access.signed_in?'Prepare verified drafts without sending':'Sign in to save leads and prepare drafts';
     if(access.signed_in){note.textContent='Workspace connected. Choose Research only or Research & email.';}

@@ -5,10 +5,12 @@ from datetime import datetime
 from functools import wraps
 from urllib.parse import urlparse
 
-from flask import jsonify
+from flask import jsonify, request
 from app import app, db
 import outreach_automation as oa
 from campaign_jobs import CampaignExecutionJob
+from workspace_security import scope, owns, current_workspace, OWNER
+from src.campaign_reporting import campaign_outcomes, load_outcome_data
 
 
 def unpack(value, default=None):
@@ -56,7 +58,7 @@ def evidence_parts(lead):
     return rows, enrichment, context
 
 
-def campaign_view(job):
+def campaign_view(job,outcome_data=None):
     payload, result = unpack(job.payload_json), unpack(job.result_json)
     outreach, discovery = result.get('outreach') or {}, result.get('discovery') or {}
     ids = set(x for x in outreach.get('lead_ids') or [] if type(x) is int)
@@ -68,16 +70,25 @@ def campaign_view(job):
             'qualified':outreach.get('qualified') or 0, 'drafted':outreach.get('drafted') or 0,
             'sent':outreach.get('sent') or 0, 'sending_limit':payload.get('sending_limit'),
             'send_authorized':payload.get('send_authorized') is True,
-            'needs_attention':job.status == 'failed'}
+            'needs_attention':job.status == 'failed',
+            'snapshot':{'research_results':len(discovery.get('results') or []),'verified':discovery.get('verified') or 0,'qualified':outreach.get('qualified') or 0,'drafted':outreach.get('drafted') or 0,'sent':outreach.get('sent') or 0},
+            'live_outcomes':campaign_outcomes(job,outcome_data)}
 
 
 @app.route('/api/chat/dashboard', methods=['GET'])
 @protected
 def dashboard():
     # Only persisted reads: opening the dashboard must never launch work.
-    leads = oa.OutreachLead.query.filter(oa.OutreachLead.status != 'archived').order_by(oa.OutreachLead.updated_at.desc()).limit(500).all()
-    jobs = CampaignExecutionJob.query.filter_by(kind='campaign').order_by(CampaignExecutionJob.created_at.desc()).limit(100).all()
-    campaigns = [campaign_view(job) for job in jobs]
+    try:
+        lead_offset=max(0,int(request.args.get('lead_offset',0)))
+        campaign_offset=max(0,int(request.args.get('campaign_offset',0)))
+    except (TypeError,ValueError):return jsonify(ok=False,error='Invalid pagination offset.'),400
+    lead_query=oa.OutreachLead.query.filter(oa.OutreachLead.status!='archived',scope(oa.OutreachLead,'lead'))
+    campaign_query=CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign'))
+    leads = oa.OutreachLead.query.filter(oa.OutreachLead.status != 'archived',scope(oa.OutreachLead,'lead')).order_by(oa.OutreachLead.updated_at.desc()).offset(lead_offset).limit(500).all()
+    jobs = CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign')).order_by(CampaignExecutionJob.created_at.desc()).offset(campaign_offset).limit(100).all()
+    outcome_data=load_outcome_data([job.id for job in jobs])
+    campaigns = [campaign_view(job,outcome_data) for job in jobs]
     memberships = {}
     for campaign in campaigns:
         for lead_id in campaign['lead_ids']:
@@ -92,15 +103,15 @@ def dashboard():
                         'contact_name':lead.contact_name or '', 'has_email':bool(lead.contact_email),
                         'follow_up_due_at':iso(lead.follow_up_due_at), 'updated_at':iso(lead.updated_at),
                         'campaign_ids':memberships.get(lead.id, [])})
-    return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,
-                   generated_at=iso(datetime.utcnow()), scope='operator_workspace')
+    return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,lead_offset=lead_offset,campaign_offset=campaign_offset,lead_total=lead_query.count(),campaign_total=campaign_query.count(),
+                   generated_at=iso(datetime.utcnow()), scope='customer_workspace')
 
 
 @app.route('/api/chat/dashboard/leads/<int:lead_id>', methods=['GET'])
 @protected
 def lead_details(lead_id):
     lead = db.session.get(oa.OutreachLead, lead_id)
-    if not lead or lead.status == 'archived':
+    if not lead or lead.status == 'archived' or not owns('lead',lead_id):
         return jsonify(ok=False, error='This lead was not found.'), 404
     rows, enrichment, context = evidence_parts(lead)
     fields = enrichment.get('fields') or {}
@@ -142,7 +153,7 @@ def lead_details(lead_id):
     phone = fields.get('phone') or {}
     person = fields.get('decision_maker') or {}
     return jsonify(ok=True, id=lead.id, company=lead.company, location=lead.location,
-                   score=lead.score, score_description='Research fit score, not a probability of buying or a mailbox verification result.',
+                   score=lead.score, score_description='Discovery evidence score from the source result or evidence-status fallback. Not a purchase probability or mailbox verification.',score_method='discovery_evidence_v1',
                    score_checks=q.get('passed_checks') or q.get('passed') or [],
                    reasons=q.get('reason_codes') or [], status=lead.status,
                    contact={'name':lead.contact_name or '', 'role':person.get('title') if lead.contact_name else '',
@@ -163,7 +174,7 @@ def appointments():
     for booking in bookings:
         if not booking.event_id:continue
         lead = db.session.get(oa.OutreachLead, booking.lead_id)
-        if lead and lead.status == 'archived':continue
+        if not lead or lead.status == 'archived' or not owns('lead',lead.id):continue
         rows.append({'lead_id':booking.lead_id, 'company':lead.company if lead else 'Saved contact',
                      'start':booking.start, 'end':booking.end, 'timezone':booking.timezone,
                      'url':safe_url(booking.event_url), 'attendee':booking.attendee_email})

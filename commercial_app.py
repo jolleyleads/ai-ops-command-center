@@ -47,6 +47,9 @@ import customer_demo  # noqa: F401
 import customer_dashboard  # noqa: F401
 import customer_auth  # noqa: F401
 
+import workspace_security  # noqa: F401
+import src.campaign_reporting  # noqa: F401
+
 rag_research.init_rag_tables()
 
 from owner_test_cleanup import run_startup_cleanup
