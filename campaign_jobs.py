@@ -62,6 +62,8 @@ def execute_claimed_job(job_id):
         from src.execution_deadline import execution_scope
         def report_stage(progress):
             now=datetime.utcnow()
+            previous=json.loads(db.session.get(CampaignExecutionJob,job_id).result_json or "{}").get("progress") or {}
+            progress={**previous,**progress}
             changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=job.started_at).update(
                 {"result_json":json.dumps({"progress":{**progress,"updated_at":now.isoformat()+"Z"}})},synchronize_session=False)
             db.session.commit()

@@ -21,3 +21,17 @@
     return access;
   }).catch(function(){note.textContent='Research is available. Workspace access could not be checked; refresh before sending.';return window.workspaceAccess;});
 })();
+
+window.renderResearchProgress=function(state){
+  var bubble=window.activeResearchBubble;
+  if(!bubble)return;
+  var p=state.progress||{}, rows=p.candidates||[];
+  var html='<b>Research in progress</b><p>'+esc(String(p.stage||state.status).replace(/_/g,' '))+'</p>';
+  html+='<p class="meta">Requested '+esc(p.requested||'')+' · Found '+esc(p.discovered||0)+' candidates. Verification is still in progress.</p>';
+  rows.forEach(function(row){html+='<div class="lead"><b>'+esc(row.company)+'</b><p>Candidate · Not yet verified</p><a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a></div>';});
+  html+='<button class="ghost" id="cancel-research">Cancel research</button>';
+  bubble.innerHTML=html;
+  document.getElementById('cancel-research').onclick=function(){
+    requestJSON(API+'/api/research/jobs/'+encodeURIComponent(state.job_id)+'/cancel',{method:'POST',headers:{'X-CSRF-Token':window.researchRequestToken||''}}).then(function(){bubble.textContent='Research cancelled.';}).catch(function(e){bubble.textContent=e.message;});
+  };
+};
