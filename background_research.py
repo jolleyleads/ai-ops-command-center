@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from flask import jsonify, request
 from app import app, db
 from smart_search import _smart_search
-from src.research_policy import research_budget_seconds, research_target_count, requested_target_count
+from src.research_policy import research_budget_seconds, research_target_count, requested_target_count, target_count_from_prompt
 
 
 class ResearchJob(db.Model):
@@ -101,7 +101,7 @@ def create_research_job():
     data=request.get_json(silent=True) or {}
     query=str(data.get("query") or data.get("prompt") or "").strip()[:1000]
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
-    try:target=requested_target_count(data.get("target_count"))
+    try:target=target_count_from_prompt(query,data.get("target_count"))
     except (TypeError,ValueError) as exc:return jsonify({"error":str(exc),"maximum_results":20,"work_started":False}),422
     if ResearchJob.query.filter(ResearchJob.status.in_(["queued","running"])).count()>=5 or ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429

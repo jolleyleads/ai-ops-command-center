@@ -38,3 +38,13 @@ def test_progress_survives_phases_and_cancel_fences_result(client,monkeypatch):
     result=r.process_next_research_job()
     assert result['lease_lost'] is True
     assert client.get(launch.json['poll_url']).json['status']=='cancelled'
+
+
+def test_prompt_only_count_is_not_silently_truncated(client):
+    response=client.post('/api/research/jobs',json={'prompt':'Find 100 HVAC businesses'})
+    assert response.status_code==422 and response.json['work_started'] is False
+    assert r.ResearchJob.query.count()==0
+    from src.research_policy import target_count_from_prompt
+    assert target_count_from_prompt('Find businesses along Route 17')==10
+    assert target_count_from_prompt('Find businesses open 24 hours')==10
+    assert target_count_from_prompt('Find 20 HVAC businesses')==20
