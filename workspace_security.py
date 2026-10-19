@@ -95,6 +95,17 @@ def protect_workspace_routes():
     if endpoint=='gmail_oauth_callback' and isinstance(session.get('google_login'),dict):return None
     if endpoint in PUBLIC:return None
     if request.path=='/api/outreach/process-followups':return None  # Existing cron-token middleware.
+    from src.acceptance_auth import acceptance_claims, request_key
+    if endpoint in {'v11_acceptance_once','campaign_execution_status'}:
+        claims=acceptance_claims()
+        if claims:
+            if endpoint=='v11_acceptance_once':
+                if request.headers.get('Idempotency-Key')!=request_key(claims):return _deny('Invalid acceptance request binding.',403)
+                return None
+            from campaign_jobs import CampaignExecutionJob
+            job=db.session.get(CampaignExecutionJob,(request.view_args or {}).get('job_id'))
+            if job and job.kind=='acceptance' and job.request_key==request_key(claims):return None
+            return _deny('Acceptance job not found.',404)
     workspace=current_workspace()
     if not workspace:return _deny('Sign in to access this workspace.')
     customer_read=endpoint in {'dashboard','lead_details','appointments','campaign_execution_status'}

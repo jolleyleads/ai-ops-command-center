@@ -5,6 +5,7 @@ import urllib.error
 import os
 import time
 import urllib.request
+import urllib.parse
 from pathlib import Path
 if __package__:
     from .smart_search_smoke import ORIGIN, get_json
@@ -16,11 +17,24 @@ def acceptance_request_key(environ):
     return "acceptance-"+"-".join(environ[name] for name in ("GITHUB_SHA","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT"))
 
 
+_identity_cache={'token':'','expires':0}
+
+def authentication_headers():
+    operator=os.getenv('OPERATOR_CONTROL_TOKEN','').strip()
+    if operator:return {'X-Operator-Token':operator}
+    if _identity_cache['expires']>time.monotonic():return {'Authorization':'Bearer '+_identity_cache['token']}
+    url=os.getenv('ACTIONS_ID_TOKEN_REQUEST_URL','')
+    grant=os.getenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN','')
+    if not url or not grant:
+        raise SystemExit('BLOCKED: authenticated acceptance requires GitHub OIDC or an operator token; no campaign started.')
+    request=urllib.request.Request(url+('&' if '?' in url else '?')+urllib.parse.urlencode({'audience':'automakeai-production-acceptance'}),headers={'Authorization':'Bearer '+grant})
+    with urllib.request.urlopen(request,timeout=15) as response:token=json.load(response)['value']
+    _identity_cache.update(token=token,expires=time.monotonic()+180)
+    return {'Authorization':'Bearer '+token}
+
+
 def main():
-    token=os.getenv('OPERATOR_CONTROL_TOKEN','').strip()
-    if not token:
-        raise SystemExit('BLOCKED: OPERATOR_CONTROL_TOKEN is required for authenticated production acceptance; no campaign was started.')
-    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ),"X-Operator-Token":token})
+    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ),**authentication_headers()})
     with urllib.request.urlopen(req, timeout=60) as response:
         state = json.load(response)
     deadline = time.monotonic()+2700
@@ -28,7 +42,7 @@ def main():
         print("Acceptance job",state["job_id"],state["status"],flush=True)
         time.sleep(10)
         try:
-            poll=urllib.request.Request(ORIGIN+state["poll_url"],headers={"X-Operator-Token":token})
+            poll=urllib.request.Request(ORIGIN+state["poll_url"],headers={**authentication_headers()})
             with urllib.request.urlopen(poll,timeout=60) as response:state=json.load(response)
         except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
             # Retry only the GET; never resubmit the durable campaign.

@@ -63,6 +63,7 @@ def campaign_view(job,outcome_data=None):
     outreach, discovery = result.get('outreach') or {}, result.get('discovery') or {}
     ids = set(x for x in outreach.get('lead_ids') or [] if type(x) is int)
     ids.update(x['lead_id'] for x in outreach.get('skipped') or [] if isinstance(x, dict) and type(x.get('lead_id')) is int)
+    ids={lead_id for lead_id in ids if owns('lead',lead_id)}
     return {'id':job.id, 'name':payload.get('target_customer') or payload.get('query') or 'Campaign',
             'territory':payload.get('territory') or '', 'status':job.status, 'created_at':iso(job.created_at),
             'progress':result.get('progress') or {}, 'lead_ids':sorted(ids),

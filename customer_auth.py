@@ -166,6 +166,7 @@ def chat_access():
     signed_in=_operator_session_authorized()
     response=app.json.response({'signed_in':signed_in,'research_available':True,
                                'workspace_available':signed_in,'sending_available':signed_in and current_workspace()==OWNER,
+                               'drafting_available':signed_in and current_workspace()==OWNER,
                                'login_url':'/login','return_url':'/chat-operator'})
     response.headers['Cache-Control']='no-store'
     return response
