@@ -82,15 +82,42 @@ def validate_payload(payload, expected_intent, query="", location=""):
     return errors
 
 
+def validate_frontend(html, dashboard_script=""):
+    from html.parser import HTMLParser
+    class Controls(HTMLParser):
+        def __init__(self):
+            super().__init__();self.ids=set();self.scripts=[];self.views=set()
+        def handle_starttag(self, tag, attrs):
+            attrs=dict(attrs)
+            if attrs.get('id'):self.ids.add(attrs['id'])
+            if tag=='script' and attrs.get('src'):self.scripts.append(attrs['src'])
+            if attrs.get('data-view'):self.views.add(attrs['data-view'])
+    controls=Controls();controls.feed(html)
+    errors=[]
+    if '<title>AutoMake AI</title>' not in html:errors.append('AutoMake AI page title missing')
+    for name in ('prompt','territory','task-mode','send','prepare','workspace-menu','workspace-panel'):
+        if name not in controls.ids:errors.append('Missing customer control: '+name)
+    for route in ('/api/research/jobs','/api/chat/campaigns/launch','/api/chat/campaigns/prepare'):
+        if route not in html:errors.append('Missing customer workflow: '+route)
+    if not {'chat','leads','campaigns','conversations','appointments','settings'} <= controls.views:
+        errors.append('Customer workspace navigation incomplete')
+    if not any(x.split('?')[0]=='/chat-operator/dashboard.js' for x in controls.scripts):
+        errors.append('Customer dashboard script missing')
+    if dashboard_script and '/api/chat/dashboard' not in dashboard_script:
+        errors.append('Dashboard script is not connected to persisted workspace')
+    return errors
+
+
 def main():
     wait_for_commit(os.environ.get("GITHUB_SHA"))
     with urllib.request.urlopen(ORIGIN+"/", timeout=60) as response:
         html = response.read().decode()
-    for marker in ('Smart Search','/api/smart-search','id="searchQuery"','id="searchLocation"'):
-        if marker not in html:
-            raise RuntimeError("Missing frontend marker: "+marker)
-    if 'id="searchMode"' in html:
-        raise RuntimeError("Old mode selector remains")
+    with urllib.request.urlopen(ORIGIN+"/chat-operator/dashboard.js", timeout=60) as response:
+        dashboard_script=response.read().decode()
+    errors=validate_frontend(html,dashboard_script)
+    if errors:
+        raise RuntimeError("Customer interface contract: "+"; ".join(errors))
+    print("PASS: deployed AutoMake AI customer interface and workflow controls",flush=True)
     failed = False
     for intent, query, location in CASES:
         try:
