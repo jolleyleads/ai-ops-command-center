@@ -4,9 +4,17 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+from urllib.parse import urlsplit
 
 
-def test_fast_contact_completes_while_slow_contact_runs_and_cancellation_fences_it(tmp_path):
+@pytest.mark.parametrize('backend',['sqlite','postgres'])
+def test_fast_contact_completes_while_slow_contact_runs_and_cancellation_fences_it(tmp_path,backend):
+    pg=os.getenv('TEST_POSTGRES_URL')
+    if backend=='postgres':
+        if not pg:pytest.skip('Disposable PostgreSQL service is required')
+        assert urlsplit(pg).hostname in {'localhost','127.0.0.1'},'Process proof requires a local disposable PostgreSQL service'
+
     script=r'''
 import time,json
 import commercial_app
@@ -24,6 +32,7 @@ def fake(payload,**kw):
 v._orchestrate_discovery_serial=fake
 v._send_prepared_lead=lambda *a:(_ for _ in ()).throw(AssertionError('No sends allowed'))
 with app.app_context():
+    db.drop_all();db.create_all()
     job=CampaignExecutionJob(id='isolated',kind='campaign',payload_json='{}',status='running')
     db.session.add(job);db.session.commit()
     seen=[]
@@ -57,7 +66,7 @@ with app.app_context():
     assert final['progress']['businesses'][0]['draft_status']=='Draft ready'
 print('isolated-process-progress-and-cancellation: PASS')
 '''
-    env={**os.environ,'DATABASE_URL':'sqlite:///'+str(tmp_path/'fork.db'),'AUTOMAKE_ISOLATED_EXECUTION':'1','OUTREACH_INPROCESS_SCHEDULER':'0'}
+    env={**os.environ,'DATABASE_URL':pg if backend=='postgres' else 'sqlite:///'+str(tmp_path/'fork.db'),'AUTOMAKE_ISOLATED_EXECUTION':'1','OUTREACH_INPROCESS_SCHEDULER':'0'}
     result=subprocess.run([sys.executable,'-c',script],env=env,capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stderr[-6000:]
     assert 'PASS' in result.stdout
