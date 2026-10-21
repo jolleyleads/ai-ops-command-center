@@ -187,6 +187,16 @@ def resume_discovery_lead(lead, result, lease_valid=None):
 
 
 def orchestrate_discovery(payload, *, authorized_send=False, draft_only=False):
+    if not _outreach_search(payload):
+        return {'enabled':False,'autosend_enabled':False,'paused_reason':'not_b2b_outreach_search','lead_ids':[],'eligible':0,'saved':0,'qualified':0,'drafted':0,'sent':0,'skipped':[]}
+    from src.campaign_reporting import _active
+    if os.getenv('AUTOMAKE_ISOLATED_EXECUTION')=='1' and _active.get():
+        from src.progressive_campaign import run_business_tasks
+        return run_business_tasks(payload,_active.get(),not draft_only and (AUTOSEND_ENABLED or authorized_send is True),int(payload.get('outreach_limit') or 0))
+    return _orchestrate_discovery_serial(payload,authorized_send=authorized_send,draft_only=draft_only)
+
+
+def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=False):
     send_enabled=not draft_only and (AUTOSEND_ENABLED or authorized_send is True)
     summary={"enabled":True,"autosend_enabled":send_enabled,"lead_ids":[],"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
@@ -250,13 +260,21 @@ def orchestrate_discovery(payload, *, authorized_send=False, draft_only=False):
             lead.subject=drafted["subject"]; lead.body=drafted["body"]; lead.status="drafted"; lead.last_error=""; db.session.commit(); summary["drafted"]+=1
             if not send_enabled:
                 summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"autosend_disabled","status":"drafted"}); continue
-            execution=_safe_send(lead,kind="initial",sequence=0,subject=lead.subject,body=lead.body)
-            if not execution.get("ok"):
-                lead.last_error=_clean(execution,2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"safe_send_failed","stage":_clean(execution.get("stage"),100),"gate_reasons":((execution.get("gate") or {}).get("reasons") or []),"receipt_reasons":((execution.get("send_receipt") or {}).get("reasons") or []),"provider_error":_clean(execution.get("error"),500)}); continue
-            receipt=execution.get("send_receipt") or {}; now=datetime.utcnow()
-            lead.gmail_message_id=_clean(receipt.get("message_id"),255); lead.gmail_thread_id=_clean(receipt.get("thread_id"),255); lead.sent_at=now; lead.follow_up_due_at=now+timedelta(days=FIRST_FOLLOWUP_DAYS); lead.status="sent"; lead.last_error=""; lead.updated_at=now; db.session.commit(); summary["sent"]+=1
-            summary["skipped"].append({"company":company,"lead_id":lead.id,"status":"sent","message_id":lead.gmail_message_id,"thread_id":lead.gmail_thread_id})
+            if _send_prepared_lead(lead,summary):summary['sent']+=1
     return summary
+
+
+def _send_prepared_lead(lead,summary):
+    company=lead.company
+    from src.execution_deadline import checkpoint
+    checkpoint('sending')
+    execution=_safe_send(lead,kind="initial",sequence=0,subject=lead.subject,body=lead.body)
+    if not execution.get("ok"):
+        lead.last_error=_clean(execution,2000); db.session.commit(); summary["skipped"].append({"company":company,"lead_id":lead.id,"reason":"safe_send_failed","stage":_clean(execution.get("stage"),100),"gate_reasons":((execution.get("gate") or {}).get("reasons") or []),"receipt_reasons":((execution.get("send_receipt") or {}).get("reasons") or []),"provider_error":_clean(execution.get("error"),500)}); return False
+    receipt=execution.get("send_receipt") or {}; now=datetime.utcnow()
+    lead.gmail_message_id=_clean(receipt.get("message_id"),255); lead.gmail_thread_id=_clean(receipt.get("thread_id"),255); lead.sent_at=now; lead.follow_up_due_at=now+timedelta(days=FIRST_FOLLOWUP_DAYS); lead.status="sent"; lead.last_error=""; lead.updated_at=now; db.session.commit()
+    summary["skipped"].append({"company":company,"lead_id":lead.id,"status":"sent","message_id":lead.gmail_message_id,"thread_id":lead.gmail_thread_id})
+    return True
 
 
 def scan_real_inbound_replies():

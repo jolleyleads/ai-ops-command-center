@@ -49,6 +49,7 @@ import customer_auth  # noqa: F401
 
 import workspace_security  # noqa: F401
 import src.campaign_reporting  # noqa: F401
+import src.progressive_campaign  # noqa: F401
 
 rag_research.init_rag_tables()
 

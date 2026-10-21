@@ -130,11 +130,21 @@ def _run_calls(calls,deadline,max_calls=3):
     try:
         for future in as_completed(futures,timeout=max(0.01,deadline-time.monotonic())):
             call=futures[future]
-            rows,msg=future.result();results.extend(rows);used.append(_clean(call.get("tool"),50))
+            try:rows,msg=future.result()
+            except Exception:
+                messages.append(_clean(call.get('tool'),50)+' provider failed; other sources continue.')
+                continue
+            results.extend(rows);used.append(_clean(call.get("tool"),50))
             for row in rows:
                 row.setdefault("observed_at",datetime.now(timezone.utc).isoformat())
                 row.setdefault("freshness","live_retrieval_publication_date_unconfirmed")
             if msg:messages.append(msg)
+            from src.execution_deadline import checkpoint
+            preview=_fallback_candidates(results,20)
+            if preview:
+                checkpoint('discovering_businesses',candidates=[{'company':c['name'],'source_url':c['discovery_urls'][0],
+                    'classification':'Candidate','verification':'Not yet verified','observed_at':datetime.now(timezone.utc).isoformat()}
+                    for c in preview],discovered=len(preview))
     except FutureTimeout:
         messages.append("Research deadline reached; unfinished provider calls were skipped.")
     finally:pool.shutdown(wait=False,cancel_futures=True)
@@ -836,6 +846,11 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q,loc)
         visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
+        checkpoint('business_results_ready',businesses=[{'company':x.get('company') or x.get('title') or x.get('name'),
+            'source_url':x.get('website') or x.get('source_url') or x.get('url'),
+            'business_status':'Business verified' if x.get('classification')=='Verified Lead' else 'Candidate — verification pending',
+            'contact_status':'Contact verification separate','draft_status':'No draft prepared','status':'researched',
+            'updated_at':datetime.now(timezone.utc).isoformat()} for x in visible])
         checkpoint("checking_contacts",discovered=len(candidates),requested=target_count)
         contact_followups=_contact_followups(visible,contact_evidence,total_deadline) if runtime_budget>25 else []
         contact_evidence+=contact_followups

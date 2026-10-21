@@ -34,7 +34,7 @@ def authentication_headers():
 
 
 def main():
-    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=b"{}", headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ),**authentication_headers()})
+    req = urllib.request.Request(ORIGIN+"/api/operator/v1-1-acceptance-once", data=json.dumps({'campaign':{'target_customer':'HVAC businesses','business_type':'HVAC','territory':'Norfolk, Virginia','target_count':3,'sending_limit':1,'offer':'AI lead generation and follow-up automation'}}).encode(), headers={"Content-Type":"application/json","Idempotency-Key":acceptance_request_key(os.environ),**authentication_headers()})
     with urllib.request.urlopen(req, timeout=60) as response:
         state = json.load(response)
     deadline = time.monotonic()+2700

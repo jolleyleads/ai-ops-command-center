@@ -48,3 +48,27 @@ def test_prompt_only_count_is_not_silently_truncated(client):
     assert target_count_from_prompt('Find businesses along Route 17')==10
     assert target_count_from_prompt('Find businesses open 24 hours')==10
     assert target_count_from_prompt('Find 20 HVAC businesses')==20
+
+
+def test_research_retry_resumes_same_owned_job(client):
+    data={'prompt':'Find 10 HVAC businesses','location':'Norfolk'}
+    first=client.post('/api/research/jobs',json=data,headers={'Idempotency-Key':'retry-one'})
+    second=client.post('/api/research/jobs',json=data,headers={'Idempotency-Key':'retry-one'})
+    assert first.json['job_id']==second.json['job_id'] and r.ResearchJob.query.count()==1
+    assert client.post('/api/research/jobs',json={**data,'location':'Richmond'},headers={'Idempotency-Key':'retry-one'}).status_code==409
+    other=r.app.test_client()
+    assert other.post('/api/research/jobs',json=data,headers={'Idempotency-Key':'retry-one'}).status_code==404
+
+
+def test_provider_failure_keeps_discovered_businesses(client,monkeypatch):
+    from src.execution_deadline import checkpoint
+    launch=client.post('/api/research/jobs',json={'prompt':'Find 10 HVAC businesses'})
+    def fail(*a,**kw):
+        checkpoint('verifying',candidates=[{'company':'Source-backed candidate','source_url':'https://business.example'}],discovered=1)
+        raise RuntimeError('simulated provider failure')
+    monkeypatch.setattr(r,'_smart_search',fail)
+    r.process_next_research_job()
+    state=client.get(launch.json['poll_url']).json
+    assert state['status']=='failed'
+    assert state['progress']['candidates'][0]['company']=='Source-backed candidate'
+    assert state['progress']['requested']==10
