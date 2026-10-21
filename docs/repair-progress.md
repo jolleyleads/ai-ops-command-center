@@ -79,3 +79,11 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
 - Rejected business cards now say rejected and do not claim contact verification ran.
 - Local full regression after these changes: 727 passed, 7 PostgreSQL-only skips. Deployment and final live cancellation pending.
 - Limits: at most 20 businesses per research run; 100 rejected before launch. Owner integration only; multi-customer sending, signed-in Google behavior, controlled Gmail/reply/Calendar and fresh qualified production draft remain unverified.
+
+### Final deployed verification and explicit research retry
+
+- Commit 1ef8f946514bc4613662916cca65686ba109777f / Render dep-dbc4e0lg1s2s738df70g live; main CI 734 passed; live search smoke passed.
+- Browser: Stop confirmed cancelled, kept 18 discovered candidates, and stayed cancelled under further polling. A new electrical research request showed 19 source-backed candidates while running; reload restored its prompt and Norfolk territory. Stop also cancelled that request.
+- Acceptance run 39547166043 terminated truthfully without fresh proof: three returned businesses comprised two candidates and one rejected business; none passed business verification, so eligible/saved/qualified/drafted/sent all zero. This does not prove production qualification/drafting. Prior a1a4df0 run saved a verified business but found no validated contact.
+- Explicit retry of the same cancelled public research request reproduced a client key reuse bug. Clear only the public-research request key on confirmed cancellation/failure; retain campaign/draft keys and all server send idempotency protections. New browser-function regression covers failed/cancelled research, campaigns and drafts. Local full suite: 728 passed, 7 PostgreSQL-only skips.
+- No additional configuration or destructive migration for either final repair; no external sends/bookings. New revision CI/deployment/live retry verification pending.
