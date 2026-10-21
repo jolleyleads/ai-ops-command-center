@@ -39,10 +39,10 @@ window.renderResearchProgress=function(state){
   });
   if(state.status==='running'||state.status==='queued')html+='<button class="ghost" id="cancel-research">Stop remaining work</button>';
   bubble.innerHTML=html;
-  var cancel=document.getElementById('cancel-research');if(cancel)cancel.onclick=function(){
+  var cancel=bubble.querySelector('#cancel-research');if(cancel)cancel.onclick=function(){
     var path=(state.poll_url||'/api/research/jobs/'+encodeURIComponent(state.job_id))+'/cancel';
     var action=state.kind==='research'?requestJSON(API+path,{method:'POST'}):workspaceMutation(path,{method:'POST'});
-    cancel.disabled=true;action.catch(function(e){bubble.innerHTML+='<p>'+esc(e.message)+'</p>';});
+    cancel.disabled=true;cancel.textContent='Stopping…';action.then(function(stopped){state.status=stopped.status;window.renderResearchProgress(state);}).catch(function(e){cancel.disabled=false;cancel.textContent='Stop remaining work';bubble.insertAdjacentHTML('beforeend','<p>'+esc(e.message)+'</p>');});
   };
 };
 
@@ -59,7 +59,9 @@ window.renderSavedJobResult=function(result){
 window.followResearchJob=function(job,kind){
   var valid=/^\/api\/(?:research\/jobs|demo\/campaigns\/jobs)\/[A-Za-z0-9_-]+$/;
   if(!valid.test(job.poll_url||''))return Promise.reject(new Error('Invalid saved job.'));
-  sessionStorage.setItem('automake-active-job',JSON.stringify({job_id:job.job_id,poll_url:job.poll_url,kind:kind}));
+  var territory=document.getElementById('territory');
+  if(job.territory!==undefined)territory.value=job.territory;
+  sessionStorage.setItem('automake-active-job',JSON.stringify({job_id:job.job_id,poll_url:job.poll_url,kind:kind,territory:territory.value}));
   return new Promise(function(resolve,reject){
     var started=Date.now(),failures=0;
     function poll(){
@@ -87,6 +89,7 @@ window.followResearchJob=function(job,kind){
 (function restoreResearch(){
   var job;try{job=JSON.parse(sessionStorage.getItem('automake-active-job')||'null');}catch(e){}
   if(!job)return;
+  if(job.territory!==undefined){document.getElementById('territory').value=job.territory;window.workspaceAccessReady.then(function(){document.getElementById('territory').value=job.territory;});}
   var wait=add('ai','<b>Restoring your saved research…</b>');window.activeResearchBubble=wait.querySelector('.bubble');
   document.getElementById('send').disabled=true;
   window.followResearchJob(job,job.kind||'research').then(window.renderSavedJobResult)

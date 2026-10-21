@@ -36,8 +36,8 @@ def task_views(campaign_id):
             status='interrupted';error='CAMPAIGN_INTERRUPTED_REVIEW_REQUIRED'
         views.append({'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
-            'business_status':'Business verified' if business.get('classification')=='Verified Lead' else 'Candidate — verification pending',
-            'contact_status':'Verified contact' if result.get('qualified') else ('Contact pending' if status in {'queued','running'} else 'Contact requires review'),
+            'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
+            'contact_status':'Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review')),
             'qualification_status':'Qualified' if result.get('qualified') else 'Not qualified',
             'draft_status':'Draft ready' if result.get('drafted') else 'No draft ready',
             'status':status,'stage':row.stage,'error':error,'updated_at':row.updated_at.isoformat()+'Z'})

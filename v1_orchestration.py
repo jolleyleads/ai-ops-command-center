@@ -103,6 +103,13 @@ def _evidence_with_contact(result, email, email_source):
     for raw in _evidence_for_storage(result):
         if isinstance(raw, dict):
             item = dict(raw); item.setdefault("observed_at", observed); evidence.append(item)
+    # Preserve fetched business facts independently of mailbox success. These
+    # rows were admitted by the owned-host/company-identity fetch above; snippets
+    # and untrusted contact hints are deliberately not promoted here.
+    for row in result.get('_outreach_copy_sources') or []:
+        if (isinstance(row,dict) and row.get('directly_fetched') is True
+                and row.get('http_status')==200 and owned_host(row.get('url',''),result.get('website',''))):
+            evidence.append(dict(row))
     if email and email_source:
         hunter=((result.get('_contact_enrichment') or {}).get('fields',{}).get('email') or {}).get('observation_status')=='hunter_discovered'
         evidence.append({"email": email, "url": email_source, "source": "hunter_verified_contact" if hunter else "verified_public_contact", "observed_at": observed,**(result.get("_contact_identity") or {})})
