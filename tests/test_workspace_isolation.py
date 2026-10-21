@@ -103,3 +103,4 @@ def test_search_get_cannot_trigger_outreach_and_post_requires_csrf(identities,mo
     ingest.assert_not_called();orchestrate.assert_not_called()
     assert owner.post('/api/smart-search',json={'query':'businesses'},headers={'X-CSRF-Token':'csrf'}).status_code==200
     orchestrate.assert_called_once()
+    assert orchestrate.call_args.kwargs=={'draft_only':True}

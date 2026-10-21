@@ -61,7 +61,7 @@ def _run_campaign(data):
     try:
         checkpoint("qualifying_contacts")
         payload=_orchestration_payload(discovery,campaign)
-        outreach=orchestrate_discovery(payload,draft_only=True) if data.get("draft_only") is True else (orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] else orchestrate_discovery(payload))
+        outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] and data.get("draft_only") is not True else orchestrate_discovery(payload,draft_only=True)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
     visible=[]

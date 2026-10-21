@@ -328,7 +328,7 @@ def scan_real_inbound_replies():
 def v1_discovery_orchestration_hook(response):
     if request.path!="/api/smart-search" or request.method != "POST" or response.status_code!=200 or not response.is_json: return response
     try:
-        payload=response.get_json(silent=True) or {}; payload["outreach_automation"]=orchestrate_discovery(payload); response.set_data(app.json.dumps(payload)); response.headers["Content-Type"]="application/json"; response.headers["Content-Length"]=str(len(response.get_data()))
+        payload=response.get_json(silent=True) or {}; payload["outreach_automation"]=orchestrate_discovery(payload,draft_only=True); response.set_data(app.json.dumps(payload)); response.headers["Content-Type"]="application/json"; response.headers["Content-Length"]=str(len(response.get_data()))
     except Exception as exc: app.logger.exception("V1_DISCOVERY_ORCHESTRATION_ERROR %s",type(exc).__name__)
     return response
 

@@ -32,7 +32,7 @@ def test_campaign_and_background_research_share_budget(env,monkeypatch,target,bu
     monkeypatch.setattr(research,"_smart_search",discover)
     monkeypatch.setattr(demo,"_smart_search",discover)
     monkeypatch.setattr(demo,"enhance_discovery",lambda data,*a:data)
-    monkeypatch.setattr(demo,"orchestrate_discovery",lambda data:{"qualified":0,"drafted":0,"sent":0})
+    monkeypatch.setattr(demo,"orchestrate_discovery",lambda data,**kw:{"qualified":0,"drafted":0,"sent":0})
     job=research.ResearchJob(id="research",prompt_text="Find companies hiring engineers",target_count=target)
     jobs.db.session.add(job);jobs.db.session.commit()
     research.process_next_research_job()
@@ -247,3 +247,14 @@ def test_hard_stage_deadline_interrupts_blocked_work_only_in_isolated_child(monk
     assert signal.getsignal(signal.SIGALRM)==old_handler and signal.getitimer(signal.ITIMER_REAL)[0]==0
     monkeypatch.delenv('AUTOMAKE_ISOLATED_EXECUTION')
     with hard_stage_limit(0.001,'contact_enrichment'):time.sleep(0.01)
+
+
+def test_campaign_without_explicit_send_authorization_is_draft_only(env,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(demo,'_smart_search',lambda *a,**kw:{'results':[]})
+    monkeypatch.setattr(demo,'enhance_discovery',lambda data,*a:data)
+    monkeypatch.setattr(demo,'orchestrate_discovery',lambda data,**kw:calls.append(kw) or {'qualified':0,'drafted':0,'sent':0})
+    demo._run_campaign({'target_customer':'businesses','territory':'Norfolk'})
+    demo._run_campaign({'target_customer':'businesses','territory':'Norfolk','send_authorized':True})
+    demo._run_campaign({'target_customer':'businesses','territory':'Norfolk','send_authorized':True,'draft_only':True})
+    assert calls==[{'draft_only':True},{'authorized_send':True},{'draft_only':True}]
