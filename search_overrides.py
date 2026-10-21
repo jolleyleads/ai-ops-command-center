@@ -6,6 +6,7 @@ from flask import jsonify, request
 from app import AutomationEvent, app, db
 import local_jobs
 from universal_app import _search_public_records
+from src.job_sources import capabilities as job_source_capabilities
 
 
 def _clean(value, limit=500):
@@ -210,7 +211,7 @@ def universal_search_capabilities_override():
         public_source = "Public Record Search"
 
     return jsonify({
-        "jobs": {"configured": brave_search or custom_search or web_search, "source": "Verified Local Job Search"},
+        "jobs": {"configured": brave_search or custom_search or web_search, "source": "Verified Local Job Search", "providers":job_source_capabilities()},
         "businesses": {"configured": bool(_places_key()), "source": "Google Places"},
         "public_records": {
             "configured": brave_search or custom_search or web_search,
