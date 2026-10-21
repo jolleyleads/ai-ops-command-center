@@ -60,3 +60,12 @@ Verification in progress: real disposable-DB process test proves a fast draft co
 
 
 Verification scope: the progressive workflow's next live receipt uses a controlled draft-only search for three HVAC businesses serving Norfolk. The prior public research run demonstrated source-verified HVAC discovery there. This tests successful contact-to-draft processing with more than one candidate and the new independent workers; it does not establish all industries or guarantee the requested count. Existing API acceptance retains the cross-industry catalog for separately requested broad verification. Safe-send gates are unchanged; sending remains disabled for acceptance.
+
+
+## Enrichment parser reproduction
+
+A local, provider-free reproduction located pathological rescanning in outreach_bridge._page_emails: unbounded email/obfuscation regexes each exceeded 0.2 seconds on only 20KB of repeated dotted/percent-encoded text. Stack diagnostics identify the exact matcher lines. Replaced those patterns with shared bounded source-address matchers and token boundaries across enrichment/contact assessment/orchestration. Regression checks retain actual published and obfuscated addresses, reject overlong local parts and process 500KB adversarial tokens within a two-second test deadline (observed about 0.016 seconds locally). This demonstrates a real enrichment parser defect; the exact fetched page from the old production stall is unavailable, so that historical causal link remains unproven.
+
+The b8c3130 broad acceptance finished at 04:33 UTC on Oct 21 without hanging. It failed fresh proof: two campaigns had no verified matches, and the other two selected existing review-required leads. No fresh contact enrichment ran in that receipt. Do not present it as a successful draft proof or evidence that the old stall was reproduced.
+
+Current final local suite: 726 passed, seven environment-specific PostgreSQL checks skipped. The independent-process test also passed against disposable PostgreSQL in PR CI before the parser-only follow-up. Final combined CI/deployment/live proof remain pending.

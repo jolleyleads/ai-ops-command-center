@@ -10,7 +10,7 @@ PAIR=re.compile(r"\b("+NAME+r")\s*[,|:\-–—]\s*((?i:"+ROLES+r"))\b")
 CARD_PAIR=re.compile(r"\b("+NAME+r")\s+((?i:"+ROLES+r"))\b")
 HIRING=re.compile(r"\b(?:hiring|jobs?|recruiting|careers?|openings?)\b",re.I)
 HIRING_RESPONSIBILITY_SYNONYMS=re.compile(r"\b(?:recruitment|staffing|talent)\b",re.I)
-EMAIL=re.compile(r"(?i)(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])")
+from src.email_syntax import EMAIL_RE as EMAIL
 SHARED={"info","sales","support","contact","hello","office","mail","admin","jobs","careers","hr","hiring","recruiting","recruitment","team","owner","service","billing","press","marketing","noreply","no-reply"}
 
 def person_email_supported(assessment,email):
