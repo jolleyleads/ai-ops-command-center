@@ -11,7 +11,7 @@ from src.company_identity import identity_proof, host, owned_host, email_on_doma
 from src.company_identity import current_contact_source
 from src.contact_assessment import assess_people, is_shared_email, current_email_context, is_fax_number
 
-EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
+from src.email_syntax import EMAIL_RE
 PHONE_RE=re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)")
 TITLE_RE=re.compile(r"(?i)\b(owner|founder|president|ceo|chief executive officer|general manager|operations manager|hiring manager|recruiter|director|principal|partner)\b")
 

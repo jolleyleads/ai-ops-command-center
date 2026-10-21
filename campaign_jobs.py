@@ -81,6 +81,7 @@ def execute_claimed_job(job_id):
     job = db.session.get(CampaignExecutionJob, job_id)
     if not job or job.status != "running":
         return {"processed":0}
+    claim_started_at=job.started_at
     try:
         import customer_demo as demo
         from src.execution_deadline import execution_scope
@@ -89,7 +90,7 @@ def execute_claimed_job(job_id):
             now=datetime.utcnow()
             previous=json.loads(db.session.get(CampaignExecutionJob,job_id).result_json or "{}").get("progress") or {}
             progress={**previous,**progress}
-            changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=job.started_at).update(
+            changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=claim_started_at).update(
                 {"result_json":json.dumps({"progress":{**progress,"updated_at":now.isoformat()+"Z"}})},synchronize_session=False)
             db.session.commit()
             if changed and (progress.get('stage')!=previous.get('stage') or progress.get('campaign_index')!=previous.get('campaign_index')):
@@ -107,6 +108,7 @@ def execute_claimed_job(job_id):
                 result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
             code = 200 if result else 500
             result = result or {"ok":False, "stage":stage, "reason":reason}
+        job=db.session.get(CampaignExecutionJob,job_id)
         db.session.refresh(job)
         if job.status != "running":
             return {"processed":1,"job_id":job_id,"ok":False}
@@ -199,11 +201,14 @@ def kick_execution_worker():
 
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
-    result["progress"] = (json.loads(job.result_json or "{}").get("progress") or {}) if job.status in {"queued", "running"} else {}
+    result["progress"] = json.loads(job.result_json or "{}").get("progress") or {}
+    from src.progressive_campaign import task_views
+    businesses=task_views(job.id)
+    if businesses:result["progress"]={**result["progress"],"businesses":businesses}
     if job.status=="queued":
         result["queue_position"]=CampaignExecutionJob.query.filter(CampaignExecutionJob.status=="queued",CampaignExecutionJob.created_at<=job.created_at).count()
         result["active_executions"]=CampaignExecutionJob.query.filter_by(status="running").count()
-    if job.status in {"completed", "failed"}:
+    if job.status in {"completed", "failed", "cancelled"}:
         result.update(result=json.loads(job.result_json or "{}"), result_http_status=job.result_http_status)
     return result
 
@@ -248,3 +253,18 @@ def execution_status(job_id):
     response = jsonify(_view(job))
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.post('/api/demo/campaigns/jobs/<job_id>/cancel')
+def cancel_campaign_job(job_id):
+    from workspace_security import owns
+    if not owns('campaign',job_id):return jsonify({'error':'Campaign not found.'}),404
+    job=db.session.get(CampaignExecutionJob,job_id)
+    if not job:return jsonify({'error':'Campaign not found.'}),404
+    if job.status in {'queued','running'}:
+        job.status='cancelled';job.error='CAMPAIGN_CANCELLED_REVIEW_IN_FLIGHT_EFFECTS';job.finished_at=datetime.utcnow()
+        from src.progressive_campaign import CampaignBusinessTask
+        CampaignBusinessTask.query.filter(CampaignBusinessTask.campaign_id==job_id,CampaignBusinessTask.status.in_(['queued','running'])).update({
+            'status':'cancelled','error':'CAMPAIGN_CANCELLED','updated_at':datetime.utcnow(),'finished_at':datetime.utcnow()},synchronize_session=False)
+        db.session.commit()
+    return jsonify(_view(job))

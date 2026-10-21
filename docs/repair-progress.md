@@ -46,3 +46,26 @@ Priority 5 follow-up: retain independent cron-token authentication for inbound r
 Priority 6 implemented/tested: durable first-campaign attribution and persisted event tests prevent cross-campaign inflation. Private production dashboard and real reply/booking updates remain unverified without account authentication and a separately authorized controlled recipient/calendar.
 
 No emails or Calendar writes performed for verification. Existing scheduled automation is independent of these tests. Additive ownership/reporting tables preserve existing rows. No credential replacement, network-allowlist change, new spending or destructive migration was performed. Rollback: revert follow-up code, retaining all additive tables and business records. Avoid reverting route-security repairs to the original public administrative routes.
+
+
+## Progressive implementation checkpoint
+
+Master prompt: Progressive Research and Verified Outreach (user-authorized).
+
+PR #153: PostgreSQL CI passed; deployed b8c3130ccb23fcd191bc57fe5ed19b54df147fe4 as dep-dbc3svmq1p3s73biqeeg. New draft-only acceptance run 39543865887 is running. Root cause inside the old stalled enrichment remains under investigation; no fresh draft success claimed.
+
+Follow-up in development: publish candidates after each provider response, preserve partial results on failure, reuse browser-owned research submission keys, restore polling after reload, display verified business results before contact checks, and isolate each campaign business in durable tasks with at most two forked workers. Each worker only qualifies/prepares drafts; only the authorized parent may call the existing safe-send gate. Cancellation fences task updates. Additive campaign_business_task and research_request tables; no existing records reassigned or deleted. Display draft progress and live campaign membership before overall completion. Acceptance now binds freshness to this attempt's returned lead IDs and requires a persisted qualification receipt plus actual saved draft.
+
+Verification in progress: real disposable-DB process test proves a fast draft completes while a slow contact remains running, duplicate businesses collapse to one task, cancellation terminates the slow worker, and no send function is invoked. Additional tests cover early provider results, partial provider failure, persisted partial research, and browser-owned idempotency. Full regression and PostgreSQL CI must pass before production deployment. Production progressive/contact proof and final browser verification remain pending.
+
+
+Verification scope: the progressive workflow's next live receipt uses a controlled draft-only search for three HVAC businesses serving Norfolk. The prior public research run demonstrated source-verified HVAC discovery there. This tests successful contact-to-draft processing with more than one candidate and the new independent workers; it does not establish all industries or guarantee the requested count. Existing API acceptance retains the cross-industry catalog for separately requested broad verification. Safe-send gates are unchanged; sending remains disabled for acceptance.
+
+
+## Enrichment parser reproduction
+
+A local, provider-free reproduction located pathological rescanning in outreach_bridge._page_emails: unbounded email/obfuscation regexes each exceeded 0.2 seconds on only 20KB of repeated dotted/percent-encoded text. Stack diagnostics identify the exact matcher lines. Replaced those patterns with shared bounded source-address matchers and token boundaries across enrichment/contact assessment/orchestration. Regression checks retain actual published and obfuscated addresses, reject overlong local parts and process 500KB adversarial tokens within a two-second test deadline (observed about 0.016 seconds locally). This demonstrates a real enrichment parser defect; the exact fetched page from the old production stall is unavailable, so that historical causal link remains unproven.
+
+The b8c3130 broad acceptance finished at 04:33 UTC on Oct 21 without hanging. It failed fresh proof: two campaigns had no verified matches, and the other two selected existing review-required leads. No fresh contact enrichment ran in that receipt. Do not present it as a successful draft proof or evidence that the old stall was reproduced.
+
+Current final local suite: 726 passed, seven environment-specific PostgreSQL checks skipped. The independent-process test also passed against disposable PostgreSQL in PR CI before the parser-only follow-up. Final combined CI/deployment/live proof remain pending.

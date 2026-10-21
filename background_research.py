@@ -1,5 +1,6 @@
 """Database-backed read-only research jobs; no outreach is launched here."""
 import json
+import hashlib
 import secrets
 import threading
 import os
@@ -23,6 +24,14 @@ class ResearchJob(db.Model):
     created_at=db.Column(db.DateTime,default=datetime.utcnow)
     started_at=db.Column(db.DateTime)
     finished_at=db.Column(db.DateTime)
+
+
+class ResearchRequest(db.Model):
+    __tablename__='research_request'
+    key=db.Column(db.String(128),primary_key=True)
+    job_id=db.Column(db.String(48),nullable=False)
+    fingerprint=db.Column(db.String(64),nullable=False)
+    workspace_id=db.Column(db.String(96),nullable=False)
 
 
 with app.app_context():db.create_all()
@@ -61,7 +70,7 @@ def process_next_research_job():
         from src.execution_deadline import execution_scope
         def progress(details):
             previous=json.loads(db.session.get(ResearchJob,job_id).result_json or '{}').get('progress') or {}
-            details={**previous,**details,'updated_at':datetime.utcnow().isoformat()+'Z'}
+            details={**previous,**details,'requested':job.target_count,'updated_at':datetime.utcnow().isoformat()+'Z'}
             changed=ResearchJob.query.filter_by(id=job_id,status='running',started_at=now).update(
                 {'result_json':json.dumps({'progress':details})},synchronize_session=False)
             db.session.commit()
@@ -75,6 +84,10 @@ def process_next_research_job():
         app.logger.exception("BACKGROUND_RESEARCH_FAILED")
         db.session.rollback()
         result_json,status,error='{}','failed','Research could not finish. Please try again.'
+    previous=json.loads(db.session.get(ResearchJob,job_id).result_json or '{}')
+    persisted=json.loads(result_json)
+    persisted['progress']=previous.get('progress') or {}
+    result_json=json.dumps(persisted)
     finished=ResearchJob.query.filter_by(id=job_id,status='running',started_at=now).update(
         {'result_json':result_json,'status':status,'error':error,'finished_at':datetime.utcnow()},synchronize_session=False)
     db.session.commit()
@@ -103,11 +116,29 @@ def create_research_job():
     if not query:return jsonify({"error":"Enter a search inquiry."}),400
     try:target=target_count_from_prompt(query,data.get("target_count"))
     except (TypeError,ValueError) as exc:return jsonify({"error":str(exc),"maximum_results":20,"work_started":False}),422
+    from workspace_security import claim, research_workspace
+    workspace=research_workspace(create=True)
+    request_key=request.headers.get('Idempotency-Key','').strip()
+    if len(request_key)>128:return jsonify({'error':'Invalid request key.'}),400
+    fingerprint=hashlib.sha256(json.dumps([query,str(data.get('location') or '').strip()[:200],target]).encode()).hexdigest()
+    existing=db.session.get(ResearchRequest,request_key) if request_key else None
+    if existing:
+        if existing.workspace_id!=workspace:return jsonify({'error':'Search not found.'}),404
+        if existing.fingerprint!=fingerprint:return jsonify({'error':'Request key belongs to a different search.'}),409
+        return jsonify({'job_id':existing.job_id,'status':db.session.get(ResearchJob,existing.job_id).status,'poll_url':'/api/research/jobs/'+existing.job_id}),202
     if ResearchJob.query.filter(ResearchJob.status.in_(["queued","running"])).count()>=5 or ResearchJob.query.filter(ResearchJob.created_at>datetime.utcnow()-timedelta(minutes=1)).count()>=5:
         return jsonify({"error":"Several searches are already running. Please try shortly."}),429
     job=ResearchJob(id=secrets.token_urlsafe(24),prompt_text=query,location=str(data.get("location") or "").strip()[:200],target_count=target)
     from workspace_security import claim, research_workspace
-    db.session.add(job);claim("research",job.id,research_workspace(create=True));db.session.commit();job_id=job.id
+    db.session.add(job);claim("research",job.id,workspace)
+    if request_key:db.session.add(ResearchRequest(key=request_key,job_id=job.id,fingerprint=fingerprint,workspace_id=workspace))
+    try:db.session.commit()
+    except Exception as exc:
+        from sqlalchemy.exc import IntegrityError
+        db.session.rollback()
+        if isinstance(exc,IntegrityError) and request_key and db.session.get(ResearchRequest,request_key):return create_research_job()
+        raise
+    job_id=job.id
     kick_worker()
     return jsonify({"job_id":job_id,"status":"queued","poll_url":"/api/research/jobs/"+job_id}),202
 
@@ -118,7 +149,7 @@ def get_research_job(job_id):
     if not job:return jsonify({"error":"Search not found."}),404
     payload={"job_id":job.id,"status":job.status,"target_count":job.target_count,"error":job.error}
     payload["progress"]=(json.loads(job.result_json or "{}").get("progress") or {})
-    if job.status=="completed":payload["result"]=json.loads(job.result_json)
+    if job.status in {"completed","failed","cancelled"}:payload["result"]=json.loads(job.result_json)
     if job.status in {"queued","running"}:kick_worker()
     response=jsonify(payload);response.headers["Cache-Control"]="no-store"
     return response

@@ -49,7 +49,7 @@ def _run_campaign(data):
     # This bit exists only in the server-created authenticated job payload.
     campaign["send_authorized"]=data.get("send_authorized") is True
     campaign["require_decision_maker"]=data.get("require_decision_maker") is True
-    checkpoint("researching")
+    checkpoint("researching",requested=campaign["target_count"])
     try:discovery=_smart_search(campaign["query"],campaign["territory"],runtime_budget=research_budget_seconds(campaign["target_count"]),target_count=campaign["target_count"])
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
     if not isinstance(discovery,dict):return None,"discovery","DISCOVERY_NOT_OBJECT"
@@ -61,7 +61,7 @@ def _run_campaign(data):
     try:
         checkpoint("qualifying_contacts")
         payload=_orchestration_payload(discovery,campaign)
-        outreach=orchestrate_discovery(payload,draft_only=True) if data.get("draft_only") is True else (orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] else orchestrate_discovery(payload))
+        outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] and data.get("draft_only") is not True else orchestrate_discovery(payload,draft_only=True)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
     visible=[]
@@ -215,7 +215,8 @@ def _run_acceptance(campaign=None, progress_callback=None):
                 continue
             d=payload.get("discovery") or {};o=payload.get("outreach") or {};required=("qualified","drafted","sent");missing=[k for k in required if k not in o]
             if missing:return jsonify({"ok":False,"pass":False,"stage":"result_validation","reason":"MISSING_OUTREACH_FIELDS","missing":missing,"timestamp":started,"attempts":attempts}),500
-            fresh=OutreachLead.query.filter(OutreachLead.id>before_max).order_by(OutreachLead.id.asc()).all()
+            owned_ids={x for x in o.get('lead_ids') or [] if type(x) is int}
+            fresh=OutreachLead.query.filter(OutreachLead.id>before_max,OutreachLead.id.in_(owned_ids)).order_by(OutreachLead.id.asc()).all()
             fresh_receipt=[{"lead_id":x.id,"company":x.company,"status":x.status,"validated_contact":bool(x.contact_email),"gmail_message_id":x.gmail_message_id or ""} for x in fresh]
             attempt={"campaign":controlled,"discovery":{**d,"result_count":len(d.get("results") or [])},"outreach":{"eligible":o.get("eligible",0),"saved":o.get("saved",0),"qualified":o.get("qualified",0),"drafted":o.get("drafted",0),"sent":o.get("sent",0),"skipped":o.get("skipped",[])},"fresh_leads":fresh_receipt}
             attempts.append(attempt)
@@ -223,8 +224,13 @@ def _run_acceptance(campaign=None, progress_callback=None):
             # Acceptance now proves a genuinely new DB lead crossed qualification
             # and drafting. Sending remains governed by the unchanged safe-send
             # gate; if production autosend is enabled, require its durable receipt.
-            qualified_fresh=[x for x in fresh if (x.status or "").lower() not in {"needs_evidence","rejected","review"}]
-            drafted_fresh=[x for x in fresh if (x.status or "").lower() in {"drafted","sent","followup_sent","replied","booked"}]
+            from outreach_automation import OutreachQualificationReceipt
+            def has_qualification(lead):
+                receipt=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
+                try:return bool(lead.contact_email and receipt and json.loads(receipt.receipt_json or '{}').get('ok') is True)
+                except (TypeError,ValueError):return False
+            qualified_fresh=[x for x in fresh if has_qualification(x)]
+            drafted_fresh=[x for x in qualified_fresh if x.subject and x.body and (x.status or "").lower() in {"drafted","sent","followup_sent","replied","booked"}]
             if qualified_fresh and drafted_fresh:
                 sent_expected=bool(o.get("autosend_enabled"))
                 sent_fresh=[x for x in fresh if x.gmail_message_id]

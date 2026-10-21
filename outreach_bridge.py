@@ -13,7 +13,7 @@ from src.email_validation import apply_email_domain_check
 from src.contact_assessment import contact_sections, PAIR, CARD_PAIR, is_fax_number
 from src.qualification import qualify_lead, qualification_payload
 
-EMAIL_RE=re.compile(r"(?i)(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])")
+from src.email_syntax import EMAIL_RE
 QUEUE_MIN_SCORE=int(os.getenv("OUTREACH_REVIEW_MIN_SCORE","60"))
 AUTOSEND_ENABLED=os.getenv("OUTREACH_AUTOSEND_ENABLED","false").lower() in {"1","true","yes","on"}
 CONTACT_MAX_URLS=max(1,min(int(os.getenv("CONTACT_ENRICH_MAX_URLS","8")),12))
@@ -24,7 +24,7 @@ CONTACT_READ_TIMEOUT=max(1.0,min(float(os.getenv("CONTACT_READ_TIMEOUT","2.5")),
 def _clean(v,limit=2000):return str(v or "").strip()[:limit]
 def _valid_email(v):
     v=_clean(v,500).lower()
-    return v if EMAIL_RE.fullmatch(v) and not v.endswith((".png",".jpg",".jpeg",".gif",".webp",".svg")) else ""
+    return v if len(v)<=254 and EMAIL_RE.fullmatch(v) and not v.endswith((".png",".jpg",".jpeg",".gif",".webp",".svg")) else ""
 
 def _decode_cfemail(value):
     """Decode Cloudflare email-protection hex without treating it as independent proof."""
@@ -43,7 +43,8 @@ def _page_emails(text):
     found=[_valid_email(x) for x in re.findall(r'(?i)mailto:([^?"<> ]+)',text)]
     found += [_valid_email(x) for x in EMAIL_RE.findall(text)]
     # Common human-readable anti-spam forms: name [at] domain [dot] com.
-    for local,domain,tld in re.findall(r'(?i)\b([a-z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\sat\s)\s*([a-z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\sdot\s)\s*([a-z]{2,})\b',text):
+    from src.email_syntax import OBFUSCATED_EMAIL_RE
+    for local,domain,tld in OBFUSCATED_EMAIL_RE.findall(text):
         found.append(_valid_email(f"{local}@{domain}.{tld}"))
     # Cloudflare's data-cfemail is reversible source evidence from this exact page.
     for encoded in re.findall(r'(?i)data-cfemail=["\']([0-9a-f]{6,})["\']',text):
