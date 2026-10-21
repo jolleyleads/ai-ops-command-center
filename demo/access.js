@@ -3,7 +3,7 @@
   'use strict';
   var box=document.getElementById('prompt'), mode=document.getElementById('task-mode');
   var note=document.createElement('p');note.id='workspace-access';note.className='small';note.setAttribute('role','status');
-  document.querySelector('.composer').prepend(note);
+  document.getElementById('menu-access').prepend(note);
   function save(){try{sessionStorage.setItem('automake-pending-prompt',box.value);}catch(e){}}
   try{if(!box.value)box.value=sessionStorage.getItem('automake-pending-prompt')||'';}catch(e){}
   box.addEventListener('input',save);
@@ -19,6 +19,7 @@
     document.getElementById('prepare').title=access.drafting_available?'Prepare verified drafts without sending':'Sign in to save leads and prepare drafts';
     if(access.signed_in){note.textContent=access.sending_available?'Workspace connected. Choose Research only or Research & email.':'Your workspace is connected. Campaign drafting and sending require a separately connected mailbox.';}
     else{mode.value='research';note.innerHTML='Research is available. <a href="/login">Sign in for saved leads and email campaigns</a>.';}
+    if(window.syncComposerState)window.syncComposerState();
     return access;
   }).catch(function(){note.textContent='Research is available. Workspace access could not be checked; refresh before sending.';return window.workspaceAccess;});
 })();
@@ -47,6 +48,7 @@ window.renderResearchProgress=function(state){
 };
 
 window.showRequestInterpretation=function(query,location,count,sending){
+  if(window.syncComposerState)window.syncComposerState();
   var bubble=window.activeResearchBubble;if(!bubble)return;
   bubble.innerHTML='<b>AutoMake AI</b><p>'+esc(query)+'</p><p>Territory: '+esc(location||'Not restricted')+' · Requested: '+esc(count)+'.</p><p>I’ll show source-backed candidates as they arrive. Contact verification is separate. '+(sending?'Sending requires your selected campaign authorization and all safety checks.':'Sending is off.')+'</p>';
 };
