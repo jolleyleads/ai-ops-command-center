@@ -75,6 +75,7 @@ window.followResearchJob=function(job,kind){
         }
         if(state.status==='failed'||state.status==='cancelled'){
           sessionStorage.removeItem('automake-active-job');
+          if(kind==='research')sessionStorage.removeItem('automake-research-request');
           reject(new Error(state.error||'Work stopped. Partial research is shown above.'));return;
         }
         if(Date.now()-started>2700000){reject(new Error('Your job is saved. Reload to resume checking it.'));return;}
