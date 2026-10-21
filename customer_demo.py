@@ -95,11 +95,8 @@ def chat_lead_status():
 def chat_prepare_campaign():
     """Explicit, authenticated draft-only campaign path; never authorizes live sends."""
     from outreach_automation import _operator_authorized, _operator_session_authorized
-    from v1_orchestration import AUTOSEND_ENABLED
     if not (_operator_authorized() or _operator_session_authorized()):
         return jsonify({"ok":False,"error":"Operator authentication required"}),401
-    if AUTOSEND_ENABLED:
-        return jsonify({"ok":False,"error":"Draft-only campaign unavailable while automatic sending is enabled; no campaign started."}),409
     data=request.get_json(silent=True) or {}
     query=_text(data.get("target_customer") or data.get("prompt"),500)
     campaign,error=_campaign_payload({
@@ -108,6 +105,7 @@ def chat_prepare_campaign():
         "sending_limit":1,"target_count":data.get("target_count") or 10,
     })
     if error:return jsonify(error),400
+    campaign.update(draft_only=True,send_authorized=False)
     return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
 
 @app.route("/api/demo/leads",methods=["GET"])
