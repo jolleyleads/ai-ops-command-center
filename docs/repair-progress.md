@@ -69,3 +69,13 @@ A local, provider-free reproduction located pathological rescanning in outreach_
 The b8c3130 broad acceptance finished at 04:33 UTC on Oct 21 without hanging. It failed fresh proof: two campaigns had no verified matches, and the other two selected existing review-required leads. No fresh contact enrichment ran in that receipt. Do not present it as a successful draft proof or evidence that the old stall was reproduced.
 
 Current final local suite: 726 passed, seven environment-specific PostgreSQL checks skipped. The independent-process test also passed against disposable PostgreSQL in PR CI before the parser-only follow-up. Final combined CI/deployment/live proof remain pending.
+
+## Final live-verification repair — 2026-10-21
+
+- Exact production a1a4df0: progressive candidates and reload recovery verified; public/private access checks and live search smoke passed. PostgreSQL CI: 733 passed.
+- Fresh Norfolk HVAC acceptance completed in about 145 seconds without hanging, saved one verified business, and truthfully held it (HUNTER_NO_DOMAIN_CONTACTS; MISSING_VALIDATED_CONTACT; INTENT_SIGNAL_UNPROVEN). No fresh qualified draft was proved. No messages or Calendar writes performed.
+- Live Stop clicks were intercepted by the fixed composer's transparent gradient. Repair makes only the composer itself capture pointer events, scopes cancellation to its result bubble, and renders the server's cancellation response immediately. Pending territory is restored with the job.
+- Found a separate evidence handoff defect: fetched primary business text was nested only in contact metadata, so qualification could lose industry evidence, especially on mailbox failure. Preserve the already identity/host-checked fetched rows as evidence independently of mailbox success. Missing contact remains a hold; no qualification gate is waived.
+- Rejected business cards now say rejected and do not claim contact verification ran.
+- Local full regression after these changes: 727 passed, 7 PostgreSQL-only skips. Deployment and final live cancellation pending.
+- Limits: at most 20 businesses per research run; 100 rejected before launch. Owner integration only; multi-customer sending, signed-in Google behavior, controlled Gmail/reply/Calendar and fresh qualified production draft remain unverified.

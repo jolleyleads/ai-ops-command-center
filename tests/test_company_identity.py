@@ -194,3 +194,20 @@ def test_outreach_uses_only_approved_local_emails_from_fetched_page(monkeypatch)
 def test_outreach_rejects_off_domain_source_even_if_email_matches(monkeypatch):
     monkeypatch.setattr(orchestration,"_public_contact_evidence",lambda r:([dict(url="https://thirdparty.example/contact",text="owner@acme.com")],{}))
     assert orchestration._verified_public_email(dict(company="Acme",website="https://acme.com"))==("", "")
+
+
+def test_primary_business_evidence_survives_failed_contact_and_supports_only_observed_intent():
+    from src.qualification import qualify_lead
+    result={'company':'Acme','website':'https://acme.com','_contact_enrichment':{'fields':{}},
+        '_outreach_copy_sources':[
+            {'url':'https://acme.com/services','page_text':'Acme HVAC services in Norfolk Virginia',
+             'directly_fetched':True,'http_status':200,'source':'outreach_primary_copy','observed_at':'2026-10-21T00:00:00Z'},
+            {'url':'https://unrelated.example','page_text':'Unproven buying intent','directly_fetched':True,'http_status':200}]}
+    stored=orchestration._evidence_with_contact(result,'','')
+    assert any(x.get('page_text')=='Acme HVAC services in Norfolk Virginia' for x in stored)
+    assert not any(x.get('url')=='https://unrelated.example' for x in stored)
+    receipt=qualify_lead({'company_name':'Acme','website':'https://acme.com','website_source_url':'https://acme.com','evidence':stored},
+        context={'query':'HVAC businesses'})
+    assert 'intent_signal_fit' in receipt['passed_checks']
+    assert 'MISSING_VALIDATED_CONTACT' in receipt['reason_codes']
+    assert receipt['ok'] is False
