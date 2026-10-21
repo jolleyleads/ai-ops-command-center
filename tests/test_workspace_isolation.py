@@ -71,3 +71,35 @@ def test_session_mutations_require_csrf(identities):
     owner,_=identities
     assert owner.post('/api/demo/campaigns/launch',json={'target_customer':'HVAC','territory':'Norfolk'}).status_code==403
     assert owner.post('/api/demo/campaigns/launch',json={'target_customer':'HVAC','territory':'Norfolk'},headers={'X-CSRF-Token':'csrf'}).status_code==202
+
+
+def test_reply_cron_retains_its_own_authentication(identities,monkeypatch):
+    import v1_orchestration as orchestration
+    from unittest.mock import Mock
+    monkeypatch.setenv('OUTREACH_CRON_TOKEN','scanner-only-token')
+    scan=Mock(return_value={'ok':True,'checked':0,'processed':[]})
+    monkeypatch.setattr(orchestration,'scan_real_inbound_replies',scan)
+    client=oa.app.test_client()
+    for headers in [{},{'X-Outreach-Cron-Token':'wrong'},{'X-Outreach-Token':'scanner-only-token'}]:
+        assert client.post('/api/outreach/process-inbound',headers=headers).status_code==401
+    scan.assert_not_called()
+    assert client.post('/api/outreach/process-inbound',headers={'X-Outreach-Cron-Token':'scanner-only-token'}).status_code==200
+    scan.assert_called_once()
+    assert client.get('/api/chat/dashboard',headers={'X-Outreach-Cron-Token':'scanner-only-token'}).status_code==401
+
+
+def test_search_get_cannot_trigger_outreach_and_post_requires_csrf(identities,monkeypatch):
+    import smart_search
+    import smart_search_outreach_hook as bridge
+    import v1_orchestration as orchestration
+    from unittest.mock import Mock
+    owner,_=identities
+    monkeypatch.setattr(smart_search,'_smart_search',lambda *args,**kwargs:{'results':[],'count':0})
+    ingest,orchestrate=Mock(return_value={}),Mock(return_value={})
+    monkeypatch.setattr(bridge,'ingest_verified_results',ingest)
+    monkeypatch.setattr(orchestration,'orchestrate_discovery',orchestrate)
+    assert owner.get('/api/smart-search?query=businesses').status_code==200
+    assert owner.post('/api/smart-search',json={'query':'businesses'}).status_code==403
+    ingest.assert_not_called();orchestrate.assert_not_called()
+    assert owner.post('/api/smart-search',json={'query':'businesses'},headers={'X-CSRF-Token':'csrf'}).status_code==200
+    orchestrate.assert_called_once()

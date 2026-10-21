@@ -1,5 +1,7 @@
 """Bounded child-process entrypoint; never runs commercial startup campaigns."""
 import sys
+import os
+os.environ["AUTOMAKE_ISOLATED_EXECUTION"]="1"
 from app import app, db
 import gmail_connect
 import customer_demo

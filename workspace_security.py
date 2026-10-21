@@ -94,7 +94,8 @@ def protect_workspace_routes():
         return None
     if endpoint=='gmail_oauth_callback' and isinstance(session.get('google_login'),dict):return None
     if endpoint in PUBLIC:return None
-    if request.path=='/api/outreach/process-followups':return None  # Existing cron-token middleware.
+    if endpoint in {'process_followups','process_inbound_replies'}:
+        return None  # Both routes independently require the canonical cron token.
     from src.acceptance_auth import acceptance_claims, request_key
     if endpoint in {'v11_acceptance_once','campaign_execution_status'}:
         claims=acceptance_claims()

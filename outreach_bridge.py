@@ -69,6 +69,8 @@ def _candidate_urls(result):
     return list(dict.fromkeys(vals))[:8]
 def _public_contact_evidence(result):
     """Fetch bounded candidate-owned pages and retain exact public contact evidence."""
+    from src.execution_deadline import checkpoint
+    checkpoint("contact_source_setup")
     started=time.monotonic();urls=_candidate_urls(result);rows=[];identity_rows=[];attempted=0
     company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("candidate_name") or result.get("title"),300)
     location=_clean(result.get("contact_location") or result.get("location"),300)
@@ -87,6 +89,7 @@ def _public_contact_evidence(result):
     hunter_sources=[]
     if roots:
         from src.hunter_discovery import discover_contacts
+        checkpoint("contact_source_provider")
         hunter=discover_contacts(website or roots[0])
         result["_hunter_discovery"]=hunter
         hunter_sources=[u for c in hunter.get("contacts") or [] for u in c.get("source_urls") or [] if owned_host(u,roots[0])]
@@ -119,6 +122,7 @@ def _public_contact_evidence(result):
         seen.add(url);attempted+=1
         connect_timeout=min(CONTACT_CONNECT_TIMEOUT,max(0.5,remaining/2))
         read_timeout=min(CONTACT_READ_TIMEOUT,max(0.5,remaining-connect_timeout))
+        checkpoint("contact_page_fetch",contact_pages_attempted=attempted)
         try:r=public_get(url,timeout=min(remaining,connect_timeout+read_timeout),max_bytes=500000)
         except Exception:continue
         if getattr(r,"status_code",200)!=200:continue
@@ -128,6 +132,7 @@ def _public_contact_evidence(result):
         owning_root=next((root for root in roots if owned_host(final,root)),"")
         if not owning_root:continue
         text=r.text[:500000]
+        checkpoint("contact_page_metadata")
         metadata=page_metadata(text)
         contact_html=re.sub(r"(?is)<(script|style|svg|noscript).*?>.*?</\1>"," ",text)
         contact_html=re.sub(r'''(?is)<[^>]*\bdata-cfemail=["']([0-9a-f]{6,})["'][^>]*>''',lambda m:" "+_decode_cfemail(m.group(1))+" ",contact_html)
@@ -136,9 +141,11 @@ def _public_contact_evidence(result):
         proof=identity_proof(company,page,website or owning_root)
         if proof:identities[owning_root]=proof
         proof=proof or identities.get(owning_root)
+        checkpoint("contact_page_addresses")
         emails=[e for e in _page_emails(contact_html) if _same_company_domain(e,[owning_root])]
         emails=[e for e in emails if contact_context_matches(visible,e,location)]
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if not is_fax_number(visible,m.group(0)) and contact_context_matches(visible,m.group(0),location)))
+        checkpoint("contact_page_people")
         sections=contact_sections(contact_html)
         # Identity-only primary pages are still useful when Hunter has an
         # address that is not printed on the current company website.
