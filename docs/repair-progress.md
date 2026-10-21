@@ -31,3 +31,18 @@ PR #151 initial head passed PostgreSQL CI. Follow-up adds narrow GitHub OIDC acc
 ## Fork-safety verification follow-up
 
 Live application logs show initialization before Gunicorn startup. Process-local ThreadPoolExecutor/Future/Lock state was not reset on forks, a possible cause of newly queued jobs never being claimed in a preloaded worker. Both research and campaign executors now initialize lazily, reset after fork, and check process identity before using a lock or Future. Regression checks simulate an inherited running Future and held lock and prove only a fresh executor is used. Final production qualification must still be demonstrated after deployment.
+
+
+## Verified checkpoint and follow-up (2026-10-21)
+
+Current production/main: 5854e60d0cbfc3ba5a3fe1bdaea45b5862af1418. PostgreSQL CI: 720 passed. Live search smoke run 39340031696 passed all interface, intent and evidence-contract assertions. A separate browser-owned, read-only HVAC/Norfolk research job completed with one verified business and 17 live pages fetched; 20 early candidates remained labeled unverified. A second browser received 404 for the job. Requests for 100 results were rejected before work began; this deployment supports at most 20 per run.
+
+Priority 1 FAIL: acceptance run 39340031793 reached contact enrichment around 23:18 UTC on Oct 19 and stayed there until the supervised 40-minute deadline. It returned EXECUTION_DEADLINE_EXCEEDED_REVIEW_REQUIRED rather than claiming success or replaying work. No fresh qualified/drafted receipt exists for this run. The exact inner enrichment cause remains unknown. Follow-up isolates contact enrichment to a 180-second Unix child timer, logs only code stack locations on timeout, records sub-stages, and preserves the last durable stage in terminal failures. Do not repeat production acceptance until that diagnostic change is tested/deployed.
+
+Priority 2 PASS: exact deployed interface and search smoke checked.
+Priority 3 BLOCKED for real Google-account login: signed-out public/protected behavior and simulated verified-identity tests passed; the secure account-selection request was interrupted. Do not request credentials again unless the user asks. No credentials entered.
+Priority 4 PASS within explicit 20-result limit: parser/budget/cancel regressions plus genuine progressive production research; 100-result execution unsupported and clearly rejected before launch.
+Priority 5 follow-up: retain independent cron-token authentication for inbound reply processing; make GET search free of outreach ingestion. POST mutations retain owner authentication and CSRF. Two-identity and route-isolation tests passed. This remains a single-mailbox deployment, not full multi-customer sending.
+Priority 6 implemented/tested: durable first-campaign attribution and persisted event tests prevent cross-campaign inflation. Private production dashboard and real reply/booking updates remain unverified without account authentication and a separately authorized controlled recipient/calendar.
+
+No emails or Calendar writes performed for verification. Existing scheduled automation is independent of these tests. Additive ownership/reporting tables preserve existing rows. No credential replacement, network-allowlist change, new spending or destructive migration was performed. Rollback: revert follow-up code, retaining all additive tables and business records. Avoid reverting route-security repairs to the original public administrative routes.

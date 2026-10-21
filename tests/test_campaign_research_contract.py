@@ -208,3 +208,42 @@ def test_old_queued_work_expires_without_execution(env,monkeypatch):
     assert response.json['status']=='failed'
     assert response.json['error']=='QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION'
     assert jobs.process_next_execution_job()['processed']==0
+
+
+def test_failed_execution_keeps_last_durable_stage(env,monkeypatch):
+    from src.execution_deadline import checkpoint
+    def fail(data):
+        checkpoint('checking_contacts',discovered=3)
+        raise RuntimeError('provider failed')
+    monkeypatch.setattr(demo,'_run_campaign',fail)
+    launch=env.post('/api/demo/campaigns/launch',json={'target_customer':'companies','territory':'VA'})
+    assert not jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url']).json['result']
+    assert result['progress']['stage']=='checking_contacts'
+    assert result['progress']['discovered']==3
+    assert result['reason']=='EXECUTION_FAILED_REVIEW_REQUIRED'
+
+
+def test_expiry_preserves_interrupted_stage(env):
+    job=jobs.CampaignExecutionJob(id='stalled-stage',kind='campaign',payload_json='{}',status='running',
+        started_at=datetime.utcnow()-timedelta(minutes=21),
+        result_json=json.dumps({'progress':{'stage':'enriching_contact','updated_at':'2026-01-01T00:00:00Z'}}))
+    jobs.db.session.add(job);jobs.db.session.commit()
+    result=env.get('/api/demo/campaigns/jobs/stalled-stage').json
+    assert result['status']=='failed' and result['result']['progress']['stage']=='enriching_contact'
+    assert jobs.process_next_execution_job()['processed']==0
+
+
+def test_hard_stage_deadline_interrupts_blocked_work_only_in_isolated_child(monkeypatch):
+    import signal,time
+    from src.execution_deadline import hard_stage_limit
+    if not hasattr(signal,'setitimer'):pytest.skip('Unix stage timer')
+    monkeypatch.setenv('AUTOMAKE_ISOLATED_EXECUTION','1')
+    old_handler=signal.getsignal(signal.SIGALRM)
+    started=time.monotonic()
+    with pytest.raises(TimeoutError,match='CONTACT_ENRICHMENT_DEADLINE_EXCEEDED'):
+        with hard_stage_limit(0.02,'contact_enrichment'):time.sleep(1)
+    assert time.monotonic()-started<0.5
+    assert signal.getsignal(signal.SIGALRM)==old_handler and signal.getitimer(signal.ITIMER_REAL)[0]==0
+    monkeypatch.delenv('AUTOMAKE_ISOLATED_EXECUTION')
+    with hard_stage_limit(0.001,'contact_enrichment'):time.sleep(0.01)

@@ -20,7 +20,7 @@ def protect_outreach_followup_processor():
 
 @app.after_request
 def smart_search_outreach_hook(response):
-    if request.path != "/api/smart-search" or request.method not in {"GET", "POST"}:
+    if request.path != "/api/smart-search" or request.method != "POST":
         return response
     if response.status_code != 200 or not response.is_json:
         return response

@@ -35,6 +35,12 @@ def _purpose_mailbox_allowed(email):
 
 
 def _verified_public_email(result):
+    from src.execution_deadline import hard_stage_limit
+    with hard_stage_limit(180,'contact_enrichment'):
+        return _verified_public_email_impl(result)
+
+
+def _verified_public_email_impl(result):
     """Return a source-observed or independently Hunter-verified company address.
 
     Third-party evidence may verify intent, but it can never establish the outreach recipient domain.
@@ -46,6 +52,8 @@ def _verified_public_email(result):
 
     # Search snippets and old stored emails are discovery hints, not current
     # contact proof. Always re-fetch the company pages before qualification.
+    from src.execution_deadline import checkpoint
+    checkpoint("fetching_contact_sources")
     contact_result = _public_contact_evidence(result)
     rows = contact_result[0] if isinstance(contact_result, tuple) else contact_result
     result['_outreach_copy_sources'] = [
@@ -60,9 +68,12 @@ def _verified_public_email(result):
     location=result.get("contact_location") or result.get("target_location") or result.get("location") or ""
     query=(result.get("_campaign_context") or {}).get("offer") or result.get("query") or result.get("business_need") or ""
     if query and not re.search(r'(?i)\b(?:hiring|jobs?|careers?)\b',query):query += " business outreach and follow-up automation"
+    checkpoint("extracting_contacts")
     enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
     from src.hunter_discovery import enrich_contact
+    checkpoint("hunter_contact_lookup")
     enrich_contact(enrichment,website,required_person=(result.get('_campaign_context') or {}).get('require_decision_maker') is True,email_allowed=_purpose_mailbox_allowed)
+    checkpoint("verifying_mailbox")
     apply_email_domain_check(enrichment)
     if (result.get('_campaign_context') or {}).get('require_decision_maker') is True:
         assessment=enrichment.get('contact_assessment') or {}
@@ -297,7 +308,7 @@ def scan_real_inbound_replies():
 
 @app.after_request
 def v1_discovery_orchestration_hook(response):
-    if request.path!="/api/smart-search" or request.method not in {"GET","POST"} or response.status_code!=200 or not response.is_json: return response
+    if request.path!="/api/smart-search" or request.method != "POST" or response.status_code!=200 or not response.is_json: return response
     try:
         payload=response.get_json(silent=True) or {}; payload["outreach_automation"]=orchestrate_discovery(payload); response.set_data(app.json.dumps(payload)); response.headers["Content-Type"]="application/json"; response.headers["Content-Length"]=str(len(response.get_data()))
     except Exception as exc: app.logger.exception("V1_DISCOVERY_ORCHESTRATION_ERROR %s",type(exc).__name__)

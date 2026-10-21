@@ -60,15 +60,21 @@ def expire_interrupted_jobs():
         "status":"failed","error":"QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION",
         "result_http_status":503,"result_json":json.dumps({"ok":False,"reason":"QUEUE_DEADLINE_EXCEEDED_NO_EXECUTION"}),"finished_at":now})
     for kind in ("campaign", "acceptance"):
-        CampaignExecutionJob.query.filter(
-            CampaignExecutionJob.kind == kind,
-            CampaignExecutionJob.status == "running",
-            CampaignExecutionJob.started_at < now-timedelta(seconds=execution_limit(kind)),
-        ).update({"status":"failed", "error":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED",
-                  "result_http_status":504,
-                  "result_json":json.dumps({"ok":False,"reason":"EXECUTION_INTERRUPTED_REVIEW_REQUIRED"}),
-                  "finished_at":now})
+        expired=CampaignExecutionJob.query.filter(
+            CampaignExecutionJob.kind==kind, CampaignExecutionJob.status=="running",
+            CampaignExecutionJob.started_at<now-timedelta(seconds=execution_limit(kind))).all()
+        for job in expired:
+            reason="EXECUTION_INTERRUPTED_REVIEW_REQUIRED"
+            CampaignExecutionJob.query.filter_by(id=job.id,status="running",started_at=job.started_at).update({
+                "status":"failed","error":reason,"result_http_status":504,
+                "result_json":failure_result(job,reason),"finished_at":now},synchronize_session=False)
     db.session.commit()
+
+
+def failure_result(job,reason):
+    try:progress=json.loads(job.result_json or "{}").get("progress") or {}
+    except (TypeError,ValueError):progress={}
+    return json.dumps({"ok":False,"reason":reason,"progress":progress})
 
 
 def execute_claimed_job(job_id):
@@ -86,6 +92,9 @@ def execute_claimed_job(job_id):
             changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=job.started_at).update(
                 {"result_json":json.dumps({"progress":{**progress,"updated_at":now.isoformat()+"Z"}})},synchronize_session=False)
             db.session.commit()
+            if changed and (progress.get('stage')!=previous.get('stage') or progress.get('campaign_index')!=previous.get('campaign_index')):
+                app.logger.warning('CAMPAIGN_PROGRESS job_id=%s stage=%s campaign_index=%s discovered=%s',
+                                   job_id,progress.get('stage'),progress.get('campaign_index'),progress.get('discovered'))
             if not changed:
                 raise TimeoutError("EXECUTION_CLAIM_LOST_REVIEW_REQUIRED")
         if job.kind == "acceptance":
@@ -117,7 +126,7 @@ def execute_claimed_job(job_id):
         job.status = "failed"
         job.error = "EXECUTION_FAILED_REVIEW_REQUIRED"
         job.result_http_status = 500
-        job.result_json = json.dumps({"ok":False,"reason":job.error})
+        job.result_json = failure_result(job,job.error)
     job.finished_at = datetime.utcnow()
     db.session.commit()
     return {"processed":1, "job_id":job_id, "ok":job.status == "completed"}
@@ -162,7 +171,7 @@ def process_next_execution_job(*, isolated=False):
     if job and job.status=="running":
         reason=reason or "EXECUTION_NO_TERMINAL_RECEIPT_REVIEW_REQUIRED"
         job.status="failed";job.error=reason;job.result_http_status=504
-        job.result_json=json.dumps({"ok":False,"reason":reason})
+        job.result_json=failure_result(job,reason)
         job.finished_at=datetime.utcnow();db.session.commit()
     return {"processed":1,"job_id":job_id,"ok":bool(job and job.status=="completed")}
 
