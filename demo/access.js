@@ -13,12 +13,13 @@
   campaign.disabled=true;mode.value='research';document.getElementById('prepare').disabled=true;
   window.workspaceAccessReady=requestJSON(API+'/api/chat/access',{cache:'no-store'}).then(function(access){
     window.workspaceAccess=access;
+    var accountLabel=document.getElementById("sidebar-account-label");if(accountLabel)accountLabel.textContent=access.signed_in?"Your workspace":"Public research";
     if(window.applyWorkspacePreferences)window.applyWorkspacePreferences();
     campaign.disabled=!access.sending_available;
     document.getElementById('prepare').disabled=!access.drafting_available;
     document.getElementById('prepare').title=access.drafting_available?'Prepare verified drafts without sending':'Sign in to save leads and prepare drafts';
-    if(access.signed_in){note.textContent=access.sending_available?'Workspace connected. Choose Research only or Research & email.':'Your workspace is connected. Campaign drafting and sending require a separately connected mailbox.';}
-    else{mode.value='research';note.innerHTML='Research is available. <a href="/login">Sign in for saved leads and email campaigns</a>.';}
+    if(access.signed_in){note.textContent=access.sending_available?'Workspace connected. Research prepares verified contacts and drafts. Activate outreach for each ready contact.':'Your workspace is connected. Campaign drafting and sending require a separately connected mailbox.';}
+    else{mode.value='research';note.innerHTML='Research is available. <a href="/login">Sign in to verify contacts and activate outreach</a>.';}
     if(window.syncComposerState)window.syncComposerState();
     return access;
   }).catch(function(){note.textContent='Research is available. Workspace access could not be checked; refresh before sending.';return window.workspaceAccess;});
@@ -36,6 +37,7 @@ window.renderResearchProgress=function(state){
     if(row.contact_status)html+='<p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
     if(row.error)html+='<p>Contact check needs attention. Other businesses can continue.</p>';
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
+    if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
     html+='</div>';
   });
   if(state.status==='running'||state.status==='queued')html+='<button class="ghost" id="cancel-research">Stop remaining work</button>';
@@ -112,6 +114,33 @@ window.renderBusinessCards=function(rows){
     var html='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status)+'</p><p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
     if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
+    if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
     return html+'</div>';
   }).join('');
 };
+
+// An explicit customer click is the only entry point to this send-capable path.
+window.outreachPending=new Set();
+window.outreachControl=function(id,state){
+  if(!state)return '';
+  var pending=window.outreachPending.has(Number(id));
+  var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending?' disabled':'')+'>'+(pending?'Activating…':esc(state.label))+'</button><p role="status">'+esc(state.reason)+'</p>';
+  if(state.state==='active'||state.state==='stopped')html+='<ol><li>Initial email: '+esc(state.initial)+'</li><li>Follow-ups: '+esc(state.followups)+'</li><li>Calendar: '+esc(state.booking)+'</li></ol>';
+  return html+'</div>';
+};
+window.activateLead=function(id){
+  id=Number(id);if(!Number.isInteger(id)||id<1||window.outreachPending.has(id))return;
+  window.outreachPending.add(id);
+  function update(state){document.querySelectorAll('[data-outreach-card="'+id+'"]').forEach(function(el){el.outerHTML=window.outreachControl(id,state);});}
+  document.querySelectorAll('[data-activate-outreach="'+id+'"]').forEach(function(b){b.disabled=true;b.textContent='Activating…';});
+  return workspaceMutation(window.activateOutreachPath(id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activate:true})})
+    .then(function(result){window.outreachPending.delete(id);update(result.outreach);})
+    .catch(function(error){
+      // Re-read persisted status after any failure; never retry a send automatically.
+      return requestJSON(API+'/api/chat/dashboard/leads/'+id,{cache:'no-store'}).then(function(result){
+        window.outreachPending.delete(id);update(result.outreach);
+        document.querySelectorAll('[data-outreach-card="'+id+'"] [role="status"]').forEach(function(el){el.textContent=result.outreach.state==='active'?result.outreach.reason:error.message;});
+      }).catch(function(){window.outreachPending.delete(id);document.querySelectorAll('[data-outreach-card="'+id+'"] [role="status"]').forEach(function(el){el.textContent='Activation could not be confirmed. Reopen My Leads to check its saved status before trying again.';});});
+    });
+};
+document.addEventListener('click',function(event){var button=event.target.closest('[data-activate-outreach]');if(button&&!button.disabled)window.activateLead(button.dataset.activateOutreach);});

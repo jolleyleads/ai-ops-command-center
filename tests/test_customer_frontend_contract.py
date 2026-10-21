@@ -30,3 +30,31 @@ def test_saved_email_mode_cannot_override_signed_out_access():
     script="const elements={territory:{},'task-mode':{}};const document={getElementById:id=>elements[id]};const window={};const preference=(key,fallback)=>key==='mode'?'campaign':fallback;"+function+";const result=[];for(const access of [undefined,{sending_available:false},{sending_available:true}]){window.workspaceAccess=access;applyPreferences();result.push(elements['task-mode'].value);}console.log(JSON.stringify(result));"
     result=subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
     assert json.loads(result.stdout)==['research','research','campaign']
+
+
+def test_research_prepares_without_sending_and_workflow_buttons_only_activate_on_click():
+    import subprocess
+    source=r'''
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('demo/index.html','utf8');
+const campaign=html.slice(html.indexOf('function campaignSearch(q){'),html.indexOf('\nfunction run(){'));
+assert(!campaign.includes('/launch')&&!campaign.includes('send_emails:true'));
+assert(campaign.includes('/api/chat/campaigns/prepare'));
+const access=fs.readFileSync('demo/access.js','utf8');
+const code=access.slice(access.indexOf('window.outreachPending=new Set();'));
+let sends=0;
+const context={window:{},esc:String,document:{addEventListener:()=>{}},workspaceMutation:()=>{sends++;throw Error('Render sent email');},Set,Number};
+vm.runInNewContext(code,context);
+for(const state of [{state:'held',can_activate:false,label:'Held',reason:'Missing evidence'},
+ {state:'ready',can_activate:true,label:'Activate outreach',reason:'Ready'},
+ {state:'active',can_activate:false,label:'Outreach active',reason:'Sent',initial:'Send confirmed',followups:'Scheduled',booking:'Waiting for an agreed meeting time'}]){
+ const rendered=context.window.outreachControl(7,state);
+ assert.equal(rendered.includes(' disabled'),!state.can_activate);
+ if(state.state==='active')assert(rendered.includes('Waiting for an agreed meeting time')&&!rendered.includes('Booking confirmed'));
+}
+context.window.outreachPending.add(7);
+assert(context.window.outreachControl(7,{can_activate:true,label:'Activate outreach'}).includes(' disabled'));
+assert.equal(sends,0);
+'''
+    result=subprocess.run(['node','-e',source],check=True,capture_output=True,text=True)
+    assert result.returncode==0

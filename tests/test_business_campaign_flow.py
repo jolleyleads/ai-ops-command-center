@@ -221,3 +221,121 @@ def test_generated_email_never_leaves_a_blank_signature(env,monkeypatch):
     lead=oa.OutreachLead(company='Acme',evidence_json='[]')
     draft=oa._draft_email(lead)
     assert draft['ok'] and draft['body'].endswith('Matthew Jolley\nAutoMake AI\n757 840 9648')
+
+
+def prepared_activation_lead(env,monkeypatch):
+    import v1_orchestration as orchestration
+    import src.email_validation as email_validation
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEY_VERSION','v1')
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEYS','v1=activation-test-only')
+    # Even a legacy global autosend flag cannot turn preparation into sending.
+    monkeypatch.setattr(orchestration,'AUTOSEND_ENABLED',True)
+    monkeypatch.setattr(oa,'run_ai',lambda **kw:{'ok':False})
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:'isolated-test-access')
+    page=company_page()
+    from src.company_identity import identity_proof
+    page['company_identity']=identity_proof('Acme',page,'https://acme.example/')
+    result={**page,'title':'Acme','company':'Acme','website':'https://acme.example/','location':'Norfolk, Virginia','classification':'Verified Lead','promotion_status':'verified','verification_gate':'passed','intent_score':80,'evidence':[{'url':page['url'],'title':'Acme HVAC services','snippet':page['page_text'],'observed_at':page['observed_at']}]}
+    monkeypatch.setattr(demo,'_smart_search',lambda *a,**k:{'results':[result],'verified_count':1})
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(email_validation,'check_email_domain',lambda *a,**k:{'domain_status':'mx_published'})
+    headers={'X-Operator-Token':'operator-unit-test','Idempotency-Key':'activation-preparation'}
+    job=env.post('/api/chat/campaigns/prepare',json={'target_customer':'Find 1 HVAC business','territory':'Norfolk, Virginia','target_count':1},headers=headers)
+    assert job.status_code==202
+    assert jobs.process_next_execution_job()['ok']
+    outcome=env.get(job.json['poll_url'],headers=headers).json['result']['outreach']
+    assert outcome['qualified']==outcome['drafted']==1 and outcome['sent']==0
+    assert oa.OutreachSendAttempt.query.count()==0
+    return oa.OutreachLead.query.one(),headers
+
+
+def test_explicit_activation_sends_approved_copy_once_and_schedules_followup(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    from src.outreach_copy import matches_initial_email,add_resume_attachment,RESUME_PATH
+    from email.message import EmailMessage
+    captured=[]
+    def send(address,subject,body,thread_id=''):
+        message=EmailMessage();message.set_content(body);add_resume_attachment(message,body)
+        captured.append((address,subject,body,list(message.iter_attachments())))
+        return {'ok':True,'message_id':'confirmed-message','thread_id':'confirmed-thread'}
+    monkeypatch.setattr(oa,'_gmail_send',send)
+    detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
+    assert detail['outreach']['can_activate'] is True
+    url=f'/api/chat/leads/{lead.id}/activate-outreach'
+    assert env.post(url,json={},headers=headers).status_code==400
+    first=env.post(url,json={'activate':True},headers=headers)
+    assert first.status_code==200 and first.json['outreach']['state']=='active'
+    due=lead.follow_up_due_at
+    assert lead.status=='sent' and due and lead.gmail_thread_id=='confirmed-thread'
+    assert len(captured)==1 and captured[0][0]==lead.contact_email
+    assert matches_initial_email(lead,json.loads(lead.evidence_json),captured[0][1],captured[0][2])
+    assert captured[0][2].count('👋')==captured[0][2].count('🙂')==1
+    assert len(captured[0][3])==1 and captured[0][3][0].get_filename()==RESUME_PATH.name
+    assert oa.OutreachBookingAttempt.query.count()==0
+    second=env.post(url,json={'activate':True},headers=headers)
+    assert second.status_code==200 and second.json['already_active'] is True
+    assert len(captured)==1 and lead.follow_up_due_at==due
+    # Existing scheduler consumes the activation's saved thread and due time.
+    monkeypatch.setattr(oa,'_gmail_thread_reply_state',lambda _:dict(ok=True,stop=False))
+    lead.follow_up_due_at=datetime.utcnow()-timedelta(seconds=1);oa.db.session.commit()
+    processed=oa.process_due_followups()
+    assert processed['ok'] and lead.follow_up_count==1 and lead.status=='followup_sent'
+    assert len(captured)==2
+
+
+def test_activation_holds_missing_evidence_and_uncertain_attempts(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Blocked contact sent'))
+    url=f'/api/chat/leads/{lead.id}/activate-outreach'
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='uncertain-activation',status='uncertain'))
+    oa.db.session.commit()
+    held=env.post(url,json={'activate':True},headers=headers)
+    assert held.status_code==409 and held.json['outreach']['state']=='review'
+    oa.OutreachSendAttempt.query.delete();lead.evidence_json='[]';oa.db.session.commit()
+    assert env.post(url,json={'activate':True},headers=headers).status_code==409
+
+
+def test_activation_preserves_suppression_and_resume_requirement(env,monkeypatch,tmp_path):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Suppressed or attachment-less email sent'))
+    url=f'/api/chat/leads/{lead.id}/activate-outreach'
+    import src.outreach_copy as copy
+    monkeypatch.setattr(copy,'RESUME_PATH',tmp_path/'missing.docx')
+    response=env.post(url,json={'activate':True},headers=headers)
+    assert response.status_code==409 and 'résumé' in response.json['error']
+    assert oa.OutreachSendAttempt.query.count()==0
+    oa._suppress(lead.contact_email);oa.db.session.commit()
+    assert env.post(url,json={'activate':True},headers=headers).status_code==409
+
+
+def test_activation_reconciles_confirmed_receipt_without_replaying_send(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Confirmed receipt replayed'))
+    sent_at=datetime.utcnow()-timedelta(hours=2)
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='confirmed-initial',status='sent',message_id='saved-message',thread_id='saved-thread',updated_at=sent_at))
+    oa.db.session.commit()
+    response=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers)
+    assert response.status_code==200 and response.json['already_active']
+    assert lead.gmail_message_id=='saved-message' and lead.sent_at==sent_at
+    assert lead.follow_up_due_at==sent_at+timedelta(days=oa.FIRST_FOLLOWUP_DAYS)
+
+
+def test_reconciliation_does_not_reactivate_an_opted_out_contact(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    lead.status='opted_out'
+    oa._suppress(lead.contact_email)
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='historical-confirmed',status='sent',message_id='saved-message',thread_id='saved-thread'))
+    oa.db.session.commit()
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Opt-out reactivated'))
+    response=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers)
+    assert response.status_code==409 and response.json['outreach']['state']=='stopped'
+    assert lead.status=='opted_out' and lead.follow_up_due_at is None
+
+
+def test_activation_checks_expired_google_grant_before_creating_send_attempt(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:(_ for _ in ()).throw(RuntimeError('Google token error invalid_grant')))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Expired Google grant sent email'))
+    response=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers)
+    assert response.status_code==409 and response.json['connection_required'] is True
+    assert oa.OutreachSendAttempt.query.count()==0 and oa.ExternalSideEffectCommand.query.count()==0

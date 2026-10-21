@@ -97,7 +97,7 @@ def validate_frontend(html, dashboard_script=""):
     if '<title>AutoMake AI</title>' not in html:errors.append('AutoMake AI page title missing')
     for name in ('prompt','territory','task-mode','send','prepare','workspace-menu','workspace-panel'):
         if name not in controls.ids:errors.append('Missing customer control: '+name)
-    for route in ('/api/research/jobs','/api/chat/campaigns/launch','/api/chat/campaigns/prepare'):
+    for route in ('/api/research/jobs','/activate-outreach','/api/chat/campaigns/prepare'):
         if route not in html:errors.append('Missing customer workflow: '+route)
     if not {'chat','leads','campaigns','conversations','appointments','settings'} <= controls.views:
         errors.append('Customer workspace navigation incomplete')

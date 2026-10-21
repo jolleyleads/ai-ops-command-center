@@ -34,7 +34,12 @@ def task_views(campaign_id):
         status=row.status;error=row.error
         if status in {'queued','running'} and parent and parent.status not in {'queued','running'}:
             status='interrupted';error='CAMPAIGN_INTERRUPTED_REVIEW_REQUIRED'
-        views.append({'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
+        lead_ids=result.get('lead_ids') or []
+        lead_id=lead_ids[0] if len(lead_ids)==1 and type(lead_ids[0]) is int else None
+        from outreach_automation import OutreachLead
+        from src.outreach_activation import activation_view
+        lead=db.session.get(OutreachLead,lead_id) if lead_id else None
+        views.append({'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
             'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
             'contact_status':'Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review')),

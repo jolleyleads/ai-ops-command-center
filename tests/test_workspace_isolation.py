@@ -1,6 +1,7 @@
 import time
 import pytest
 import commercial_app
+import smart_search_outreach_hook  # Register hooks before any test request.
 import customer_auth as auth
 import outreach_automation as oa
 import campaign_jobs as jobs
@@ -104,3 +105,18 @@ def test_search_get_cannot_trigger_outreach_and_post_requires_csrf(identities,mo
     assert owner.post('/api/smart-search',json={'query':'businesses'},headers={'X-CSRF-Token':'csrf'}).status_code==200
     orchestrate.assert_called_once()
     assert orchestrate.call_args.kwargs=={'draft_only':True}
+
+
+def test_activation_is_owned_authenticated_and_csrf_protected(identities,monkeypatch):
+    owner,customer=identities
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Unauthorized activation sent'))
+    lead=oa.OutreachLead(company='Isolated contact',status='drafted')
+    oa.db.session.add(lead);oa.db.session.flush()
+    import hashlib
+    security.claim('lead',lead.id,'customer-'+hashlib.sha256(b'customer@example.com').hexdigest());oa.db.session.commit()
+    url=f'/api/chat/leads/{lead.id}/activate-outreach'
+    assert oa.app.test_client().post(url,json={'activate':True}).status_code==401
+    assert owner.post(url,json={'activate':True}).status_code==403
+    assert owner.post(url,json={'activate':True},headers={'X-CSRF-Token':'csrf'}).status_code==404
+    assert customer.post(url,json={'activate':True},headers={'X-CSRF-Token':'csrf'}).status_code==403
+    assert owner.get(url).status_code==405
