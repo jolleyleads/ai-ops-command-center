@@ -47,12 +47,12 @@ window.activeResearchBubble=wait.querySelector(".bubble");
 var send=document.getElementById("send");send.disabled=true;
 (campaign?campaignSearch(q):deepSearch(q)).then(function(d){
 var research=d.discovery||d,rs=research.results||[],out=d.outreach||{},cards="";
-for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);
+if(d.business_progress&&d.business_progress.length)cards=window.renderBusinessCards(d.business_progress);else for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);
 var stats='<div class="stats"><div class="stat"><b>'+esc(rs.length)+'</b>Businesses found</div><div class="stat"><b>'+esc(research.verified||research.verified_count||0)+'</b>Confirmed</div>';
 if(campaign)stats+='<div class="stat"><b>'+esc(out.sent||0)+'</b>Emails sent</div><div class="stat"><b>'+esc(out.drafted||0)+'</b>Drafts prepared</div>';
 stats+='</div>';
 var detail=research.provider_message?'<p>'+esc(research.provider_message)+'</p>':'';
-if(campaign&&out.skipped&&out.skipped.length)detail+='<details><summary>Contact and email progress</summary><pre style="white-space:pre-wrap">'+esc(JSON.stringify(out.skipped,null,2))+'</pre></details>';
+if(campaign&&out.skipped&&out.skipped.length)detail+='<p>Some contacts may need review. Open your saved leads for verification details. Draft-ready means prepared, not sent.</p>';
 wait.querySelector(".bubble").innerHTML='<b>AutoMake AI</b><p>'+(campaign?'Campaign processed. Sent messages enter your follow-up workflow; meetings are booked after a real scheduling agreement.':'Research complete.')+'</p>'+stats+cards+detail+(rs.length?'':'<p>No matching businesses were confirmed in this search. The recorded diagnostics show where it stopped.</p>');
 }).catch(function(e){p.value=q;wait.querySelector(".bubble").innerHTML+='<p class="error">'+esc(e.message)+'</p><p>Available research remains above. Your request has been restored.</p>';}).then(function(){send.disabled=false;});}
 function loadLeads(){if(window.openWorkspace){window.openWorkspace("leads");return;}var m=add("ai",'<b>AutoMake AI</b><br><span class="loading"></span> Loading your saved leads…');requestJSON(API+"/api/pipeline",{cache:"no-store"}).then(function(d){var out="<b>Saved leads</b><br>";if(!d.length){out+="No saved leads yet.";}for(var i=0;i<d.length;i++){out+='<div class="lead"><b>Lead #'+esc(d[i].id)+"</b> "+esc(d[i].stage)+"<p>"+esc(d[i].lead)+"</p></div>";}m.querySelector(".bubble").innerHTML=out;}).catch(function(e){m.querySelector(".bubble").innerHTML='<span class="error">'+esc(e.message)+"</span>";});}

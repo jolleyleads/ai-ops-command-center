@@ -53,7 +53,7 @@ window.showRequestInterpretation=function(query,location,count,sending){
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
-  bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+rows.map(resultCard).join('');
+  bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):rows.map(resultCard).join(''));
   if(result.outreach)bubble.innerHTML+='<p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p>';
 };
 window.followResearchJob=function(job,kind){
@@ -69,7 +69,7 @@ window.followResearchJob=function(job,kind){
         window.renderResearchProgress(state);
         if(state.status==='completed'){
           sessionStorage.removeItem('automake-active-job');sessionStorage.removeItem('automake-research-request');sessionStorage.removeItem('automake-campaign-request');sessionStorage.removeItem('automake-draft-request');window.pendingCampaign=null;
-          resolve(state.result);return;
+          state.result.business_progress=(state.progress||{}).businesses||[];resolve(state.result);return;
         }
         if(state.status==='failed'||state.status==='cancelled'){
           sessionStorage.removeItem('automake-active-job');
@@ -99,4 +99,13 @@ window.requestKeyFor=function(kind,body){
   try{saved=JSON.parse(sessionStorage.getItem(name)||'null');}catch(e){}
   if(!saved||saved.body!==body){saved={body:body,key:crypto.randomUUID()};sessionStorage.setItem(name,JSON.stringify(saved));}
   return saved.key;
+};
+
+window.renderBusinessCards=function(rows){
+  return rows.map(function(row){
+    var html='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status)+'</p><p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
+    if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
+    if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
+    return html+'</div>';
+  }).join('');
 };
