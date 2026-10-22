@@ -171,3 +171,15 @@ def test_public_access_hint_and_pending_request_preservation(client):
     script=client.get('/chat-operator/access.js').text
     assert 'sessionStorage' in script and 'automake-pending-prompt' in script
     assert 'campaign.disabled=!access.sending_available' in script
+
+
+def test_login_preserves_only_public_research_ownership_and_rotates_auth_state(client,monkeypatch):
+    with client.session_transaction(base_url='https://automakeai.live') as stored:
+        stored['research_workspace']='public-browser-research'
+        stored['csrf_token']='old-csrf'
+        stored['untrusted_extra']='must-clear'
+    pending=start(client);mock_google(monkeypatch,pending)
+    assert callback(client,pending).status_code==303
+    with client.session_transaction(base_url='https://automakeai.live') as stored:
+        assert stored['research_workspace']=='public-browser-research'
+        assert stored['csrf_token']!='old-csrf' and 'untrusted_extra' not in stored

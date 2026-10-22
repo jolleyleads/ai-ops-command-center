@@ -143,3 +143,26 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
   No migration, infrastructure, credential replacement or new spending.
 - Next: final regression/diff review, publish PR, inspect CI, merge approved change,
   monitor automatic deployment, verify exact revision and read-only live behavior.
+
+## Select any research business — 2026-10-22
+
+- Base `377f54d1345157393d705810f29243fe743e49b1`, isolated branch
+  `feature/select-any-workflow`.
+- Confirmed cause: plain result cards had no outreach action; held saved leads
+  exposed a disabled ready-only action. Added selection references and an
+  Activate workflow button before contact/draft readiness.
+- Existing durable jobs now process exactly the selected owned business, prepare
+  evidence/contact/draft work, then invoke the shared protected send path under
+  an explicit scoped grant. Queue-ranking eligibility can defer to manual choice;
+  qualification, contact, approved copy/résumé and all send gates still apply.
+- Duplicate clicks, result reordering, cross-browser ownership, CSRF, cancellation,
+  duplicate recipients, uncertain sends, bounded retries, reload observation and
+  login restoration have targeted coverage. No real prospect emails or Calendar
+  writes were performed. No migrations/infrastructure/secret changes.
+- Full local regression: 781 passed, 7 PostgreSQL-only skips. Final focused
+  publication checks: 37 passed, including canonical selection idempotency.
+  GitHub PostgreSQL CI and deployment verification pending.
+- Rollback keeps legacy generic campaign flags draft-only. Operating details and
+  limitations: `docs/selected-business-workflows.md`.
+- Next: final regression/diff review, CI, merge/deploy and verify the exact live
+  revision plus the button on genuine source-backed candidate cards.

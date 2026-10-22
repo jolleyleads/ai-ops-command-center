@@ -40,7 +40,7 @@ window.renderResearchProgress=function(state){
     if(row.error)html+='<p>Contact check needs attention. Other businesses can continue.</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
-    if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
+    if(window.businessAction)html+=window.businessAction(row);
     html+='</div>';
   });
   if(state.status==='running'||state.status==='queued')html+='<button class="ghost" id="cancel-research">Stop remaining work</button>';
@@ -55,7 +55,7 @@ window.renderResearchProgress=function(state){
 window.showRequestInterpretation=function(query,location,count,sending){
   if(window.syncComposerState)window.syncComposerState();
   var bubble=window.activeResearchBubble;if(!bubble)return;
-  bubble.innerHTML='<b>AutoMake AI</b><p>'+esc(query)+'</p><p>Territory: '+esc(location||'Not restricted')+' · Requested: '+esc(count)+'.</p><p>I’ll show source-backed candidates as they arrive. Contact verification is separate. '+(sending?'Sending requires your selected campaign authorization and all safety checks.':'Sending is off.')+'</p>';
+  bubble.innerHTML='<b>AutoMake AI</b><p>'+esc(query)+'</p><p>Territory: '+esc(location||'Not restricted')+' · Requested: '+esc(count)+'.</p><p>I’ll show source-backed candidates as they arrive. Contact verification is separate. '+(sending?'Sending requires your selected campaign authorization and all safety checks.':'This search does not send emails. Activate a business to start its outreach workflow.')+'</p>';
   var offer=document.getElementById('customer-offer');if(offer&&offer.value)bubble.innerHTML+='<p>Offer for qualification: '+esc(offer.value)+'. Change this in Task options if needed.</p>';
 };
 window.renderSavedJobResult=function(result){
@@ -79,7 +79,7 @@ window.followResearchJob=function(job,kind){
         window.latestResearchProgress=state.progress||{};
         window.renderResearchProgress(state);
         if(state.status==='completed'){
-          sessionStorage.removeItem('automake-active-job');sessionStorage.removeItem('automake-research-request');sessionStorage.removeItem('automake-campaign-request');sessionStorage.removeItem('automake-draft-request');window.pendingCampaign=null;
+          sessionStorage.setItem('automake-last-research-job',JSON.stringify({job_id:job.job_id,poll_url:job.poll_url,kind:kind,territory:territory.value}));sessionStorage.removeItem('automake-active-job');sessionStorage.removeItem('automake-research-request');sessionStorage.removeItem('automake-campaign-request');sessionStorage.removeItem('automake-draft-request');window.pendingCampaign=null;
           state.result.business_progress=(state.progress||{}).businesses||[];resolve(state.result);return;
         }
         if(state.status==='failed'||state.status==='cancelled'){
@@ -97,7 +97,7 @@ window.followResearchJob=function(job,kind){
   });
 };
 (function restoreResearch(){
-  var job;try{job=JSON.parse(sessionStorage.getItem('automake-active-job')||'null');}catch(e){}
+  var job;try{job=JSON.parse(sessionStorage.getItem('automake-active-job')||sessionStorage.getItem('automake-last-research-job')||'null');}catch(e){}
   if(!job)return;
   if(job.territory!==undefined){document.getElementById('territory').value=job.territory;window.workspaceAccessReady.then(function(){document.getElementById('territory').value=job.territory;});}
   var wait=add('ai','<b>Restoring your saved research…</b>');window.activeResearchBubble=wait.querySelector('.bubble');
@@ -120,7 +120,7 @@ window.renderBusinessCards=function(rows){
     if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
-    if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
+    if(window.businessAction)html+=window.businessAction(row);
     return html+'</div>';
   }).join('');
 };
@@ -161,3 +161,81 @@ window.activateLead=function(id){
     });
 };
 document.addEventListener('click',function(event){var button=event.target.closest('[data-activate-outreach]');if(button&&!button.disabled)window.activateLead(button.dataset.activateOutreach);});
+
+// Selected-business workflows: rendering and reloads only observe persisted work.
+window.selectedWorkflows={};
+window.selectionId=function(ref){return ref.kind+':'+(ref.lead_id||ref.job_id||'')+':'+(ref.key||'');};
+window.selectionControl=function(ref){
+  if(!ref)return '';
+  var id=window.selectionId(ref),entry=window.selectedWorkflows[id]||{},state=entry.state||{},workflow=(state.result||{}).workflow||{};
+  var running=entry.pending||state.status==='queued'||state.status==='running';
+  var active=workflow.state==='active',held=workflow.state==='held';
+  var review=((workflow.outreach||{}).state==='review'||(workflow.outreach||{}).state==='stopped');
+  var stopped=state.status==='failed'||state.status==='cancelled';
+  var disabled=running||active||review||stopped;
+  var label=stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Outreach active':held?'Retry workflow':'Activate workflow';
+  var reason=entry.error||workflow.reason||(running?'Verifying this business and contact, then preparing your approved message and résumé.':'Starts verification and draft preparation, then sends your approved message and résumé when all required checks pass.');
+  if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
+  var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p role="status">'+esc(reason)+'</p>';
+  if((workflow.reason_codes||[]).length)html+='<p class="meta">'+esc(workflow.reason_codes.join(' · ').toLowerCase().replace(/_/g,' '))+'</p>';
+  if(entry.error&&!(window.workspaceAccess||{}).signed_in)html+='<p><a href="/login">Sign in to activate this business</a>. Your research will be restored when you return.</p>';
+  if(workflow.outreach&&active)html+='<ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol>';
+  if(running&&entry.job)html+='<button class="ghost" type="button" data-cancel-selection="'+esc(id)+'">Stop remaining work</button><p class="meta">A send already in progress may still complete.</p>';
+  return html+'</div>';
+};
+window.businessAction=function(row){
+  if(row.lead_id&&row.outreach&&['active','stopped','review'].indexOf(row.outreach.state)!==-1)return window.outreachControl(row.lead_id,row.outreach);
+  var ref=row.selection||(row.lead_id?{kind:'lead',lead_id:row.lead_id}:null);
+  if(ref)return window.selectionControl(ref);
+  return row.lead_id&&window.outreachControl?window.outreachControl(row.lead_id,row.outreach):'';
+};
+window.refreshSelectionCards=function(id){
+  var entry=window.selectedWorkflows[id];if(!entry)return;
+  document.querySelectorAll('[data-selection-card]').forEach(function(card){if(card.dataset.selectionCard===id)card.outerHTML=window.selectionControl(entry.ref);});
+};
+window.saveSelectedWorkflows=function(){
+  var jobs={};Object.keys(window.selectedWorkflows).forEach(function(id){var e=window.selectedWorkflows[id];if(e.job)jobs[id]={ref:e.ref,job:e.job,offer:e.offer};});
+  try{sessionStorage.setItem('automake-selected-workflows',JSON.stringify(jobs));}catch(e){}
+};
+window.observeSelectedWorkflow=function(id){
+  var entry=window.selectedWorkflows[id];if(!entry||!entry.job||entry.observing)return;
+  entry.observing=true;var failures=0,started=Date.now();
+  function poll(){
+    requestJSON(API+entry.job.poll_url,{cache:'no-store'}).then(function(state){
+      entry.state=state;entry.error='';failures=0;window.refreshSelectionCards(id);
+      if(state.status==='queued'||state.status==='running'){
+        if(Date.now()-started<2700000)setTimeout(poll,2000);else{entry.observing=false;entry.error='The workflow is saved. Reload to keep checking it.';window.refreshSelectionCards(id);}
+      }else entry.observing=false;
+    }).catch(function(error){
+      if(++failures<4){setTimeout(poll,failures*2000);return;}
+      entry.observing=false;entry.error='Status could not be confirmed. Reload to check the saved workflow; do not start another send.';window.refreshSelectionCards(id);
+    });
+  }poll();
+};
+window.activateSelection=function(ref){
+  var id=window.selectionId(ref),entry=window.selectedWorkflows[id]||{ref:ref};
+  if(entry.pending)return;
+  window.selectedWorkflows[id]=entry;entry.pending=true;entry.error='';window.refreshSelectionCards(id);
+  var offer=document.getElementById('customer-offer').value;
+  var body={selection:ref,offer:offer,activate:true};
+  if(entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
+  return workspaceMutation('/api/chat/workflows/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(job){
+      if(!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(job.poll_url||''))throw new Error('Invalid saved workflow.');
+      entry.pending=false;entry.offer=offer;entry.job={job_id:job.job_id,poll_url:job.poll_url};entry.state=job;
+      window.saveSelectedWorkflows();window.refreshSelectionCards(id);window.observeSelectedWorkflow(id);
+    }).catch(function(error){entry.pending=false;entry.error=error.message;window.refreshSelectionCards(id);});
+};
+document.addEventListener('click',function(event){
+  var button=event.target.closest('[data-select-workflow]');
+  if(button&&!button.disabled){try{window.activateSelection(JSON.parse(button.dataset.selectWorkflow));}catch(e){}return;}
+  var stop=event.target.closest('[data-cancel-selection]');if(!stop)return;
+  var id=stop.dataset.cancelSelection,entry=window.selectedWorkflows[id];if(!entry||!entry.job)return;
+  stop.disabled=true;workspaceMutation(entry.job.poll_url+'/cancel',{method:'POST'}).then(function(state){entry.state=state;window.refreshSelectionCards(id);}).catch(function(error){entry.error=error.message;window.refreshSelectionCards(id);});
+});
+(function restoreSelectedWorkflows(){
+  var saved;try{saved=JSON.parse(sessionStorage.getItem('automake-selected-workflows')||'{}');}catch(e){return;}
+  Object.keys(saved).slice(0,50).forEach(function(id){var entry=saved[id];if(!entry||!entry.ref||!entry.job||!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(entry.job.poll_url||''))return;
+    window.selectedWorkflows[id]={ref:entry.ref,job:entry.job,offer:entry.offer};window.observeSelectedWorkflow(id);
+  });
+})();

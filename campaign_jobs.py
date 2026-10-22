@@ -105,7 +105,12 @@ def execute_claimed_job(job_id):
             result, code = response.get_json(), response.status_code
         else:
             with execution_scope(execution_limit(job.kind)-5, report_stage), reporting_campaign(job_id):
-                result, stage, reason = demo._run_campaign(json.loads(job.payload_json))
+                payload=json.loads(job.payload_json)
+                if payload.get('_selected_workflow'):
+                    from src.selection_workflows import run_selected_workflow
+                    result,stage,reason=run_selected_workflow(payload,job_id)
+                else:
+                    result, stage, reason = demo._run_campaign(payload)
             code = 200 if result else 500
             result = result or {"ok":False, "stage":stage, "reason":reason}
         job=db.session.get(CampaignExecutionJob,job_id)
@@ -210,7 +215,8 @@ def _view(job):
         result["active_executions"]=CampaignExecutionJob.query.filter_by(status="running").count()
     if job.status in {"completed", "failed", "cancelled"}:
         result.update(result=json.loads(job.result_json or "{}"), result_http_status=job.result_http_status)
-    return result
+    from src.selection_refs import annotate
+    return annotate(result,'campaign',job.id)
 
 
 def enqueue_execution(kind, payload, request_key=None):
