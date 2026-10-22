@@ -58,3 +58,30 @@ assert.equal(sends,0);
 '''
     result=subprocess.run(['node','-e',source],check=True,capture_output=True,text=True)
     assert result.returncode==0
+
+
+def test_candidate_selection_renders_before_drafts_and_reload_never_creates_authorization():
+    import subprocess
+    script=r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('demo/access.js','utf8');
+const code=source.slice(source.indexOf('// Selected-business workflows:'));
+let posts=0,reads=0,saved='{}',last;
+const context={API:'',window:{workspaceAccess:{signed_in:true}},esc:String,document:{addEventListener:()=>{},querySelectorAll:()=>[],getElementById:()=>({value:'Offer'})},
+ sessionStorage:{getItem:()=>saved,setItem:(key,value)=>{saved=value;}},setTimeout:()=>{},Date,JSON,Promise,
+ workspaceMutation:(url,opts)=>{posts++;last=JSON.parse(opts.body);return Promise.resolve({job_id:'one',status:'queued',poll_url:'/api/demo/campaigns/jobs/one'});},
+ requestJSON:()=>{reads++;return Promise.resolve({status:'completed',result:{workflow:{state:'held',reason:'Contact pending'}}});}};
+vm.runInNewContext(code,context);
+const ref={kind:'research',job_id:'research-one',key:'source-one'};
+const html=context.window.selectionControl(ref);
+assert(html.includes('Activate workflow')&&!html.includes(' disabled'));
+assert(html.includes('then sends')&&html.includes('checks pass'));
+assert.equal(posts,0);assert.equal(reads,0);
+(async()=>{
+ const pending=context.window.activateSelection(ref);context.window.activateSelection(ref);await pending;await Promise.resolve();
+ assert.equal(posts,1);assert.equal(last.activate,true);assert.equal(last.selection.key,'source-one');assert(!last.contact_email);
+ const before=reads;vm.runInNewContext(code,context);await Promise.resolve();
+ assert.equal(posts,1);assert(reads>before);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

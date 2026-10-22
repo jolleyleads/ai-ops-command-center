@@ -229,7 +229,10 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
         if not isinstance(result,dict): continue
         company=_clean(result.get("company") or result.get("name") or result.get("business_name") or result.get("title"),300)
         score=_evidence_score(result)
-        if not company or score<QUEUE_MIN_SCORE or not _verified(result): continue
+        # An explicit selection can start evidence/contact work before discovery
+        # ranking is complete. Qualification and sending still fail closed.
+        selected=payload.get('_selected_workflow') is True
+        if not company or (not selected and (score<QUEUE_MIN_SCORE or not _verified(result))): continue
         summary["eligible"]+=1
         urls=_candidate_urls(result); source_url=urls[0] if urls else ""
         if not source_url:
@@ -238,12 +241,29 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
             if not acquired:
                 summary['skipped'].append({'company':company,'reason':'discovery_in_progress'})
                 continue
-            existing=OutreachLead.query.filter_by(company=company,source_url=source_url).first()
+            existing_query=OutreachLead.query.filter_by(company=company,source_url=source_url)
+            if selected:
+                from workspace_security import scope
+                existing_query=existing_query.filter(scope(OutreachLead,'lead',payload.get('_selected_workspace')))
+            existing=existing_query.first()
             result={**result,"contact_location":payload.get("location") or result.get("contact_location") or result.get("location"),"query":payload.get("query") or payload.get("goal") or payload.get("intent_signal"),"_campaign_context":campaign_context(payload,result)}
             if existing:
                 summary["lead_ids"].append(existing.id)
                 from lead_recovery import LeadRecovery, schedule_recovery
                 held = db.session.get(LeadRecovery, existing.id)
+                if selected:
+                    from outreach_automation import OutreachSendAttempt
+                    safe_refresh=(existing.status in {'needs_evidence','qualified','drafted'}
+                        and not existing.gmail_message_id and not existing.sent_at
+                        and not OutreachSendAttempt.query.filter_by(lead_id=existing.id).first())
+                    if safe_refresh and not (held and held.state=='running'):
+                        refreshed=resume_discovery_lead(existing,result)
+                        if refreshed.get('ok'):
+                            summary['qualified']+=1;summary['drafted']+=1
+                        else:
+                            summary['skipped'].append({'company':company,'lead_id':existing.id,'reason':'verification_held',
+                                                      'reason_codes':refreshed.get('reason_codes') or []})
+                    continue
                 # Reusing an unsent lead must not reuse eligibility for a different
                 # offer. Preserve sent/uncertain conversations and active leases.
                 from outreach_automation import OutreachSendAttempt, _server_qualification_inputs
@@ -281,6 +301,9 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
             db.session.add(lead); db.session.flush();
             from src.campaign_reporting import attribute_new_lead
             attribute_new_lead(lead)
+            if selected:
+                from workspace_security import claim
+                claim('lead',lead.id,payload['_selected_workspace'])
             db.session.commit(); summary["saved"]+=1; summary["lead_ids"].append(lead.id)
             qualification=_store_qualification(lead)
             if not qualification.get("ok"):

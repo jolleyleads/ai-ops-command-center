@@ -151,6 +151,8 @@ def get_research_job(job_id):
     payload["progress"]=(json.loads(job.result_json or "{}").get("progress") or {})
     if job.status in {"completed","failed","cancelled"}:payload["result"]=json.loads(job.result_json)
     if job.status in {"queued","running"}:kick_worker()
+    from src.selection_refs import annotate
+    annotate(payload,'research',job.id)
     response=jsonify(payload);response.headers["Cache-Control"]="no-store"
     return response
 

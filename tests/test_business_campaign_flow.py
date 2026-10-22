@@ -381,3 +381,199 @@ def test_activation_checks_expired_google_grant_before_creating_send_attempt(env
     response=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers)
     assert response.status_code==409 and response.json['connection_required'] is True
     assert oa.OutreachSendAttempt.query.count()==0 and oa.ExternalSideEffectCommand.query.count()==0
+
+
+def selected_body(ref):
+    return {'selection':ref,'offer':'Inquiry follow-up and appointment scheduling automation','activate':True}
+
+
+def test_selection_prepares_missing_draft_then_sends_only_chosen_contact_once(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    lead.subject='';lead.body='';lead.status='needs_evidence';oa.db.session.commit()
+    other=oa.OutreachLead(company='Unchosen business',source_url='https://unchosen.example/',status='needs_evidence')
+    oa.db.session.add(other);oa.db.session.commit()
+    captured=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:captured.append(a) or {'ok':True,'message_id':'selected-send','thread_id':'selected-thread'})
+    body=selected_body({'kind':'lead','lead_id':lead.id})
+    launch=env.post('/api/chat/workflows/activate',json=body,headers=headers)
+    assert launch.status_code==202 and captured==[]
+    queued=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id'])
+    grant=json.loads(queued.payload_json)
+    assert grant['_selection_send_authorized'] is True
+    assert grant['send_authorized'] is False and grant['draft_only'] is True
+    processed=jobs.process_next_execution_job();assert processed['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='active',result
+    assert len(captured)==1 and captured[0][0]=='alice@acme.example'
+    assert lead.body.count('👋')==lead.body.count('🙂')==1
+    assert lead.follow_up_due_at and lead.gmail_thread_id=='selected-thread'
+    assert other.status=='needs_evidence' and not other.gmail_message_id
+    duplicate=env.post('/api/chat/workflows/activate',json={**body,'selection':{**body['selection'],'ignored_nonce':'cannot-create-another-grant'}},headers=headers)
+    assert duplicate.json['job_id']==launch.json['job_id']
+    assert jobs.process_next_execution_job().get('processed')==0
+    assert oa.OutreachSendAttempt.query.count()==1 and len(captured)==1
+
+
+def test_selection_on_source_candidate_is_available_before_a_draft_and_does_not_trust_client_fields(env,monkeypatch):
+    from background_research import ResearchJob
+    from workspace_security import claim,OWNER
+    from src.selection_refs import reference
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    lead.subject='';lead.body='';lead.status='needs_evidence';oa.db.session.commit()
+    row={'company':'Acme','website':'https://acme.example/','location':'Norfolk, Virginia','classification':'Candidate','intent_score':5}
+    research=ResearchJob(id='selection-source',prompt_text='Find 10 HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
+    oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
+    view=env.get('/api/research/jobs/'+research.id,headers=headers).json
+    ref=view['result']['results'][0]['selection'];assert ref==reference('research',research.id,row)
+    research.result_json=json.dumps({'results':[{'company':'Not chosen','website':'https://not-chosen.example/'},row]});oa.db.session.commit()
+    captured=[];monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:captured.append(a) or {'ok':True,'message_id':'candidate-send','thread_id':'candidate-thread'})
+    body={**selected_body(ref),'_selected_business':{'company':'Injected','website':'https://attacker.example/'},'contact_email':'guessed@attacker.example','draft_only':True}
+    launch=env.post('/api/chat/workflows/activate',json=body,headers=headers)
+    assert launch.status_code==202
+    payload=json.loads(oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']).payload_json)
+    assert payload['_selected_business']['company']=='Acme' and payload['_selected_business']['intent_score']==5
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='active',result
+    assert len(captured)==1 and captured[0][0]=='alice@acme.example'
+    assert oa.OutreachLead.query.count()==1
+
+
+def test_unverified_selected_business_stays_held_without_inventing_contact_or_sending(env,monkeypatch):
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEY_VERSION','v1')
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEYS','v1=held-selection-test')
+    from background_research import ResearchJob
+    from workspace_security import claim,OWNER
+    from src.selection_refs import reference
+    row={'company':'Unconfirmed company','website':'https://unconfirmed.example/','classification':'Candidate','intent_score':0}
+    research=ResearchJob(id='held-selection',prompt_text='Find 10 HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
+    oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
+    monkeypatch.setattr(search,'_page_snapshot',lambda *a:{'fetch_error':'HTTP_503'})
+    monkeypatch.setattr(search,'_exa_search',lambda *a:{'results':[]})
+    import v1_orchestration as orchestration
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([],{}))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Unsupported prospect must not send'))
+    headers={'X-Operator-Token':'operator-unit-test'}
+    launch=env.post('/api/chat/workflows/activate',json=selected_body(reference('research',research.id,row)),headers=headers)
+    assert launch.status_code==202
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='held'
+    assert result['outreach']['sent']==0 and oa.OutreachSendAttempt.query.count()==0
+    lead=oa.OutreachLead.query.one();assert not lead.contact_email and not lead.body
+    assert 'OFFER_NEED_EVIDENCE_REQUIRED' in result['workflow']['reason_codes']
+
+
+def test_public_research_selection_survives_sign_in_scope_without_cross_browser_access(env,monkeypatch):
+    import background_research as research
+    from src.selection_refs import reference
+    monkeypatch.setattr(research,'kick_worker',lambda:None)
+    launched=env.post('/api/research/jobs',json={'prompt':'Find 10 HVAC businesses','location':'Norfolk, Virginia'})
+    row={'company':'Acme','website':'https://acme.example/','classification':'Candidate'}
+    saved=oa.db.session.get(research.ResearchJob,launched.json['job_id']);saved.status='completed';saved.result_json=json.dumps({'results':[row]});oa.db.session.commit()
+    headers={'X-Operator-Token':'operator-unit-test'}
+    ref=reference('research',saved.id,row)
+    other=oa.app.test_client()
+    assert other.post('/api/chat/workflows/activate',json=selected_body(ref),headers=headers).status_code==404
+    # The same browser can observe and select its pre-login public research.
+    assert env.get(launched.json['poll_url'],headers=headers).status_code==200
+    assert env.post('/api/chat/workflows/activate',json=selected_body(ref),headers=headers).status_code==202
+
+
+def test_selection_requires_explicit_action_auth_csrf_and_resource_ownership(env,monkeypatch):
+    from workspace_security import claim
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    body=selected_body({'kind':'lead','lead_id':lead.id})
+    assert env.post('/api/chat/workflows/activate',json=body).status_code==401
+    assert env.get('/api/chat/workflows/activate',headers=headers).status_code==405
+    assert env.post('/api/chat/workflows/activate',json={**body,'activate':False},headers=headers).status_code==400
+    claim('lead',lead.id,'another-workspace');oa.db.session.commit()
+    assert env.post('/api/chat/workflows/activate',json=body,headers=headers).status_code==404
+    monkeypatch.setattr(oa,'_operator_session_authorized',lambda:True)
+    monkeypatch.setattr(oa,'_csrf_ok',lambda:False)
+    assert env.post('/api/chat/workflows/activate',json=body).status_code==403
+    assert oa.OutreachSendAttempt.query.count()==0
+
+
+def test_selected_workflow_checks_cancellation_after_drafting_before_sending(env,monkeypatch):
+    import v1_orchestration as orchestration
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    body=selected_body({'kind':'lead','lead_id':lead.id})
+    launch=env.post('/api/chat/workflows/activate',json=body,headers=headers)
+    serial=orchestration._orchestrate_discovery_serial
+    def cancel(*a,**kw):
+        result=serial(*a,**kw)
+        job=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']);job.status='cancelled';oa.db.session.commit()
+        return result
+    monkeypatch.setattr(orchestration,'_orchestrate_discovery_serial',cancel)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Cancelled workflow sent'))
+    jobs.process_next_execution_job()
+    assert oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']).status=='cancelled'
+    assert oa.OutreachSendAttempt.query.count()==0
+
+
+def test_selection_invalid_google_grant_holds_without_send_attempt_and_retry_is_bounded(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:(_ for _ in ()).throw(RuntimeError('invalid_grant')))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Expired grant sent'))
+    body=selected_body({'kind':'lead','lead_id':lead.id})
+    launch=env.post('/api/chat/workflows/activate',json=body,headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='held' and 'Reconnect Google' in result['workflow']['reason']
+    assert oa.OutreachSendAttempt.query.count()==0
+    retry={**body,'retry_from':launch.json['job_id']}
+    assert env.post('/api/chat/workflows/activate',json=retry,headers=headers).status_code==429
+    previous=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']);previous.finished_at=datetime.utcnow()-timedelta(minutes=2);oa.db.session.commit()
+    next_job=env.post('/api/chat/workflows/activate',json=retry,headers=headers)
+    assert next_job.status_code==202 and next_job.json['job_id']!=launch.json['job_id']
+    assert env.post('/api/chat/workflows/activate',json=retry,headers=headers).json['job_id']==next_job.json['job_id']
+
+
+def test_selected_uncertain_send_cannot_replay_or_refresh_existing_conversation(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    original=(lead.subject,lead.body,lead.evidence_json)
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='selected-uncertain',status='uncertain'));oa.db.session.commit()
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Uncertain attempt replayed'))
+    launch=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='held' and result['workflow']['outreach']['state']=='review'
+    assert (lead.subject,lead.body,lead.evidence_json)==original and oa.OutreachSendAttempt.query.count()==1
+    previous=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']);previous.finished_at=datetime.utcnow()-timedelta(minutes=2);oa.db.session.commit()
+    body={**selected_body({'kind':'lead','lead_id':lead.id}),'retry_from':launch.json['job_id']}
+    assert env.post('/api/chat/workflows/activate',json=body,headers=headers).status_code==409
+
+
+def test_selected_recipient_already_sent_on_another_record_is_held(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    other=oa.OutreachLead(company='Another source identity',contact_email=lead.contact_email,status='sent')
+    oa.db.session.add(other);oa.db.session.flush()
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=other.id,kind='initial',sequence=0,recipient=lead.contact_email,
+        idempotency_key='other-record-send',status='sent',message_id='confirmed-other-send',thread_id='confirmed-other-thread'))
+    oa.db.session.commit()
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Duplicate recipient sent again'))
+    launch=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='held'
+    assert 'DUPLICATE_RECIPIENT_SEND_REVIEW_REQUIRED' in result['workflow']['reason_codes']
+    assert oa.OutreachSendAttempt.query.count()==1 and not lead.gmail_message_id
+
+
+def test_selected_verification_retries_have_an_aggregate_hourly_limit(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    body=selected_body({'kind':'lead','lead_id':lead.id})
+    current=env.post('/api/chat/workflows/activate',json=body,headers=headers)
+    assert current.status_code==202
+    for index in range(4):
+        job=oa.db.session.get(jobs.CampaignExecutionJob,current.json['job_id'])
+        job.status='completed';job.finished_at=datetime.utcnow()-timedelta(minutes=2)
+        job.result_json=json.dumps({'ok':True,'workflow':{'state':'held','lead_id':lead.id,'reason':'Contact check held'}})
+        oa.db.session.commit()
+        retry=env.post('/api/chat/workflows/activate',json={**body,'retry_from':job.id},headers=headers)
+        if index<3:
+            assert retry.status_code==202;current=retry
+        else:
+            assert retry.status_code==429 and 'hourly' in retry.json['error']
+    assert oa.OutreachSendAttempt.query.count()==0

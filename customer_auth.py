@@ -127,7 +127,10 @@ def google_callback():
             return login_page('Workspace access is not configured. Please contact the owner.', 503)
     except (requests.RequestException, GoogleAuthError, ValueError, KeyError, TypeError):
         return login_page('We could not complete Google sign-in. Please try again.', 502)
+    public_research=session.get('research_workspace')
     session.clear()
+    if isinstance(public_research,str) and public_research.startswith('public-'):
+        session['research_workspace']=public_research
     session['google_identity'] = identity
     session['csrf_token'] = secrets.token_urlsafe(32)
     session.permanent = True

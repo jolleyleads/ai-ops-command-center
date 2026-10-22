@@ -107,7 +107,7 @@ def dashboard():
                         'has_sent_message':bool(lead.gmail_message_id), 'replied_at':iso(lead.replied_at),
                         'contact_name':lead.contact_name or '', 'has_email':bool(lead.contact_email),
                         'follow_up_due_at':iso(lead.follow_up_due_at), 'updated_at':iso(lead.updated_at),
-                        'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead), 'prospect_quality':for_lead(lead)})
+                        'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead), 'prospect_quality':for_lead(lead),'selection':{'kind':'lead','lead_id':lead.id}})
     return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,lead_offset=lead_offset,campaign_offset=campaign_offset,lead_total=lead_query.count(),campaign_total=campaign_query.count(),
                    generated_at=iso(datetime.utcnow()), scope='customer_workspace')
 
@@ -205,7 +205,6 @@ def settings():
 @protected
 def activate_contact_outreach(lead_id):
     """An explicit click activates one owned contact, never a search GET."""
-    from src.outreach_activation import activation_view, reconcile_confirmed_initial
     if current_workspace()!=OWNER:
         return jsonify(ok=False,error='A connected workspace mailbox is required.'),403
     lead=db.session.get(oa.OutreachLead,lead_id)
@@ -213,31 +212,5 @@ def activate_contact_outreach(lead_id):
         return jsonify(ok=False,error='This lead was not found.'),404
     if (request.get_json(silent=True) or {}).get('activate') is not True:
         return jsonify(ok=False,error='Explicit outreach activation is required.'),400
-    reconcile_confirmed_initial(lead)
-    state=activation_view(lead)
-    if state['state']=='active':
-        return jsonify(ok=True,already_active=True,lead_id=lead.id,outreach=state)
-    if not state['can_activate']:
-        return jsonify(ok=False,error=state['reason'],outreach=state),409
-    # Fail before a provider attempt if the pinned résumé cannot be attached.
-    from email.message import EmailMessage
-    from src.outreach_copy import add_resume_attachment, RESUME_LINE
-    try:add_resume_attachment(EmailMessage(),RESUME_LINE)
-    except (OSError,ValueError):return jsonify(ok=False,error='The approved résumé attachment requires attention. No email was sent.'),409
-    # Check OAuth before creating a provider attempt: an expired grant should
-    # request reconnection rather than strand a never-sent email in review.
-    try:oa.gmail_access_token()
-    except Exception as exc:
-        reconnect=any(term in str(exc).lower() for term in ('invalid_grant','expired','revoked','not connected','not configured'))
-        message='Reconnect Google in Menu → Settings → Manage Google connection. No email was sent.' if reconnect else 'Google connection could not be checked. No email was sent; try again after the connection recovers.'
-        return jsonify(ok=False,error=message,connection_required=reconnect,outreach=state),409 if reconnect else 503
-    response=app.make_response(oa.send_outreach(lead_id))
-    data=response.get_json() or {}
-    state=activation_view(lead)
-    if not data.get('ok'):
-        reasons=((data.get('gate') or {}).get('reasons') or [])+((data.get('send_receipt') or {}).get('reasons') or [])
-        return jsonify(ok=False,error=data.get('error') or 'Outreach was held by a send check. Review the contact before retrying.',
-                       reason_codes=reasons,outreach=state),response.status_code
-    oa._audit_actor(lead.id,'outreach_activated',{'explicit':True},{'state':state['state']},'customer')
-    db.session.commit()
-    return jsonify(ok=True,lead_id=lead.id,outreach=state)
+    from src.outreach_activation import activate_prepared_contact
+    return activate_prepared_contact(lead)

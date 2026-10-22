@@ -89,7 +89,7 @@ def protect_workspace_routes():
     if endpoint in {'create_research_job','get_research_job','cancel_research_job'}:
         workspace=research_workspace(create=endpoint=='create_research_job')
         job_id=(request.view_args or {}).get('job_id')
-        if job_id and not owns('research',job_id,workspace):
+        if job_id and not (owns('research',job_id,workspace) or (session.get('research_workspace') and owns('research',job_id,session['research_workspace']))):
             return _deny('Search not found.',404)
         return None
     if endpoint=='gmail_oauth_callback' and isinstance(session.get('google_login'),dict):return None

@@ -48,6 +48,7 @@ import customer_dashboard  # noqa: F401
 import customer_auth  # noqa: F401
 
 import workspace_security  # noqa: F401
+import src.selection_workflows  # noqa: F401
 import src.campaign_reporting  # noqa: F401
 import src.progressive_campaign  # noqa: F401
 
