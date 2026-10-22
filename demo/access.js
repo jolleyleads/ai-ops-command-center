@@ -31,13 +31,14 @@ window.renderResearchProgress=function(state){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var p=state.progress||{},rows=p.businesses||p.candidates||[];
   var stages={planning:'Understanding your request',discovering_businesses:'Finding businesses',verifying_candidates:'Checking business evidence',researching_more_sources:'Finding additional evidence',checking_contacts:'Checking available contact sources',business_results_ready:'Business research available',enriching_individual_contacts:'Verifying each contact and preparing qualified drafts'};
-  var html='<b>AutoMake AI · '+esc(state.status)+'</b><p>'+esc(stages[p.stage]||'Research and verification in progress')+'</p>';
+  var html='<b>AutoMake AI</b><p>'+esc(state.status==='queued'?'Starting your search…':state.status==='cancelled'?'Search stopped.':'Finding businesses…')+'</p><p class="meta">'+esc(p.discovered||rows.length)+' found</p><details class="research-details"><summary>Search details</summary><p>'+esc(stages[p.stage]||'Checking sources')+'</p>';
   html+='<p class="meta">Requested '+esc(p.requested||state.target_count||'')+' · Discovered '+esc(p.discovered||rows.length)+' · Qualified '+esc(p.qualified||0)+' · Drafts ready '+esc(p.drafted||0)+'.</p>';
   if(p.updated_at)html+='<p class="meta">Last update: '+esc(p.updated_at)+'</p>';
+  html+='</details>';
   if(window.bulkActivationControl)html+=window.bulkActivationControl(rows);
   rows.forEach(function(row){
-    html+='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status||'Candidate — verification pending')+'</p>';
-    if(row.contact_status)html+='<p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
+    html+='<div class="lead"><b>'+esc(row.company)+'</b>';
+
     if(row.error)html+='<p>Contact check needs attention. Other businesses can continue.</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
@@ -56,15 +57,15 @@ window.renderResearchProgress=function(state){
 window.showRequestInterpretation=function(query,location,count,sending){
   if(window.syncComposerState)window.syncComposerState();
   var bubble=window.activeResearchBubble;if(!bubble)return;
-  bubble.innerHTML='<b>AutoMake AI</b><p>'+esc(query)+'</p><p>Territory: '+esc(location||'Not restricted')+' · Requested: '+esc(count)+'.</p><p>I’ll show source-backed candidates as they arrive. Contact verification is separate. '+(sending?'Sending requires your selected campaign authorization and all safety checks.':'This search does not send emails. Activate a business to start its outreach workflow.')+'</p>';
-  var offer=document.getElementById('customer-offer');if(offer&&offer.value)bubble.innerHTML+='<p>Offer for qualification: '+esc(offer.value)+'. Change this in Task options if needed.</p>';
+  bubble.innerHTML='<b>AutoMake AI</b><p>Finding '+esc(count)+' businesses'+(location?' in '+esc(location):'')+'…</p><p class="meta">Results will appear here as I find them.</p>';
+  var offer=document.getElementById('customer-offer');if(offer&&offer.value)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Offer: '+esc(offer.value)+'</p></details>';
 };
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
-  bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
-  if(result.outreach)bubble.innerHTML+='<p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p>';
-  var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p>';
+  bubble.innerHTML='<b>Your results</b><p>Found '+esc(rows.length)+' businesses.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
+  if(result.outreach)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p></details>';
+  var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<details class="research-details"><summary>Result details</summary><p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p></details>';
 };
 window.followResearchJob=function(job,kind){
   var valid=/^\/api\/(?:research\/jobs|demo\/campaigns\/jobs)\/[A-Za-z0-9_-]+$/;
@@ -117,7 +118,7 @@ window.requestKeyFor=function(kind,body){
 
 window.renderBusinessCards=function(rows){
   return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
-    var html='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status)+'</p><p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
+    var html='<div class="lead"><b>'+esc(row.company)+'</b>';
     if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
@@ -131,22 +132,42 @@ window.outreachPending=new Set();
 window.emailSendStatus=function(outreach,checking){
   outreach=outreach||{};
   if(outreach.send_status==='sent'||outreach.initial==='Send confirmed')return 'Sent';
-  if(checking||outreach.send_status==='unknown'||outreach.state==='review')return 'Send status unconfirmed';
+  if(outreach.send_status==='unknown'||outreach.state==='review')return 'Checking status';
+  if(checking)return 'Sending…';
   return 'Not sent';
+};
+window.sendMessage=function(status,state,reason){
+  if(!reason&&status==='Not sent')return 'Sends your message and résumé. No extra confirmation.';
+  if(status==='Sent')return state&&state.state==='stopped'?'Your email was sent. Further emails are stopped.':'Your email was sent.';
+  if(status==='Sending…')return 'Sending your message and résumé…';
+  if(status==='Checking status')return 'We’re checking whether your email was sent. Please don’t send it again yet.';
+  reason=String(reason||'');
+  if(/reconnect google|google connection|expired.*grant/i.test(reason))return 'Connect Google in Settings to send your email.';
+  if(/suppressed|opt.out|unsubscribed/i.test(reason))return 'This contact has opted out. No email was sent.';
+  if(/mailbox|email.*verif|contact.*verif|company.*source/i.test(reason))return 'We couldn’t verify this email yet.';
+  return reason?'This email needs attention. Open Details to see why.':'Sends your message and résumé.';
+};
+window.recipientLine=function(state){
+  if(!state||!state.recipient)return '';
+  return '<p class="meta">To: '+esc(state.contact_name?state.contact_name+' · ':'')+esc(state.recipient)+'</p>';
+};
+window.sendDetails=function(reason,codes){
+  if(!reason&&!(codes||[]).length)return '';
+  return '<details class="send-details"><summary>Details</summary><p>'+esc(reason||'')+'</p>'+((codes||[]).length?'<p>'+esc(codes.join(' · '))+'</p>':'')+'</details>';
 };
 window.outreachControl=function(id,state){
   if(!state)return '';
   var pending=window.outreachPending.has(Number(id));
   var sendStatus=window.emailSendStatus(state,pending),sent=sendStatus==='Sent';
-  var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p><button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending||sent?' disabled':'')+'>'+(pending?'Activating…':sent?'Sent':esc(state.label))+'</button><p class="outreach-reason">'+esc(state.reason)+'</p>';
-  if(state.state==='active'||state.state==='stopped')html+='<ol><li>Initial email: '+esc(state.initial)+'</li><li>Follow-ups: '+esc(state.followups)+'</li><li>Calendar: '+esc(state.booking)+'</li></ol>';
+  var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p>'+window.recipientLine(state)+'<button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending||sent?' disabled':'')+'>'+(pending?'Sending…':sent?'Sent':state.can_activate?'Activate workflow':state.state==='review'?'Checking status':state.state==='stopped'?'Stopped':'Not sent')+'</button><p class="outreach-reason">'+esc(window.sendMessage(sendStatus,state,state.reason))+'</p>'+window.sendDetails(state.reason,state.reason_codes);
+  if(state.state==='active'||state.state==='stopped')html+='<details class="send-details"><summary>Follow-ups &amp; booking</summary><ol><li>Initial email: '+esc(state.initial)+'</li><li>Follow-ups: '+esc(state.followups)+'</li><li>Calendar: '+esc(state.booking)+'</li></ol></details>';
   var preview=state.preview;if(preview)html+='<details><summary>Review message &amp; résumé</summary><p>To: '+esc(preview.recipient)+'</p><p>'+esc(preview.subject)+'</p><p class="email-copy">'+esc(preview.body)+'</p><p>Attachment: '+esc(preview.attachment)+'</p></details>';
   return html+'</div>';
 };
 
 window.renderProspectQuality=function(q){
   q=q||{};var fit=q.fit||{},need=q.need||{},contact=q.contact||{};
-  var html='<div class="prospect-quality"><p class="meta">Business fit: '+esc(fit.state||'Pending')+' · Evidence of need: '+esc(need.state||'Pending')+' · Contact: '+esc(contact.state||'Pending')+'</p><details><summary>Why this prospect?</summary>';
+  var html='<div class="prospect-quality"><details><summary>Why this business?</summary><p class="meta">Business fit: '+esc(fit.state||'Pending')+' · Evidence of need: '+esc(need.state||'Pending')+' · Contact: '+esc(contact.state||'Pending')+'</p>';
   html+='<p><b>Why this business?</b> '+esc(q.why_business||'Business evidence is being checked.')+'</p><p><b>Why now?</b> '+esc(q.why_now||'Current need and urgency are not confirmed.')+'</p><p><b>Who should we contact?</b> '+esc(q.who||'Responsible buyer not confirmed.')+'</p><p><b>What evidence supports that?</b></p>';
   var sources=q.sources||[];
   html+=sources.length?sources.map(function(s){return /^https?:\/\//.test(String(s.url||''))?'<p><a href="'+esc(s.url)+'" target="_blank" rel="noopener noreferrer">Company evidence</a> · Observed '+esc(s.observed_at||'unknown')+' · Published '+esc(s.published_at||'unconfirmed')+'</p>':'';}).join(''):'<p>Source checks are pending.</p>';
@@ -164,8 +185,8 @@ window.activateLead=function(id){
       // Re-read persisted status after any failure; never retry a send automatically.
       return requestJSON(API+'/api/chat/dashboard/leads/'+id,{cache:'no-store'}).then(function(result){
         window.outreachPending.delete(id);update(result.outreach);
-        document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent=result.outreach.state==='active'?result.outreach.reason:error.message;});
-      }).catch(function(){window.outreachPending.delete(id);document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent='Activation could not be confirmed. Reopen My Leads to check its saved status before trying again.';});});
+        document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent=window.sendMessage(window.emailSendStatus(result.outreach),result.outreach,error.message);});
+      }).catch(function(){window.outreachPending.delete(id);document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent='Open My Leads to check the latest email status.';});});
     });
 };
 document.addEventListener('click',function(event){var button=event.target.closest('[data-activate-outreach]');if(button&&!button.disabled)window.activateLead(button.dataset.activateOutreach);});
@@ -180,16 +201,17 @@ window.selectionControl=function(ref){
   var active=workflow.state==='active',held=workflow.state==='held';
   var review=((workflow.outreach||{}).state==='review'||(workflow.outreach||{}).state==='stopped');
   var stopped=state.status==='failed'||state.status==='cancelled';
-  var sendStatus=window.emailSendStatus(workflow.outreach,running||stopped||active),sent=sendStatus==='Sent';
+  var statusView=workflow.outreach||((stopped||active)?{send_status:'unknown'}:{});
+  var sendStatus=window.emailSendStatus(statusView,running),sent=sendStatus==='Sent';
   var disabled=running||active||review||stopped||sent;
-  var label=sent?'Sent':stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Review send status':held&&entry.job&&entry.job.activation_policy==='selected-contact-v1'?'Retry verification':'Activate workflow';
-  var reason=entry.error||workflow.reason||(running?'Checking the email and sending your approved message with résumé. No further confirmation is needed.':'Your click authorizes sending your approved message and résumé. Email checks run automatically; no further confirmation is needed.');
+  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-contact-v1'?'Try again':'Activate workflow';
+  var reason=entry.error||workflow.reason||(running?'Checking the email and sending your message…':'Sends your message and résumé. No extra confirmation.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
-  var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p><button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(reason)+'</p>';
-  if(!sent&&(workflow.reason_codes||[]).length)html+='<p class="meta">'+esc(workflow.reason_codes.join(' · ').toLowerCase().replace(/_/g,' '))+'</p>';
+  var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p>'+window.recipientLine(workflow.outreach)+'<button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(window.sendMessage(sendStatus,workflow.outreach,entry.error||workflow.reason)||(reason))+'</p>';
+  html+=window.sendDetails(sent?reason:entry.error||workflow.reason,workflow.reason_codes);
   if(entry.error&&!(window.workspaceAccess||{}).signed_in)html+='<p><a href="/login">Sign in to activate this business</a>. Your research will be restored when you return.</p>';
-  if(workflow.outreach&&(active||sent))html+='<ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol>';
+  if(workflow.outreach&&(active||sent))html+='<details class="send-details"><summary>Follow-ups &amp; booking</summary><ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol></details>';
   if(running&&entry.job)html+='<button class="ghost" type="button" data-cancel-selection="'+esc(id)+'">Stop remaining work</button><p class="meta">A send already in progress may still complete.</p>';
   return html+'</div>';
 };
@@ -284,8 +306,8 @@ window.bulkControl=function(group){
   var busy=entries.some(function(e){return e.pending||['queued','running'].indexOf((e.state||{}).status)!==-1;}),sent=entries.filter(function(e){return window.emailSendStatus((((e.state||{}).result||{}).workflow||{}).outreach)==='Sent';}).length;
   var batch=entries.length&&entries.every(function(e){return e.job&&e.job.bulk&&e.job.activation_policy==='selected-contact-v1';}),done=batch&&!busy;
   var disabled=!refs.length||refs.length>20||busy||done;
-  var label=busy?'Batch in progress':done?'Batch finished':('Activate all with email ('+refs.length+')');
-  var note=refs.length>20?'Filter to 20 or fewer businesses with email before starting.':refs.length?'One click starts outreach for these '+refs.length+' businesses. Sends your approved message with two emojis and résumé when the required checks pass.':'Businesses will appear here as emails are found. No emails have been selected.';
+  var label=busy?'Sending…':done?'Finished':('Activate all with email ('+refs.length+')');
+  var note=refs.length>20?'Filter to 20 or fewer businesses with email before starting.':refs.length?'Send your message and résumé to these '+refs.length+' businesses.':'Businesses will appear here as emails are found. No emails have been selected.';
   return '<div class="outreach-workflow bulk-workflow" data-bulk-group="'+esc(group)+'"><button class="ghost" type="button" data-activate-bulk="'+esc(group)+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(note)+'</p><p role="status">'+sent+' of '+refs.length+' emails sent'+(done?' · Review individual results below.':'.')+'</p></div>';
 };
 window.refreshBulkControls=function(){document.querySelectorAll('[data-bulk-group]').forEach(function(el){el.outerHTML=window.bulkControl(el.dataset.bulkGroup);});};
