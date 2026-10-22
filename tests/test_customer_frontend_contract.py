@@ -65,7 +65,7 @@ def test_candidate_selection_renders_before_drafts_and_reload_never_creates_auth
     script=r"""
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync('demo/access.js','utf8');
-const code=source.slice(source.indexOf('// Selected-business workflows:'));
+const code=source.slice(source.indexOf('window.emailSendStatus='),source.indexOf('window.outreachControl='))+source.slice(source.indexOf('// Selected-business workflows:'));
 let posts=0,reads=0,saved='{}',last;
 const context={API:'',window:{workspaceAccess:{signed_in:true}},esc:String,document:{addEventListener:()=>{},querySelectorAll:()=>[],getElementById:()=>({value:'Offer'})},
  sessionStorage:{getItem:()=>saved,setItem:(key,value)=>{saved=value;}},setTimeout:()=>{},Date,JSON,Promise,
@@ -82,6 +82,43 @@ assert.equal(posts,0);assert.equal(reads,0);
  assert.equal(posts,1);assert.equal(last.activate,true);assert.equal(last.selection.key,'source-one');assert(!last.contact_email);
  const before=reads;vm.runInNewContext(code,context);await Promise.resolve();
  assert.equal(posts,1);assert(reads>before);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_send_status_requires_receipt_and_never_offers_retry_for_confirmed_send():
+    import subprocess
+    script=r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('demo/access.js','utf8');
+const context={window:{},esc:String,Set,Number,document:{addEventListener:()=>{}},sessionStorage:{getItem:()=>null}};
+vm.runInNewContext(source.slice(source.indexOf('window.outreachPending=new Set();')),context);
+const w=context.window,ref={kind:'lead',lead_id:42},id=w.selectionId(ref);
+function render(status,workflow){w.selectedWorkflows[id]={state:{status,result:{workflow}}};return w.selectionControl(ref);}
+let html=render('completed',{state:'held',reason:'Mailbox not verified'});
+assert(html.includes('<b>Not sent</b>'));assert(html.includes('Mailbox not verified'));assert(html.includes('Retry verification'));assert(!html.includes('Retry workflow'));
+html=render('completed',{state:'active',outreach:{initial:'Send confirmed',followups:'Scheduled',booking:'Waiting for an agreed meeting time'}});
+assert(html.includes('<b>Sent</b>'));assert(html.includes(' disabled'));assert(!html.includes('Retry'));
+// A stale held/stopped job snapshot cannot conceal its confirmed send receipt.
+for(const state of ['held','active']){
+ html=render('cancelled',{state,outreach:{send_status:'sent',state:'stopped',initial:'Send confirmed'}});
+ assert(html.includes('<b>Sent</b>'));assert(!html.includes('>Not sent<'));assert(!html.includes('Retry'));
+}
+html=render('completed',{state:'held',outreach:{state:'review',send_status:'unknown'}});
+assert(html.includes('<b>Send status unconfirmed</b>'));assert(!html.includes('<b>Not sent</b>'));assert(html.includes(' disabled'));
+html=render('running',{});assert(html.includes('Send status unconfirmed'));assert(!html.includes('<b>Sent</b>'));
+html=render('completed',{state:'active'});assert(!html.includes('<b>Sent</b>'));
+html=w.outreachControl(42,{state:'stopped',label:'Old stopped label',initial:'Send confirmed',reason:'Follow-ups stopped'});
+assert(html.includes('<b>Sent</b>'));assert(html.includes('Follow-ups stopped'));
+html=w.outreachControl(42,{state:'held',label:'Outreach held',reason:'Missing evidence'});
+assert(html.includes('<b>Not sent</b>'));assert(html.includes('Missing evidence'));
+context.API='';context.document.querySelectorAll=()=>[];let reads=0;
+context.requestJSON=()=>{reads++;return Promise.resolve(reads===1?{status:'completed',result:{workflow:{state:'held',lead_id:42,reason:'Old hold'}}}:{outreach:{send_status:'sent',initial:'Send confirmed',reason:'Initial email accepted by Gmail.'}});};
+w.selectedWorkflows[id]={ref,job:{poll_url:'/api/demo/campaigns/jobs/one'}};
+(async()=>{
+ w.observeSelectedWorkflow(id);await Promise.resolve();await Promise.resolve();await Promise.resolve();
+ assert.equal(reads,2);html=w.selectionControl(ref);assert(html.includes('<b>Sent</b>'));assert(!html.includes('Old hold'));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

@@ -8,21 +8,25 @@ from workspace_security import current_workspace, OWNER
 def activation_view(lead):
     view={'can_activate':False,'state':'held','label':'Outreach held',
           'reason':'Verify this contact and qualify the business before activating outreach.',
-          'initial':'Not sent','followups':'Not scheduled','booking':'Waiting for an agreed meeting time'}
-    if lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at:
+          'send_status':'not_sent','initial':'Not sent','followups':'Not scheduled','booking':'Waiting for an agreed meeting time'}
+    confirmed=oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id,kind='initial',status='sent',recipient=oa.normalize_email(lead.contact_email)).filter(
+        oa.OutreachSendAttempt.message_id.isnot(None),oa.OutreachSendAttempt.message_id!='',
+        oa.OutreachSendAttempt.thread_id.isnot(None),oa.OutreachSendAttempt.thread_id!='').first()
+    sent_at=lead.sent_at if lead.gmail_message_id and lead.gmail_thread_id and lead.sent_at else (confirmed.updated_at or confirmed.created_at) if confirmed else None
+    if sent_at:
         booking=oa.OutreachBookingAttempt.query.filter_by(lead_id=lead.id,status='confirmed').filter(oa.OutreachBookingAttempt.event_id!='',oa.OutreachBookingAttempt.event_id.isnot(None)).first()
         stopped=lead.status in {'unsubscribed','opted_out','archived'} or oa._is_suppressed(lead.contact_email)
-        view.update(state='stopped' if stopped else 'active',label='Outreach stopped' if stopped else 'Outreach active',reason='This contact is suppressed or has opted out.' if stopped else 'Initial email accepted by Gmail. Delivery is not confirmed.',initial='Send confirmed',
+        view.update(state='stopped' if stopped else 'active',label='Sent',send_status='sent',sent_at=sent_at.isoformat()+'Z',reason='Initial email was sent. Further outreach is stopped because this contact is suppressed or has opted out.' if stopped else 'Initial email accepted by Gmail. Delivery is not confirmed.',initial='Send confirmed',
                     followups='Stopped' if stopped else 'Stopped after reply' if lead.replied_at else 'Scheduled' if lead.follow_up_due_at else 'No follow-up pending',
                     booking='Booking confirmed' if booking else 'Waiting for an agreed meeting time',
                     follow_up_due_at=lead.follow_up_due_at.isoformat()+'Z' if lead.follow_up_due_at else None)
         return view
+    attempts=oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id).all()
+    if attempts or lead.gmail_message_id or lead.gmail_thread_id or lead.sent_at:
+        view.update(state='review',label='Review send status',send_status='unknown',initial='Send status unconfirmed',reason='An earlier send attempt must be reconciled before another activation.')
+        return view
     if current_workspace()!=OWNER:
         view.update(label='Sign in to activate',reason='An authorized workspace mailbox is required.')
-        return view
-    attempts=oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id).all()
-    if attempts:
-        view.update(state='review',label='Review send status',reason='An earlier send attempt must be reconciled before another activation.')
         return view
     if lead.status in {'archived','rejected','unsubscribed','opted_out','completed_no_reply'}:
         return view

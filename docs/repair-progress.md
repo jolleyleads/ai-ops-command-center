@@ -166,3 +166,23 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
   limitations: `docs/selected-business-workflows.md`.
 - Next: final regression/diff review, CI, merge/deploy and verify the exact live
   revision plus the button on genuine source-backed candidate cards.
+
+## Clear email send status — 2026-10-22
+
+- Base `d3dd372f5a489b3acbf73c2c42fec9eb4a76dd58`, branch
+  `fix/clear-send-status`. Screenshot confirmed that a held activation showed
+  Retry workflow without an explicit email outcome.
+- Cards now separate Sent, Not sent, and Send status unconfirmed from the
+  workflow action. Held attempts offer Retry verification with their saved reason.
+  Confirmed sends stay Sent even if follow-ups stop or a job snapshot was held.
+- Read-only status uses a persisted initial-send receipt or the existing complete
+  message/thread/timestamp record. Partial receipts require review. Terminal job
+  observation refreshes the latest owned lead status without sending or retrying.
+- No sending/qualification gate, message, attachment, provider credential, schema
+  or infrastructure changes. No real emails or Calendar writes in verification.
+- Local regression: 781 passed, 7 PostgreSQL-only skips; one new frontend
+  test initially failed because its isolated browser fixture lacked a DOM method.
+  Corrected that fixture; final focused suite: 38 passed. Full CI and exact
+  deployed revision pending. Next: CI, deploy,
+  verify live assets and the customer card. Rollback: revert this code change;
+  no data migration or configuration reversal is required.

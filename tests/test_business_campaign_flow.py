@@ -303,10 +303,13 @@ def test_explicit_activation_sends_approved_copy_once_and_schedules_followup(env
     monkeypatch.setattr(oa,'_gmail_send',send)
     detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
     assert detail['outreach']['can_activate'] is True
+    assert detail['outreach']['send_status']=='not_sent'
     url=f'/api/chat/leads/{lead.id}/activate-outreach'
     assert env.post(url,json={},headers=headers).status_code==400
     first=env.post(url,json={'activate':True},headers=headers)
     assert first.status_code==200 and first.json['outreach']['state']=='active'
+    assert first.json['outreach']['send_status']=='sent' and first.json['outreach']['label']=='Sent'
+    assert first.json['outreach']['sent_at']
     due=lead.follow_up_due_at
     assert lead.status=='sent' and due and lead.gmail_thread_id=='confirmed-thread'
     assert len(captured)==1 and captured[0][0]==lead.contact_email
@@ -333,8 +336,14 @@ def test_activation_holds_missing_evidence_and_uncertain_attempts(env,monkeypatc
     oa.db.session.commit()
     held=env.post(url,json={'activate':True},headers=headers)
     assert held.status_code==409 and held.json['outreach']['state']=='review'
+    assert held.json['outreach']['send_status']=='unknown'
+    assert held.json['outreach']['initial']=='Send status unconfirmed'
     oa.OutreachSendAttempt.query.delete();lead.evidence_json='[]';oa.db.session.commit()
     assert env.post(url,json={'activate':True},headers=headers).status_code==409
+    # Incomplete provider receipts must never be represented as definitely unsent.
+    lead.gmail_message_id='partial-receipt';oa.db.session.commit()
+    detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
+    assert detail['outreach']['send_status']=='unknown'
 
 
 def test_activation_preserves_suppression_and_resume_requirement(env,monkeypatch,tmp_path):
@@ -356,6 +365,9 @@ def test_activation_reconciles_confirmed_receipt_without_replaying_send(env,monk
     sent_at=datetime.utcnow()-timedelta(hours=2)
     oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='confirmed-initial',status='sent',message_id='saved-message',thread_id='saved-thread',updated_at=sent_at))
     oa.db.session.commit()
+    detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
+    assert detail['outreach']['send_status']=='sent' and detail['outreach']['label']=='Sent'
+    assert not lead.gmail_message_id  # Read-only display does not schedule or mutate.
     response=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers)
     assert response.status_code==200 and response.json['already_active']
     assert lead.gmail_message_id=='saved-message' and lead.sent_at==sent_at
