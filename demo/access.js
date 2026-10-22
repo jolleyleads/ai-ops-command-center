@@ -127,10 +127,17 @@ window.renderBusinessCards=function(rows){
 
 // An explicit customer click is the only entry point to this send-capable path.
 window.outreachPending=new Set();
+window.emailSendStatus=function(outreach,checking){
+  outreach=outreach||{};
+  if(outreach.send_status==='sent'||outreach.initial==='Send confirmed')return 'Sent';
+  if(checking||outreach.send_status==='unknown'||outreach.state==='review')return 'Send status unconfirmed';
+  return 'Not sent';
+};
 window.outreachControl=function(id,state){
   if(!state)return '';
   var pending=window.outreachPending.has(Number(id));
-  var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending?' disabled':'')+'>'+(pending?'Activating…':esc(state.label))+'</button><p role="status">'+esc(state.reason)+'</p>';
+  var sendStatus=window.emailSendStatus(state,pending),sent=sendStatus==='Sent';
+  var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p><button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending||sent?' disabled':'')+'>'+(pending?'Activating…':sent?'Sent':esc(state.label))+'</button><p class="outreach-reason">'+esc(state.reason)+'</p>';
   if(state.state==='active'||state.state==='stopped')html+='<ol><li>Initial email: '+esc(state.initial)+'</li><li>Follow-ups: '+esc(state.followups)+'</li><li>Calendar: '+esc(state.booking)+'</li></ol>';
   var preview=state.preview;if(preview)html+='<details><summary>Review message &amp; résumé</summary><p>To: '+esc(preview.recipient)+'</p><p>'+esc(preview.subject)+'</p><p class="email-copy">'+esc(preview.body)+'</p><p>Attachment: '+esc(preview.attachment)+'</p></details>';
   return html+'</div>';
@@ -156,8 +163,8 @@ window.activateLead=function(id){
       // Re-read persisted status after any failure; never retry a send automatically.
       return requestJSON(API+'/api/chat/dashboard/leads/'+id,{cache:'no-store'}).then(function(result){
         window.outreachPending.delete(id);update(result.outreach);
-        document.querySelectorAll('[data-outreach-card="'+id+'"] [role="status"]').forEach(function(el){el.textContent=result.outreach.state==='active'?result.outreach.reason:error.message;});
-      }).catch(function(){window.outreachPending.delete(id);document.querySelectorAll('[data-outreach-card="'+id+'"] [role="status"]').forEach(function(el){el.textContent='Activation could not be confirmed. Reopen My Leads to check its saved status before trying again.';});});
+        document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent=result.outreach.state==='active'?result.outreach.reason:error.message;});
+      }).catch(function(){window.outreachPending.delete(id);document.querySelectorAll('[data-outreach-card="'+id+'"] .outreach-reason').forEach(function(el){el.textContent='Activation could not be confirmed. Reopen My Leads to check its saved status before trying again.';});});
     });
 };
 document.addEventListener('click',function(event){var button=event.target.closest('[data-activate-outreach]');if(button&&!button.disabled)window.activateLead(button.dataset.activateOutreach);});
@@ -172,14 +179,16 @@ window.selectionControl=function(ref){
   var active=workflow.state==='active',held=workflow.state==='held';
   var review=((workflow.outreach||{}).state==='review'||(workflow.outreach||{}).state==='stopped');
   var stopped=state.status==='failed'||state.status==='cancelled';
-  var disabled=running||active||review||stopped;
-  var label=stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Outreach active':held?'Retry workflow':'Activate workflow';
+  var sendStatus=window.emailSendStatus(workflow.outreach,running||stopped||active),sent=sendStatus==='Sent';
+  var disabled=running||active||review||stopped||sent;
+  var label=sent?'Sent':stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Review send status':held?'Retry verification':'Activate workflow';
   var reason=entry.error||workflow.reason||(running?'Verifying this business and contact, then preparing your approved message and résumé.':'Starts verification and draft preparation, then sends your approved message and résumé when all required checks pass.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
-  var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p role="status">'+esc(reason)+'</p>';
-  if((workflow.reason_codes||[]).length)html+='<p class="meta">'+esc(workflow.reason_codes.join(' · ').toLowerCase().replace(/_/g,' '))+'</p>';
+  if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
+  var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p><button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(reason)+'</p>';
+  if(!sent&&(workflow.reason_codes||[]).length)html+='<p class="meta">'+esc(workflow.reason_codes.join(' · ').toLowerCase().replace(/_/g,' '))+'</p>';
   if(entry.error&&!(window.workspaceAccess||{}).signed_in)html+='<p><a href="/login">Sign in to activate this business</a>. Your research will be restored when you return.</p>';
-  if(workflow.outreach&&active)html+='<ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol>';
+  if(workflow.outreach&&(active||sent))html+='<ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol>';
   if(running&&entry.job)html+='<button class="ghost" type="button" data-cancel-selection="'+esc(id)+'">Stop remaining work</button><p class="meta">A send already in progress may still complete.</p>';
   return html+'</div>';
 };
@@ -205,7 +214,15 @@ window.observeSelectedWorkflow=function(id){
       entry.state=state;entry.error='';failures=0;window.refreshSelectionCards(id);
       if(state.status==='queued'||state.status==='running'){
         if(Date.now()-started<2700000)setTimeout(poll,2000);else{entry.observing=false;entry.error='The workflow is saved. Reload to keep checking it.';window.refreshSelectionCards(id);}
-      }else entry.observing=false;
+      }else{
+        entry.observing=false;
+        var workflow=(state.result||{}).workflow||{};
+        // Read the latest receipt after a terminal job; historical job snapshots
+        // must not conceal a send reconciled later. This never starts work.
+        if(workflow.lead_id)requestJSON(API+'/api/chat/dashboard/leads/'+encodeURIComponent(workflow.lead_id),{cache:'no-store'}).then(function(detail){
+          if(detail.outreach){workflow.outreach=detail.outreach;window.refreshSelectionCards(id);}
+        }).catch(function(){/* Preserve the saved status when observation fails. */});
+      }
     }).catch(function(error){
       if(++failures<4){setTimeout(poll,failures*2000);return;}
       entry.observing=false;entry.error='Status could not be confirmed. Reload to check the saved workflow; do not start another send.';window.refreshSelectionCards(id);
