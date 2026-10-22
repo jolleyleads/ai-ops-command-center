@@ -589,3 +589,75 @@ def test_selected_verification_retries_have_an_aggregate_hourly_limit(env,monkey
         else:
             assert retry.status_code==429 and 'hourly' in retry.json['error']
     assert oa.OutreachSendAttempt.query.count()==0
+
+
+def test_bulk_activation_sends_ready_email_and_keeps_other_business_held(env,monkeypatch):
+    from workspace_security import claim,OWNER
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    held=oa.OutreachLead(company='Unconfirmed Other',source_url='https://other.example/',location='Norfolk, Virginia',
+                         contact_email='public@other.example',status='needs_evidence',score=0,evidence_json='[]')
+    oa.db.session.add(held);oa.db.session.flush();claim('lead',held.id,OWNER);oa.db.session.commit()
+    captured=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:captured.append(a) or {'ok':True,'message_id':'bulk-sent','thread_id':'bulk-thread'})
+    refs=[{'kind':'lead','lead_id':held.id},{'kind':'lead','lead_id':lead.id}]
+    body={'activate':True,'selections':[refs[0],*refs],'offer':'Inquiry follow-up and appointment scheduling automation'}
+    first=env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
+    assert first.status_code==202,first.json
+    stored=oa.db.session.get(jobs.CampaignExecutionJob,first.json['job_id'])
+    payload=json.loads(stored.payload_json)
+    assert len(payload['items'])==2 and payload['draft_only'] and not payload['send_authorized']
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(first.json['poll_url'],headers=headers).json['result']
+    assert result['batch']['requested']==2 and result['batch']['sent']==1,result
+    assert [x['workflow']['state'] for x in result['bulk_items']]==['held','active']
+    assert len(captured)==1 and captured[0][0]==lead.contact_email
+    assert captured[0][2].count('👋')==captured[0][2].count('🙂')==1
+    assert oa.OutreachSendAttempt.query.filter_by(status='sent').count()==1
+    repeat=env.post('/api/chat/workflows/activate-bulk',json={**body,'selections':list(reversed(refs))},headers=headers)
+    assert repeat.status_code==202 and repeat.json['job_id']==first.json['job_id']
+    assert not jobs.process_next_execution_job()['processed'] and len(captured)==1
+
+
+def test_bulk_request_resolves_all_ownership_and_email_before_scheduling(env,monkeypatch):
+    from workspace_security import claim
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    other=oa.OutreachLead(company='Foreign',source_url='https://foreign.example',contact_email='owner@foreign.example',status='drafted')
+    oa.db.session.add(other);oa.db.session.flush();claim('lead',other.id,'another-customer');oa.db.session.commit()
+    body={'activate':True,'offer':'Scheduling automation','selections':[{'kind':'lead','lead_id':lead.id},{'kind':'lead','lead_id':other.id}]}
+    before=jobs.CampaignExecutionJob.query.count()
+    assert env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers).status_code==404
+    assert jobs.CampaignExecutionJob.query.count()==before
+    body['selections']=[{'kind':'lead','lead_id':lead.id}]*21
+    assert env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers).status_code==400
+    body['selections']=[{'kind':'lead','lead_id':lead.id}];body['activate']=False
+    assert env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers).status_code==400
+    body['activate']=True;lead.contact_email='';oa.db.session.commit()
+    assert env.post('/api/chat/workflows/activate-bulk',json={**body,'contact_email':'injected@guess.example'},headers=headers).status_code==409
+    assert jobs.CampaignExecutionJob.query.count()==before
+    assert env.post('/api/chat/workflows/activate-bulk',json=body).status_code==401
+    assert env.get('/api/chat/workflows/activate-bulk',headers=headers).status_code==405
+    monkeypatch.setattr(oa,'_operator_session_authorized',lambda:True)
+    monkeypatch.setattr(oa,'_csrf_ok',lambda:False)
+    assert env.post('/api/chat/workflows/activate-bulk',json=body).status_code==403
+
+
+def test_bulk_cancel_fences_later_businesses_without_replaying_first(env,monkeypatch):
+    from workspace_security import OWNER,claim
+    import src.selection_workflows as selection
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    other=oa.OutreachLead(company='Other',source_url='https://other.example',contact_email='owner@other.example',status='needs_evidence')
+    oa.db.session.add(other);oa.db.session.flush();claim('lead',other.id,OWNER);oa.db.session.commit()
+    response=env.post('/api/chat/workflows/activate-bulk',json={'activate':True,'offer':'Scheduling automation',
+        'selections':[{'kind':'lead','lead_id':lead.id},{'kind':'lead','lead_id':other.id}]},headers=headers)
+    assert response.status_code==202
+    calls=[]
+    def cancelled(data,job_id):
+        calls.append(data['_selected_lead_id'])
+        job=oa.db.session.get(jobs.CampaignExecutionJob,job_id);job.status='cancelled';oa.db.session.commit()
+        return {'workflow':{'state':'held'},'outreach':{}},None,None
+    monkeypatch.setattr(selection,'run_selected_workflow',cancelled)
+    jobs.process_next_execution_job()
+    assert calls==[lead.id]
+    status=env.get(response.json['poll_url'],headers=headers).json
+    assert status['status']=='cancelled'
+    assert len(status['progress']['bulk_items'])==2 and oa.OutreachSendAttempt.query.count()==0

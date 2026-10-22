@@ -41,7 +41,9 @@ def task_views(campaign_id):
         lead=db.session.get(OutreachLead,lead_id) if lead_id else None
         from src.prospect_quality import for_lead
         quality=for_lead(lead) if lead else business.get('prospect_quality')
-        views.append({'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
+        from workspace_security import owns
+        email=lead.contact_email if lead and owns('lead',lead.id) else ''
+        views.append({'contact_email':email,'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
             'prospect_quality':quality,
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
             'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
