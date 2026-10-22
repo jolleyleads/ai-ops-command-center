@@ -8,6 +8,8 @@
   try{if(!box.value)box.value=sessionStorage.getItem('automake-pending-prompt')||'';}catch(e){}
   box.addEventListener('input',save);
   window.savePendingPrompt=save;
+  var offerField=document.getElementById('customer-offer');
+  if(offerField){try{offerField.value=sessionStorage.getItem('automake-offer')||offerField.value;}catch(e){}offerField.addEventListener('input',function(){try{sessionStorage.setItem('automake-offer',offerField.value);}catch(e){}});}
   window.workspaceAccess={signed_in:false};
   var campaign=mode.querySelector('option[value="campaign"]');
   campaign.disabled=true;mode.value='research';document.getElementById('prepare').disabled=true;
@@ -36,6 +38,7 @@ window.renderResearchProgress=function(state){
     html+='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status||'Candidate — verification pending')+'</p>';
     if(row.contact_status)html+='<p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
     if(row.error)html+='<p>Contact check needs attention. Other businesses can continue.</p>';
+    if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
     html+='</div>';
@@ -53,12 +56,14 @@ window.showRequestInterpretation=function(query,location,count,sending){
   if(window.syncComposerState)window.syncComposerState();
   var bubble=window.activeResearchBubble;if(!bubble)return;
   bubble.innerHTML='<b>AutoMake AI</b><p>'+esc(query)+'</p><p>Territory: '+esc(location||'Not restricted')+' · Requested: '+esc(count)+'.</p><p>I’ll show source-backed candidates as they arrive. Contact verification is separate. '+(sending?'Sending requires your selected campaign authorization and all safety checks.':'Sending is off.')+'</p>';
+  var offer=document.getElementById('customer-offer');if(offer&&offer.value)bubble.innerHTML+='<p>Offer for qualification: '+esc(offer.value)+'. Change this in Task options if needed.</p>';
 };
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
   bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):rows.map(resultCard).join(''));
   if(result.outreach)bubble.innerHTML+='<p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p>';
+  var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p>';
 };
 window.followResearchJob=function(job,kind){
   var valid=/^\/api\/(?:research\/jobs|demo\/campaigns\/jobs)\/[A-Za-z0-9_-]+$/;
@@ -113,6 +118,7 @@ window.renderBusinessCards=function(rows){
   return rows.map(function(row){
     var html='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status)+'</p><p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
     if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
+    if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(row.lead_id&&window.outreachControl)html+=window.outreachControl(row.lead_id,row.outreach);
     return html+'</div>';
@@ -126,7 +132,18 @@ window.outreachControl=function(id,state){
   var pending=window.outreachPending.has(Number(id));
   var html='<div class="outreach-workflow" data-outreach-card="'+Number(id)+'"><button class="ghost" type="button" data-activate-outreach="'+Number(id)+'" data-ready="'+Boolean(state.can_activate)+'"'+(!state.can_activate||pending?' disabled':'')+'>'+(pending?'Activating…':esc(state.label))+'</button><p role="status">'+esc(state.reason)+'</p>';
   if(state.state==='active'||state.state==='stopped')html+='<ol><li>Initial email: '+esc(state.initial)+'</li><li>Follow-ups: '+esc(state.followups)+'</li><li>Calendar: '+esc(state.booking)+'</li></ol>';
+  var preview=state.preview;if(preview)html+='<details><summary>Review message &amp; résumé</summary><p>To: '+esc(preview.recipient)+'</p><p>'+esc(preview.subject)+'</p><p class="email-copy">'+esc(preview.body)+'</p><p>Attachment: '+esc(preview.attachment)+'</p></details>';
   return html+'</div>';
+};
+
+window.renderProspectQuality=function(q){
+  q=q||{};var fit=q.fit||{},need=q.need||{},contact=q.contact||{};
+  var html='<div class="prospect-quality"><p class="meta">Business fit: '+esc(fit.state||'Pending')+' · Evidence of need: '+esc(need.state||'Pending')+' · Contact: '+esc(contact.state||'Pending')+'</p><details><summary>Why this prospect?</summary>';
+  html+='<p><b>Why this business?</b> '+esc(q.why_business||'Business evidence is being checked.')+'</p><p><b>Why now?</b> '+esc(q.why_now||'Current need and urgency are not confirmed.')+'</p><p><b>Who should we contact?</b> '+esc(q.who||'Responsible buyer not confirmed.')+'</p><p><b>What evidence supports that?</b></p>';
+  var sources=q.sources||[];
+  html+=sources.length?sources.map(function(s){return /^https?:\/\//.test(String(s.url||''))?'<p><a href="'+esc(s.url)+'" target="_blank" rel="noopener noreferrer">Company evidence</a> · Observed '+esc(s.observed_at||'unknown')+' · Published '+esc(s.published_at||'unconfirmed')+'</p>':'';}).join(''):'<p>Source checks are pending.</p>';
+  html+='<p><b>What still needs verification?</b> '+esc((q.missing||[]).length?q.missing.join(' · ').toLowerCase().replace(/_/g,' '):q.ready?'All prospect checks passed; send controls still apply.':'Verification in progress.')+'</p></details></div>';
+  return html;
 };
 window.activateLead=function(id){
   id=Number(id);if(!Number.isInteger(id)||id<1||window.outreachPending.has(id))return;

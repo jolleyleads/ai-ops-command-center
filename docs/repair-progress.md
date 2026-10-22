@@ -114,3 +114,32 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
 - Next: PR CI, then approved provider onboarding and a bounded read-only live
   search before enabling each source. Indeed/ZipRecruiter direct search and
   Adzuna production enablement remain BLOCKED on their stated external access.
+
+## Evidence-led prospects — 2026-10-22
+
+- Base main/deployed revision `6f1747ba69d57e79e1c5dc4d4dae134df86d37e7`.
+  Isolated branch `feature/evidence-led-prospects`; no unrelated work replaced.
+- Added independent fit, documented need and responsible-buyer/mailbox assessment,
+  five-question cards, fit/need ranking, actual shortfall and persisted reporting.
+  Progressive discovery and per-business contact work remain separate. Existing
+  protected activation, approved email/two emojis/résumé, ownership and suppression
+  gates remain. Initial sender and hardened Gmail sender both enforce freshness.
+- A new direct-sender test exposed the runtime hardened-sender override bypassing
+  the original sender check. Added a shared guard before either creates an attempt;
+  failure corrected, not waived. Follow-ups retain existing independent gates.
+- New customer preparation adds the policy. Unsent existing leads are held and
+  scheduled for read-only reassessment when the offer changes or evidence expires;
+  sent/uncertain records and active recovery leases are preserved.
+- Local full regression before final reassessment test: 768 passed, 7 PostgreSQL-only
+  skips. Added offer-change/no-duplicate/no-send test then focused 22 passed.
+  Final local full suite: 769 passed, 7 PostgreSQL-only skips; JavaScript syntax
+  and diff-whitespace checks passed. GitHub PostgreSQL CI and deployment pending.
+- Read-only production pilot requested ten HVAC businesses in Hampton Roads:
+  durable job returned HTTP 202 and progress reached discovery/verification.
+  Status observation then timed out; final real results, ten supported prospects
+  and fresh real contact-to-draft success remain UNVERIFIED. No prospect mail or
+  calendar writes were performed. Do not treat discovered counts as supported leads.
+- Operating limits/configuration/rollback: `docs/evidence-led-prospects.md`.
+  No migration, infrastructure, credential replacement or new spending.
+- Next: final regression/diff review, publish PR, inspect CI, merge approved change,
+  monitor automatic deployment, verify exact revision and read-only live behavior.

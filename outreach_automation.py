@@ -400,6 +400,8 @@ def _server_qualification_inputs(lead: OutreachLead) -> tuple[Dict[str,Any],Dict
         if item.get('source')=='campaign_context' and isinstance(item.get('context'),dict):
             allowed=('target_location','query','intent_signal','business_type','candidate_type','require_decision_maker')
             context.update({k:item['context'][k] for k in allowed if k in item['context']})
+            if item['context'].get('prospect_policy')=='evidence-led-v1':
+                context.update({k:item['context'].get(k) for k in ('prospect_policy','request_spec','offer','discovery_sources')})
         assessment=item.get('contact_assessment')
         if isinstance(assessment,dict) and any(x.get('source')=='campaign_context' for x in evidence):
             validated['contact_assessment']=assessment
@@ -446,6 +448,13 @@ def _store_qualification(lead: OutreachLead, data: Dict[str, Any]|None=None) -> 
     validated,context,evidence=_server_qualification_inputs(lead)
     verification_ok=bool(_clean(lead.company,300) and evidence)
     receipt=qualify_lead(validated,verification_ok=verification_ok,context=context)
+    if context.get('prospect_policy')=='evidence-led-v1':
+        from src.prospect_quality import for_lead
+        quality=for_lead(lead)
+        receipt['prospect_quality']=quality
+        if not quality['ready']:
+            receipt.update(ok=False,qualified=False,status='Needs More Evidence',
+                           reason_codes=list(dict.fromkeys((receipt.get('reason_codes') or [])+quality['missing'])))
     digest=_qualification_evidence_digest(lead,validated,context)
     receipt=_sign_qualification(receipt,digest)
     row=OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
@@ -515,6 +524,17 @@ def _independent_mailbox_gate(lead):
     return {"ok":True,"mailbox_validation":mailbox}
 
 
+def _prospect_send_gate(lead, kind):
+    # Follow-ups retain their existing reply/suppression gates; new and
+    # reconciled initial attempts must recheck current prospect evidence.
+    if kind in {'initial','reconciled_retry'} and _server_qualification_inputs(lead)[1].get('prospect_policy')=='evidence-led-v1':
+        from src.prospect_quality import for_lead
+        quality=for_lead(lead)
+        if not quality['ready']:
+            return {'ok':False,'stage':'blocked','gate':{'ok':False,'reasons':quality['missing']}}
+    return {'ok':True}
+
+
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
     from src.execution_deadline import checkpoint
     checkpoint("sending")
@@ -525,6 +545,8 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     qualification=_qualification_gate(lead)
     if not qualification.get("ok"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
+    quality_gate=_prospect_send_gate(lead,kind)
+    if not quality_gate.get('ok'):return quality_gate
     address=normalize_email(lead.contact_email)
     sg=suppression_gate(address,_is_suppressed(address))
     if not sg.get("ok"):

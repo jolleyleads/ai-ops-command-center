@@ -233,6 +233,12 @@ def prepared_activation_lead(env,monkeypatch):
     monkeypatch.setattr(oa,'run_ai',lambda **kw:{'ok':False})
     monkeypatch.setattr(oa,'gmail_access_token',lambda:'isolated-test-access')
     page=company_page()
+    # New preparation requires offer-specific need, a supported buyer and an
+    # independent mailbox receipt. All provider behavior stays isolated here.
+    page['page_text']=page['page_text'].replace('hello@acme.example','alice@acme.example')+' We manually manage customer inquiries and scheduling. Alice Smith | Owner. Norfolk, Virginia. alice@acme.example'
+    page['contact_sections']=['Alice Smith | Owner. Norfolk, Virginia. alice@acme.example']
+    monkeypatch.setattr(search,'_page_snapshot',lambda *a:copy.deepcopy(page))
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email,**kw:{'email':email,'mailbox_status':'provider_verified','deliverability_status':'unconfirmed','checked_at':datetime.now(timezone.utc).isoformat(),'reason_codes':[]})
     from src.company_identity import identity_proof
     page['company_identity']=identity_proof('Acme',page,'https://acme.example/')
     result={**page,'title':'Acme','company':'Acme','website':'https://acme.example/','location':'Norfolk, Virginia','classification':'Verified Lead','promotion_status':'verified','verification_gate':'passed','intent_score':80,'evidence':[{'url':page['url'],'title':'Acme HVAC services','snippet':page['page_text'],'observed_at':page['observed_at']}]}
@@ -242,12 +248,48 @@ def prepared_activation_lead(env,monkeypatch):
     headers={'X-Operator-Token':'operator-unit-test','Idempotency-Key':'activation-preparation'}
     job=env.post('/api/chat/campaigns/prepare',json={'target_customer':'Find 1 HVAC business','territory':'Norfolk, Virginia','target_count':1},headers=headers)
     assert job.status_code==202
-    assert jobs.process_next_execution_job()['ok']
+    processed=jobs.process_next_execution_job()
+    assert processed['ok'], env.get(job.json['poll_url'],headers=headers).json
     outcome=env.get(job.json['poll_url'],headers=headers).json['result']['outreach']
-    assert outcome['qualified']==outcome['drafted']==1 and outcome['sent']==0
+    assert outcome['qualified']==outcome['drafted']==1 and outcome['sent']==0, outcome
     assert oa.OutreachSendAttempt.query.count()==0
     return oa.OutreachLead.query.one(),headers
 
+
+def test_stale_quality_cannot_activate_or_create_a_send_attempt(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    import src.prospect_quality as quality
+    class FutureDatetime(datetime):
+        @classmethod
+        def now(cls,tz=None):return datetime.now(tz)+timedelta(hours=2)
+    monkeypatch.setattr(quality,'datetime',FutureDatetime)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Stale prospect must not send'))
+    detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
+    assert not detail['outreach']['can_activate']
+    assert env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True},headers=headers).status_code==409
+    assert not oa._safe_send(lead,kind='initial',sequence=0,subject=lead.subject,body=lead.body)['ok']
+    assert oa.OutreachSendAttempt.query.count()==0
+
+
+
+def test_existing_unsent_lead_is_reassessed_for_a_different_offer(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    import v1_orchestration as orchestration
+    from lead_recovery import LeadRecovery
+    from src.prospect_quality import POLICY,request_spec
+    from src.outreach_activation import activation_view
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Reassessment must not send'))
+    payload={'query':'Find 1 HVAC business','location':'Norfolk, Virginia','offer':'Invoice processing automation',
+             'prospect_policy':POLICY,'results':[{'company':'Acme','website':'https://acme.example/',
+             'classification':'Verified Lead','promotion_status':'verified','verification_gate':'passed','intent_score':80}]}
+    payload['request_spec']=request_spec(payload['query'],payload['location'],payload['offer'])
+    result=orchestration._orchestrate_discovery_serial(payload,draft_only=True)
+    assert result['lead_ids']==[lead.id] and result['sent']==0
+    assert oa.OutreachLead.query.count()==1 and oa.OutreachSendAttempt.query.count()==0
+    assert not oa._qualification_gate(lead)['ok']
+    assert json.loads(oa.db.session.get(LeadRecovery,lead.id).payload_json)['_campaign_context']['offer']==payload['offer']
+    with oa.app.test_request_context(headers=headers):
+        assert not activation_view(lead)['can_activate']
 
 def test_explicit_activation_sends_approved_copy_once_and_schedules_followup(env,monkeypatch):
     lead,headers=prepared_activation_lead(env,monkeypatch)

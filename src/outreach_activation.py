@@ -36,8 +36,18 @@ def activation_view(lead):
     if not receipt.get('ok'):
         view['reason_codes']=receipt.get('reason_codes') or []
         return view
+    if oa._server_qualification_inputs(lead)[1].get('prospect_policy')=='evidence-led-v1':
+        from src.prospect_quality import for_lead
+        quality=for_lead(lead)
+        if not quality['ready']:
+            view.update(reason='Business fit, documented need or buyer/contact evidence requires review.',reason_codes=quality['missing'])
+            return view
+        if not lead.subject or not lead.body:
+            view.update(reason='A persisted approved draft is required before activation.')
+            return view
     view.update(can_activate=True,state='ready',label='Activate outreach',
-                reason='Sends your approved message with two emojis and résumé, then follows your reply and scheduling workflow. All send checks run again.')
+                reason='Sends your approved message with two emojis and résumé, then follows your reply and scheduling workflow. All send checks run again.',
+                preview={'recipient':lead.contact_email,'subject':lead.subject,'body':lead.body,'attachment':'Matthew_Jolley_AI_Automation_Resume.docx'})
     return view
 
 

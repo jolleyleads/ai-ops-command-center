@@ -47,3 +47,16 @@ def test_historical_sends_cannot_be_claimed_as_new_outcomes(setup):
     oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient='hello@example.com',idempotency_key='old',status='sent',message_id='old',created_at=datetime.utcnow()-timedelta(days=2)))
     oa.db.session.commit()
     assert campaign_outcomes(first)['counts']['sent']==0
+
+
+def test_automatic_reply_is_not_a_conversation_or_positive_reply(setup):
+    first,other,lead=setup
+    now=datetime.utcnow()+timedelta(seconds=1)
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient='hello@example.com',idempotency_key='send',status='sent',message_id='message',created_at=now))
+    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id='ooo',from_email='hello@example.com',body_text='Automatic reply: I am out of office and interested in reviewing this later.',created_at=now+timedelta(seconds=1)))
+    record_reply_outcome(lead.id,'ooo','interested');oa.db.session.commit()
+    result=campaign_outcomes(first)
+    assert result['counts']['replies']==1
+    assert result['counts']['positive_replies']==result['counts']['conversations']==0
+    assert result['rates']['conversation_rate_per_sent']==0
+    assert campaign_outcomes(other)['counts']['replies']==0

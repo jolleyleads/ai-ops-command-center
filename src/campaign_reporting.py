@@ -59,7 +59,9 @@ def campaign_outcomes(job,data=None):
     data=data or load_outcome_data([job.id])
     memberships=[m for m in data['memberships'] if m.campaign_id==job.id]
     counts={'attributed_leads':len(memberships),'qualified':0,'drafted':0,'sent':0,'replies':0,
-            'positive_replies':0,'booked':0,'held':0,'failed':0,'pending':0}
+            'positive_replies':0,'booked':0,'held':0,'failed':0,'pending':0,
+            'business_fit_supported':0,'need_supported':0,'well_supported':0,'buyer_identified':0,'contact_ready':0,'conversations':0}
+    by_source={}
     for membership in memberships:
         lead=next((row for row in data['leads'] if row.id==membership.lead_id),None)
         if not lead:continue
@@ -69,22 +71,49 @@ def campaign_outcomes(job,data=None):
         qualification=next((row for row in data['qualification'] if row.lead_id==lead.id),None)
         try:receipt=json.loads(qualification.receipt_json or '{}') if qualification else {}
         except (TypeError,ValueError):receipt={}
+        quality=receipt.get('prospect_quality') or {}
+        if quality.get('fit',{}).get('state')=='Strong':counts['business_fit_supported']+=1
+        if quality.get('need',{}).get('state')=='Supported':counts['need_supported']+=1
+        if quality.get('well_supported') is True:counts['well_supported']+=1
+        if quality.get('contact',{}).get('buyer'):counts['buyer_identified']+=1
+        if quality.get('contact',{}).get('state')=='Ready':counts['contact_ready']+=1
+        from outreach_automation import _server_qualification_inputs
+        context=_server_qualification_inputs(lead)[1]
+        # A lead has one originating campaign; multi-source labels are retained
+        # together instead of attributing the same send to multiple source totals.
+        source=' + '.join(context.get('discovery_sources') or ['Source not recorded'])
+        source_counts=by_source.setdefault(source,{'prospects':0,'well_supported':0,'sent':0,'conversations':0,'booked':0})
+        source_counts['prospects']+=1
+        source_counts['well_supported']+=int(quality.get('well_supported') is True)
         if receipt.get('ok') is True:counts['qualified']+=1
         if lead.subject and lead.body:counts['drafted']+=1
         sends=[row for row in data['sends'] if row.lead_id==lead.id and row.kind=='initial'
                and row.status=='sent' and row.message_id and row.created_at>=membership.created_at]
         if not sends:continue
         counts['sent']+=1
+        source_counts['sent']+=1
         first=min(s.created_at for s in sends)
         replies=[row for row in data['replies'] if row.lead_id==lead.id and row.message_id and row.created_at>=first]
         if replies:counts['replies']+=1
-        reply_ids={reply.message_id for reply in replies}
-        if any(row.lead_id==lead.id and row.message_id in reply_ids and row.classification=='interested' for row in data['outcomes']):
+        import re
+        nonautomatic={reply.message_id for reply in replies if not re.search(r'\b(?:out of (?:the )?office|automatic reply|auto.?reply|delivery status notification|undeliverable|mailer.daemon)\b',reply.body_text or '',re.I)}
+        if any(row.lead_id==lead.id and row.message_id in nonautomatic and row.classification in {'interested','question'} for row in data['outcomes']):
+            counts['conversations']+=1;source_counts['conversations']+=1
+        if any(row.lead_id==lead.id and row.message_id in nonautomatic and row.classification=='interested' for row in data['outcomes']):
             counts['positive_replies']+=1
         if any(row.lead_id==lead.id and row.status=='confirmed' and row.event_id and row.created_at>=first for row in data['bookings']):
             counts['booked']+=1
+            source_counts['booked']+=1
+    try:requested=int(json.loads(job.payload_json or '{}').get('target_count') or 10)
+    except (ValueError,TypeError):requested=10
     return {'available':bool(memberships),'counts':counts,
+            'requested':requested,'remaining_well_supported':max(0,requested-counts['well_supported']),
+            'metric_definitions':{'replies':'Sent contacts with at least one recorded reply, including unclassified or automatic replies.',
+                                  'conversations':'Sent contacts with a nonautomatic reply classified interested or question; not a customer or revenue claim.'},
+            'quality_basis':'Latest persisted qualification assessment; legacy records without it are not assumed supported.',
+            'source_breakdown':by_source,'sample_note':'Small samples are tentative. No automatic volume increase.',
             'rates':{'reply_rate_per_sent':rate(counts['replies'],counts['sent']),
+                     'conversation_rate_per_sent':rate(counts['conversations'],counts['sent']),
                      'positive_reply_rate_per_sent':rate(counts['positive_replies'],counts['sent']),
                      'booking_rate_per_sent':rate(counts['booked'],counts['sent'])},
             'delivered':None,'customers':None,'revenue':None,

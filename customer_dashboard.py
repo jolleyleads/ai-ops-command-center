@@ -97,6 +97,7 @@ def dashboard():
         for lead_id in campaign['lead_ids']:
             memberships.setdefault(lead_id, []).append(campaign['id'])
     from src.outreach_activation import activation_view
+    from src.prospect_quality import for_lead
     records = []
     for lead in leads:
         _, _, context = evidence_parts(lead)
@@ -106,7 +107,7 @@ def dashboard():
                         'has_sent_message':bool(lead.gmail_message_id), 'replied_at':iso(lead.replied_at),
                         'contact_name':lead.contact_name or '', 'has_email':bool(lead.contact_email),
                         'follow_up_due_at':iso(lead.follow_up_due_at), 'updated_at':iso(lead.updated_at),
-                        'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead)})
+                        'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead), 'prospect_quality':for_lead(lead)})
     return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,lead_offset=lead_offset,campaign_offset=campaign_offset,lead_total=lead_query.count(),campaign_total=campaign_query.count(),
                    generated_at=iso(datetime.utcnow()), scope='customer_workspace')
 
@@ -118,6 +119,7 @@ def lead_details(lead_id):
     if not lead or lead.status == 'archived' or not owns('lead',lead_id):
         return jsonify(ok=False, error='This lead was not found.'), 404
     from src.outreach_activation import activation_view
+    from src.prospect_quality import for_lead
     rows, enrichment, context = evidence_parts(lead)
     fields = enrichment.get('fields') or {}
     qualification = oa.OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
@@ -167,7 +169,7 @@ def lead_details(lead_id):
                             'type':'Named contact' if lead.contact_name else ('Company inbox' if (lead.contact_email or '').split('@')[0].lower() in {'info','hello','contact','support','customersupport','sales','office','admin','service','customerservice','general'} else 'Company contact · Person not confirmed') if lead.contact_email else 'No contact yet',
                             'phone':phone.get('value') if phone.get('validated') is True else ''},
                    sources=sources, subject=lead.subject, body=lead.body, timeline=timeline, bookings=bookings,
-                   outreach=activation_view(lead),
+                   outreach=activation_view(lead),prospect_quality=for_lead(lead),
                    follow_up_due_at=iso(lead.follow_up_due_at), follow_up_count=lead.follow_up_count,
                    business_type=context.get('business_type') or context.get('candidate_type') or '')
 
