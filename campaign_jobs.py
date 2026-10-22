@@ -209,6 +209,7 @@ def kick_execution_worker():
 
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
+    result["activation_policy"]=json.loads(job.payload_json or "{}").get("_manual_selected_send")
     result["progress"] = json.loads(job.result_json or "{}").get("progress") or {}
     from src.progressive_campaign import task_views
     businesses=task_views(job.id)

@@ -28,13 +28,18 @@ def activation_view(lead):
     if current_workspace()!=OWNER:
         view.update(label='Sign in to activate',reason='An authorized workspace mailbox is required.')
         return view
-    if lead.status in {'archived','rejected','unsubscribed','opted_out','completed_no_reply'}:
+    from src.manual_outreach import permitted
+    manual=permitted(lead,'initial')
+    if lead.status in {'archived','unsubscribed','opted_out','completed_no_reply'} or (lead.status=='rejected' and not manual):
         return view
     if (not lead.contact_email or not oa._recipient_matches_source_domain(lead)
             or not oa._recipient_mailbox_allowed(lead.contact_email)):
         return view
     if oa._is_suppressed(lead.contact_email):
         view.update(label='Contact stopped',reason='This contact is suppressed or has opted out.')
+        return view
+    if manual and lead.subject and lead.body:
+        view.update(can_activate=True,state='ready',label='Send email',reason='Your activation authorizes this verified contact.')
         return view
     receipt=oa._qualification_gate(lead)
     if not receipt.get('ok'):

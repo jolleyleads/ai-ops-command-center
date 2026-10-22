@@ -222,3 +222,13 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
   surviving a stale progress projection. CI/deploy/live verification pending.
 - This does not prove the live run found any valid email. Preserve that unknown
   until the actual final data is visible. No prospect email or Calendar writes.
+
+## Manual activation sends a customer-selected verified contact (2026-10-22)
+
+Confirmed production evidence: the recent selected-workflow run reached Hunter/mailbox checks and completed with qualified=0, drafted=0, sent=0. There was no second-confirmation stage; the automatic offer/need/buyer qualification pipeline was preventing the selected business from sending.
+
+Repair: new explicit single/bulk activations use selected-contact-v1. A customer's authenticated, CSRF-protected click authorizes that selected business and exact verified recipient; it does not certify business fit or documented need. Reuse current primary-source and independent mailbox receipts, otherwise verify the source email automatically, persist approved copy, and call the existing receipt-backed sender. No second confirmation. Automatic campaign qualification remains unchanged. Existing jobs retain their original policy; old completed holds do not prevent a fresh explicit activation under the new policy. Reload never authorizes work.
+
+Controls retained: workspace/resource ownership, source-company/domain/email proof, current mailbox verification, suppression and opt-outs, pinned résumé and approved two-emoji copy, recipient serialization, duplicate/uncertain-send protection, cancellation/claim fences, exact provider receipts and existing reply/booking gates. Continuation authority requires the durable selected-contact grant plus an actual confirmed initial send for that same recipient. No qualification receipt is forged.
+
+Verification: full local regression passed (793 tests, 7 PostgreSQL-only skips); final focused checks including the additional old-bulk-to-manual-policy regression passed (150 tests). GitHub CI and exact live deployment evidence pending. No live prospect emails or Calendar writes used for testing. No migrations, credentials or infrastructure changes. Rollback: revert this release's code and redeploy; already-confirmed sends and follow-ups cannot be undone by a code rollback.

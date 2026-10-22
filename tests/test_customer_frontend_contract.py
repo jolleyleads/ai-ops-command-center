@@ -75,7 +75,7 @@ vm.runInNewContext(code,context);
 const ref={kind:'research',job_id:'research-one',key:'source-one'};
 const html=context.window.selectionControl(ref);
 assert(html.includes('Activate workflow')&&!html.includes(' disabled'));
-assert(html.includes('then sends')&&html.includes('checks pass'));
+assert(html.includes('Your click authorizes sending')&&html.includes('no further confirmation'));
 assert.equal(posts,0);assert.equal(reads,0);
 (async()=>{
  const pending=context.window.activateSelection(ref);context.window.activateSelection(ref);await pending;await Promise.resolve();
@@ -95,7 +95,7 @@ const source=fs.readFileSync('demo/access.js','utf8');
 const context={window:{},esc:String,Set,Number,document:{addEventListener:()=>{}},sessionStorage:{getItem:()=>null}};
 vm.runInNewContext(source.slice(source.indexOf('window.outreachPending=new Set();')),context);
 const w=context.window,ref={kind:'lead',lead_id:42},id=w.selectionId(ref);
-function render(status,workflow){w.selectedWorkflows[id]={state:{status,result:{workflow}}};return w.selectionControl(ref);}
+function render(status,workflow){w.selectedWorkflows[id]={job:{activation_policy:'selected-contact-v1'},state:{status,result:{workflow}}};return w.selectionControl(ref);}
 let html=render('completed',{state:'held',reason:'Mailbox not verified'});
 assert(html.includes('<b>Not sent</b>'));assert(html.includes('Mailbox not verified'));assert(html.includes('Retry verification'));assert(!html.includes('Retry workflow'));
 html=render('completed',{state:'active',outreach:{initial:'Send confirmed',followups:'Scheduled',booking:'Waiting for an agreed meeting time'}});

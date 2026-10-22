@@ -16,10 +16,11 @@ are stable across result reordering and source URL paths. The original request,
 location, source row, offer and scoped authorization are saved in an existing
 durable campaign job; no new tables or migrations are needed.
 
-Manual selection starts evidence work even for an unranked candidate. It does
-not promote that candidate or waive qualification. Business/need/buyer evidence,
-mailbox verification, suppression/opt-out, approved copy, résumé attachment and
-existing safe-send checks still apply. Only the selected business enters this
+Manual selection can send an unranked candidate after contact verification. It
+does not promote that candidate or certify business/need/buyer evidence. Those
+ranking checks remain mandatory for automatic prospect selection. Current source
+and mailbox verification, suppression/opt-out, approved copy, résumé attachment
+and existing safe-send checks still apply to manually selected contacts. Only the selected business enters this
 job. Existing unsent records are refreshed; sent, suppressed, uncertain or
 actively leased records are preserved. Duplicate canonical records require review.
 A recipient lock and prior-attempt check prevent duplicate initial outreach
@@ -107,3 +108,9 @@ there is no silent truncation. No new infrastructure, migrations, credential
 changes, or paid providers. Rollback is a code revert; preserve saved receipts
 and review/cancel queued batches before reverting. No real email/Calendar tests
 are authorized by this UI change.
+
+### Customer-selected contact sending
+
+New manual activations use `selected-contact-v1`. The activation click is final authorization; there is no additional approval screen. Business-fit, need and buyer ranking remains visible and independent of contact readiness. Manual sending requires a current source-backed company email and a positive independent mailbox receipt. Preparation reuses fresh receipts; otherwise it fetches company contact sources and verifies the selected email without rerunning automatic need qualification. Missing proof, Google connection failures and send failures produce explicit Not sent or unconfirmed states. Sent requires persisted provider receipt IDs, and does not mean delivered.
+
+Automatic campaigns retain signed qualification requirements. The manual exception exists only in the running, owned selected job's recipient-bound context. Follow-ups and booking continue only from its durable grant and confirmed initial send; existing reply, opt-out and scheduling checks still apply. Old held jobs remain historical; a new explicit click can use the new policy. No page load, GET, provider recovery, or deployment launches a send.

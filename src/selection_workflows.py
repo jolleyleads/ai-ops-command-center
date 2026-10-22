@@ -72,7 +72,7 @@ def activate_selected_workflow():
     # The same explicit selection and offer always resolve to one job, even if
     # the result's verification snapshot later changes or the browser retries.
     binding=json.dumps([current_workspace(),ref,offer],sort_keys=True)
-    request_key='selection:'+hashlib.sha256(binding.encode()).hexdigest()
+    request_key='selection-manual-v1:'+hashlib.sha256(binding.encode()).hexdigest()
     base_key=request_key
     retry=data.get('retry_from')
     if retry:
@@ -99,7 +99,7 @@ def activate_selected_workflow():
              '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
              'target_customer':query,'query':query,'territory':territory,'offer':offer,
              'target_count':1,'sending_limit':1,'send_authorized':False,'draft_only':True,
-             '_selection_send_authorized':True}
+             '_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True}
     return enqueue_execution('campaign',payload,request_key)
 
 
@@ -140,19 +140,19 @@ def activate_bulk_workflow():
         seen.add(canonical)
         row,query,territory,lead_id=selected
         items.append({'selection':ref,'company':row.get('company') or row.get('title') or row.get('name') or '',
-                      'payload':{'_selected_workflow':True,'_selected_workspace':OWNER,'_selection_send_authorized':True,
+                      'payload':{'_selected_workflow':True,'_selected_workspace':OWNER,'_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True,
                                  '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
                                  'query':query,'target_customer':query,'territory':territory,'offer':offer,
                                  'target_count':1,'sending_limit':1,'draft_only':True,'send_authorized':False}})
     binding=json.dumps([OWNER,sorted(seen),offer],sort_keys=True)
-    key='selection-bulk:'+hashlib.sha256(binding.encode()).hexdigest()
+    key='selection-bulk-manual-v1:'+hashlib.sha256(binding.encode()).hexdigest()
     existing=CampaignExecutionJob.query.filter_by(request_key=key).first()
     if existing:
         if not owns('campaign',existing.id):return jsonify(ok=False,error='Batch not found.'),404
         return jsonify(_view(existing)),202
     if missing_email:return jsonify(ok=False,error='A selected business has no saved email. Refresh your results before activation.'),409
     return enqueue_execution('campaign',{'_selected_bulk':True,'_selected_workspace':OWNER,
-        '_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
+        '_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
         'target_count':len(items),'sending_limit':len(items),'draft_only':True,'send_authorized':False},key)
 
 
@@ -223,7 +223,14 @@ def run_selected_workflow(data,job_id):
              'request_spec':request_spec(data['query'],data['territory'],data['offer']),
              '_selected_workflow':True,'_selected_workspace':OWNER}
     # Selection may begin before a draft exists. This stage has no send authority.
-    summary=_orchestrate_discovery_serial(payload,draft_only=True)
+    from src.manual_outreach import POLICY as MANUAL_POLICY,prepare_contact,contact_readiness,authorize
+    manual=data.get('_manual_selected_send')==MANUAL_POLICY
+    if manual:
+        prepared=prepare_contact(selected,existing,data['query'],data['territory'],data['offer'])
+        summary={'lead_ids':[prepared.id],'saved':1,'qualified':int(oa._qualification_gate(prepared).get('ok') is True),
+                 'drafted':int(bool(prepared.subject and prepared.body)),'sent':0}
+    else:
+        summary=_orchestrate_discovery_serial(payload,draft_only=True)
     ids=list(dict.fromkeys(summary.get('lead_ids') or []))
     lead=db.session.get(oa.OutreachLead,ids[0]) if len(ids)==1 else None
     workflow={'state':'held','reason':'Business or contact verification needs more evidence. No email was sent.'}
@@ -244,13 +251,23 @@ def run_selected_workflow(data,job_id):
                 if duplicate:
                     outcome={'ok':False,'error':'This recipient already has an initial send or attempt on another saved lead. Review it before sending again.',
                              'reason_codes':['DUPLICATE_RECIPIENT_SEND_REVIEW_REQUIRED']}
+                elif manual and activation_view(lead)['state']!='active':
+                    readiness=contact_readiness(lead)
+                    if not readiness['ok']:
+                        outcome={'ok':False,'error':lead.last_error or 'No email sent: '+', '.join(readiness['reason_codes']),
+                                 'reason_codes':readiness['reason_codes']}
+                    else:
+                        with authorize(lead,job_id) as allowed:
+                            if not allowed:outcome={'ok':False,'error':'Send authorization is no longer valid. No email sent.'}
+                            else:
+                                response=app.make_response(activate_prepared_contact(lead));outcome=response.get_json() or {}
                 else:
                     response=app.make_response(activate_prepared_contact(lead));outcome=response.get_json() or {}
         state=activation_view(lead)
         workflow={'state':'active' if outcome.get('ok') and state.get('state')=='active' else 'held',
                   'reason':state.get('reason') if outcome.get('ok') else outcome.get('error') or state.get('reason'),
                   'lead_id':lead.id,'outreach':state,'reason_codes':outcome.get('reason_codes') or state.get('reason_codes') or []}
-        if not outcome.get('ok'):
+        if not outcome.get('ok') and not manual:
             receipt=oa._qualification_gate(lead)
             workflow['reason_codes']=list(dict.fromkeys(workflow['reason_codes']+(receipt.get('reason_codes') or [])))
         summary['sent']=int(workflow['state']=='active' and not outcome.get('already_active'))
