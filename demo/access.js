@@ -182,8 +182,8 @@ window.selectionControl=function(ref){
   var stopped=state.status==='failed'||state.status==='cancelled';
   var sendStatus=window.emailSendStatus(workflow.outreach,running||stopped||active),sent=sendStatus==='Sent';
   var disabled=running||active||review||stopped||sent;
-  var label=sent?'Sent':stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Review send status':held?'Retry verification':'Activate workflow';
-  var reason=entry.error||workflow.reason||(running?'Verifying this business and contact, then preparing your approved message and résumé.':'Starts verification and draft preparation, then sends your approved message and résumé when all required checks pass.');
+  var label=sent?'Sent':stopped?'Workflow stopped':entry.pending?'Starting…':state.status==='queued'?'Workflow queued':running?'Workflow running':active?'Review send status':held&&entry.job&&entry.job.activation_policy==='selected-contact-v1'?'Retry verification':'Activate workflow';
+  var reason=entry.error||workflow.reason||(running?'Checking the email and sending your approved message with résumé. No further confirmation is needed.':'Your click authorizes sending your approved message and résumé. Email checks run automatically; no further confirmation is needed.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
   var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p><button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(reason)+'</p>';
@@ -236,11 +236,11 @@ window.activateSelection=function(ref){
   window.selectedWorkflows[id]=entry;entry.pending=true;entry.error='';window.refreshSelectionCards(id);
   var offer=document.getElementById('customer-offer').value;
   var body={selection:ref,offer:offer,activate:true};
-  if(entry.job&&!entry.job.bulk&&entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
+  if(entry.job&&entry.job.activation_policy==='selected-contact-v1'&&!entry.job.bulk&&entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
   return workspaceMutation('/api/chat/workflows/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(job){
       if(!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(job.poll_url||''))throw new Error('Invalid saved workflow.');
-      entry.pending=false;entry.offer=offer;entry.job={job_id:job.job_id,poll_url:job.poll_url};entry.state=job;
+      entry.pending=false;entry.offer=offer;entry.job={job_id:job.job_id,poll_url:job.poll_url,activation_policy:job.activation_policy};entry.state=job;
       window.saveSelectedWorkflows();window.refreshSelectionCards(id);window.observeSelectedWorkflow(id);
     }).catch(function(error){entry.pending=false;entry.error=error.message;window.refreshSelectionCards(id);});
 };
@@ -275,7 +275,7 @@ window.bulkControl=function(group){
     return {state:{result:{workflow:{outreach:row.outreach||{}}}}};
   });
   var busy=entries.some(function(e){return e.pending||['queued','running'].indexOf((e.state||{}).status)!==-1;}),sent=entries.filter(function(e){return window.emailSendStatus((((e.state||{}).result||{}).workflow||{}).outreach)==='Sent';}).length;
-  var batch=entries.length&&entries.every(function(e){return e.job&&e.job.bulk;}),done=batch&&!busy;
+  var batch=entries.length&&entries.every(function(e){return e.job&&e.job.bulk&&e.job.activation_policy==='selected-contact-v1';}),done=batch&&!busy;
   var disabled=!refs.length||refs.length>20||busy||done;
   var label=busy?'Batch in progress':done?'Batch finished':('Activate all with email ('+refs.length+')');
   var note=refs.length>20?'Filter to 20 or fewer businesses with email before starting.':refs.length?'One click starts outreach for these '+refs.length+' businesses. Sends your approved message with two emojis and résumé when the required checks pass.':'Businesses will appear here as emails are found. No emails have been selected.';
@@ -311,7 +311,7 @@ window.activateAllWithEmail=function(group){
   target.refs.forEach(function(ref){var id=window.selectionId(ref),e=window.selectedWorkflows[id]||{ref:ref};e.pending=true;e.error='';window.selectedWorkflows[id]=e;window.refreshSelectionCards(id);});window.refreshBulkControls();
   return workspaceMutation('/api/chat/workflows/activate-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activate:true,selections:target.refs,offer:offer})}).then(function(job){
     if(!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(job.poll_url||''))throw new Error('Invalid saved batch.');
-    var saved={job_id:job.job_id,poll_url:job.poll_url,bulk:true};
+    var saved={job_id:job.job_id,poll_url:job.poll_url,bulk:true,activation_policy:job.activation_policy};
     target.refs.forEach(function(ref){var id=window.selectionId(ref),entry=window.selectedWorkflows[id];entry.pending=false;entry.offer=offer;entry.job=saved;entry.state=job;window.refreshSelectionCards(id);});
     window.saveSelectedWorkflows();window.refreshBulkControls();window.observeBulkWorkflow(saved);
   }).catch(function(error){target.refs.forEach(function(ref){var id=window.selectionId(ref),entry=window.selectedWorkflows[id];entry.pending=false;entry.error=error.message;window.refreshSelectionCards(id);});window.refreshBulkControls();});

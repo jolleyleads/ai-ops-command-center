@@ -107,7 +107,7 @@ def hardened_safe_send(lead,*,kind,sequence,subject,body):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     if not oa._recipient_mailbox_allowed(lead.contact_email):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
-    qualification=oa._qualification_gate(lead)
+    qualification=oa._send_authorization_gate(lead,kind)
     if not qualification.get("ok"):return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
     quality_gate=oa._prospect_send_gate(lead,kind)
     if not quality_gate.get('ok'):return quality_gate

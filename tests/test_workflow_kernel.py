@@ -611,7 +611,7 @@ def test_draft_requires_qualification_receipt():
 def test_send_requires_qualification_receipt_not_score():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation.send_outreach)
-    assert "_qualification_gate(lead)" in src
+    assert "_send_authorization_gate(lead,'initial')" in src
     assert "evidence-validated qualification is required before send" in src
     assert "lead.score < AUTO_SEND_MIN_SCORE" not in src
 
@@ -696,17 +696,17 @@ def test_operator_audit_is_hash_chained_append_only_by_api():
 def test_safe_send_enforces_qualification_before_any_provider_path():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation._safe_send)
-    assert "_qualification_gate(lead)" in src
+    assert '_send_authorization_gate(lead,kind)' in src
     assert "QUALIFICATION_REQUIRED" in src
-    assert src.index("_qualification_gate(lead)") < src.index("execute_outreach_send")
+    assert src.index('_send_authorization_gate(lead,kind)') < src.index("execute_outreach_send")
 
 
 def test_automatic_booking_enforces_qualification_before_booking():
     import inspect,outreach_automation
     src=inspect.getsource(outreach_automation._route_persisted_reply)
-    assert "_qualification_gate(lead)" in src
+    assert "_send_authorization_gate(lead,'booking')" in src
     assert "QUALIFICATION_REQUIRED_FOR_BOOKING" in src
-    assert src.index("_qualification_gate(lead)") < src.index("process_reply_to_booking")
+    assert src.index("_send_authorization_gate(lead,'booking')") < src.index("process_reply_to_booking")
 
 
 def test_explicit_booking_requires_auth_and_qualification():
@@ -714,7 +714,7 @@ def test_explicit_booking_requires_auth_and_qualification():
     src=inspect.getsource(outreach_automation.process_reply_booking)
     assert "_operator_session_authorized" in src
     assert "_operator_authorized" in src
-    assert "_qualification_gate(lead)" in src
+    assert "_send_authorization_gate(lead,'booking')" in src
     assert "401" in src and "409" in src
 
 
@@ -752,3 +752,12 @@ def test_operator_retry_rejects_nonfailed_attempts_and_rechecks_safety():
     assert 'attempt.status!="failed"' in src
     assert "_qualification_gate(lead)" in src
     assert "_is_suppressed(lead.contact_email)" in src
+
+
+def test_selected_authorization_preserves_automatic_qualification_and_requires_scoped_permission():
+    import inspect,outreach_automation
+    source=inspect.getsource(outreach_automation._send_authorization_gate)
+    assert '_qualification_gate(lead)' in source
+    assert 'permitted(lead,kind)' in source
+    assert "'qualified':False" in source
+    assert source.index('_qualification_gate(lead)')<source.index('permitted(lead,kind)')

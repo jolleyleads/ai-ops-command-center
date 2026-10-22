@@ -442,6 +442,16 @@ def _qualification_gate(lead: OutreachLead) -> Dict[str, Any]:
         return {"ok":False,"qualified":False,"status":row.status,"reason_codes":list(dict.fromkeys(reasons or ["QUALIFICATION_NOT_VALIDATED"]))}
     return {"ok":True,"qualified":True,"status":QUALIFIED,"receipt":receipt}
 
+def _send_authorization_gate(lead, kind):
+    """Automatic qualification or a scoped customer-selected contact grant."""
+    receipt=_qualification_gate(lead)
+    if receipt.get('ok'):return receipt
+    from src.manual_outreach import permitted
+    if permitted(lead,kind):
+        return {'ok':True,'qualified':False,'authorization_basis':'customer_selected_verified_contact'}
+    return receipt
+
+
 def _store_qualification(lead: OutreachLead, data: Dict[str, Any]|None=None) -> Dict[str, Any]:
     # data is intentionally ignored for trust decisions. Qualification is derived
     # entirely from persisted lead/evidence state on the server.
@@ -525,6 +535,8 @@ def _independent_mailbox_gate(lead):
 
 
 def _prospect_send_gate(lead, kind):
+    from src.manual_outreach import permitted
+    if permitted(lead,kind):return {'ok':True}
     # Follow-ups retain their existing reply/suppression gates; new and
     # reconciled initial attempts must recheck current prospect evidence.
     if kind in {'initial','reconciled_retry'} and _server_qualification_inputs(lead)[1].get('prospect_policy')=='evidence-led-v1':
@@ -542,7 +554,7 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     if not _recipient_mailbox_allowed(lead.contact_email):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
-    qualification=_qualification_gate(lead)
+    qualification=_send_authorization_gate(lead,kind)
     if not qualification.get("ok"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
     quality_gate=_prospect_send_gate(lead,kind)
@@ -633,7 +645,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="REPLY_REQUIRES_REVIEW"
         return {"ok":True,"stage":"unclear","classification":classification}
 
-    qualification=_qualification_gate(lead)
+    qualification=_send_authorization_gate(lead,'booking')
     if not qualification.get("ok"):
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="QUALIFICATION_REQUIRED_FOR_BOOKING"
         return {"ok":False,"stage":"booking_blocked","classification":classification,"qualification":qualification}
@@ -1247,7 +1259,7 @@ def draft_outreach(lead_id: int):
 @app.route("/api/outreach/leads/<int:lead_id>/send", methods=["POST"])
 def send_outreach(lead_id: int):
     lead = OutreachLead.query.get_or_404(lead_id)
-    qualification=_qualification_gate(lead)
+    qualification=_send_authorization_gate(lead,'initial')
     if not qualification.get("ok"):
         return jsonify({"error":"evidence-validated qualification is required before send","qualification":qualification}),409
     if not lead.contact_email:
@@ -1411,7 +1423,7 @@ def process_reply_booking(lead_id: int):
     if not (_operator_session_authorized() or _operator_authorized()):
         return jsonify({"ok":False,"error":"operator authentication required"}),401
     lead=OutreachLead.query.get_or_404(lead_id)
-    qualification=_qualification_gate(lead)
+    qualification=_send_authorization_gate(lead,'booking')
     if not qualification.get("ok"):
         return jsonify({"ok":False,"stage":"blocked","error":"qualification required for booking","qualification":qualification}),409
     data=request.get_json(silent=True) or {}

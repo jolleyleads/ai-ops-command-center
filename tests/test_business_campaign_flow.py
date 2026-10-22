@@ -473,7 +473,8 @@ def test_unverified_selected_business_stays_held_without_inventing_contact_or_se
     assert result['workflow']['state']=='held'
     assert result['outreach']['sent']==0 and oa.OutreachSendAttempt.query.count()==0
     lead=oa.OutreachLead.query.one();assert not lead.contact_email and not lead.body
-    assert 'OFFER_NEED_EVIDENCE_REQUIRED' in result['workflow']['reason_codes']
+    assert 'CURRENT_COMPANY_EMAIL_SOURCE_REQUIRED' in result['workflow']['reason_codes']
+    assert 'VERIFIED_MAILBOX_REQUIRED' in result['workflow']['reason_codes']
 
 
 def test_public_research_selection_survives_sign_in_scope_without_cross_browser_access(env,monkeypatch):
@@ -508,16 +509,16 @@ def test_selection_requires_explicit_action_auth_csrf_and_resource_ownership(env
 
 
 def test_selected_workflow_checks_cancellation_after_drafting_before_sending(env,monkeypatch):
-    import v1_orchestration as orchestration
+    import src.manual_outreach as manual
     lead,headers=prepared_activation_lead(env,monkeypatch)
     body=selected_body({'kind':'lead','lead_id':lead.id})
     launch=env.post('/api/chat/workflows/activate',json=body,headers=headers)
-    serial=orchestration._orchestrate_discovery_serial
+    serial=manual.prepare_contact
     def cancel(*a,**kw):
         result=serial(*a,**kw)
         job=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']);job.status='cancelled';oa.db.session.commit()
         return result
-    monkeypatch.setattr(orchestration,'_orchestrate_discovery_serial',cancel)
+    monkeypatch.setattr(manual,'prepare_contact',cancel)
     monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Cancelled workflow sent'))
     jobs.process_next_execution_job()
     assert oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id']).status=='cancelled'
@@ -661,3 +662,120 @@ def test_bulk_cancel_fences_later_businesses_without_replaying_first(env,monkeyp
     status=env.get(response.json['poll_url'],headers=headers).json
     assert status['status']=='cancelled'
     assert len(status['progress']['bulk_items'])==2 and oa.OutreachSendAttempt.query.count()==0
+
+
+def manual_contact(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    # Remove all need, buyer and fit assessments; keep genuine isolated contact receipts.
+    evidence=json.loads(lead.evidence_json)
+    for row in evidence:
+        assessment=row.get('contact_assessment')
+        if assessment:row['contact_assessment']={'mailbox_validation':assessment.get('mailbox_validation',{})}
+        if row.get('source')=='campaign_context':row['context']['offer']='Unproven offer'
+    lead.evidence_json=json.dumps(evidence);lead.status='rejected';lead.subject='';lead.body=''
+    oa.db.session.commit()
+    assert not oa._qualification_gate(lead)['ok']
+    from src.manual_outreach import contact_readiness
+    assert contact_readiness(lead)['ok'],contact_readiness(lead)
+    return lead,headers
+
+
+def test_one_click_manual_sends_verified_contact_without_business_qualification_or_second_confirmation(env,monkeypatch):
+    import v1_orchestration as orchestration
+    import src.manual_outreach as manual
+    lead,headers=manual_contact(env,monkeypatch)
+    monkeypatch.setattr(orchestration,'_orchestrate_discovery_serial',lambda *a,**k:pytest.fail('Manual send reran automatic business qualification'))
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:pytest.fail('Fresh verified contact needlessly refetched'))
+    sent=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:sent.append(a) or {'ok':True,'message_id':'manual-message','thread_id':'manual-thread'})
+    # A valid email alone never gives generic send authority.
+    assert not manual.permitted(lead,'initial')
+    assert env.post(f'/api/outreach/leads/{lead.id}/send',headers=headers).status_code==409
+    launch=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    assert launch.status_code==202 and launch.json['activation_policy']==manual.POLICY
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['outreach']['send_status']=='sent',result
+    assert result['outreach']['sent']==1 and result['outreach']['qualified']==0
+    assert len(sent)==1 and sent[0][0]==lead.contact_email
+    assert lead.body.count('👋')==lead.body.count('🙂')==1
+    from src.outreach_copy import RESUME_LINE
+    assert RESUME_LINE in lead.body and lead.follow_up_due_at
+    assert not oa._qualification_gate(lead)['ok'] and not manual.permitted(lead,'initial')
+    assert manual.permitted(lead,'followup')
+    monkeypatch.setattr(oa,'_gmail_thread_reply_state',lambda *a:{'ok':True,'stop':False})
+    lead.follow_up_due_at=datetime.utcnow()-timedelta(seconds=1);oa.db.session.commit()
+    followups=oa.process_due_followups()
+    assert followups['ok'] and len(sent)==2,followups
+    assert oa.OutreachSendAttempt.query.filter_by(kind='followup',status='sent').count()==1
+    lead.contact_email='changed@acme.example';oa.db.session.commit()
+    assert not manual.permitted(lead,'followup')
+
+
+@pytest.mark.parametrize('problem',['mailbox','source','suppression'])
+def test_manual_activation_still_requires_email_proof_and_respects_optout(env,monkeypatch,problem):
+    import v1_orchestration as orchestration
+    lead,headers=manual_contact(env,monkeypatch)
+    evidence=json.loads(lead.evidence_json)
+    for row in evidence:
+        if problem=='mailbox':row.pop('contact_assessment',None)
+        if problem=='source':row.pop('company_identity',None)
+    lead.evidence_json=json.dumps(evidence)
+    if problem=='suppression':oa._suppress(lead.contact_email)
+    oa.db.session.commit()
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([],{}))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Unverified or suppressed email sent'))
+    launch=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['state']=='held' and result['outreach']['sent']==0
+    assert oa.OutreachSendAttempt.query.count()==0
+    assert 'qualif' not in result['workflow']['reason'].lower()
+
+
+def test_new_selected_candidate_verifies_email_and_sends_without_need_research(env,monkeypatch):
+    import v1_orchestration as orchestration
+    import src.hunter_mailbox as mailbox
+    from workspace_security import claim,OWNER
+    from background_research import ResearchJob
+    from src.selection_refs import reference
+    from src.company_identity import identity_proof
+    page=company_page();page['company_identity']=identity_proof('Acme',page,page['url'])
+    row={'company':'Acme','website':page['url'],'email':'hello@acme.example','classification':'Candidate'}
+    research=ResearchJob(id='new-manual-candidate',prompt_text='Find 10 HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
+    oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
+    monkeypatch.setattr(orchestration,'_orchestrate_discovery_serial',lambda *a,**k:pytest.fail('Manual activation ran automatic qualification'))
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:{'email':email,'mailbox_status':'provider_verified','checked_at':datetime.now(timezone.utc).isoformat()})
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:'isolated-test-access')
+    calls=[];monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:calls.append(a) or {'ok':True,'message_id':'new-manual','thread_id':'new-thread'})
+    headers={'X-Operator-Token':'operator-unit-test'}
+    launch=env.post('/api/chat/workflows/activate',json=selected_body(reference('research',research.id,row)),headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['outreach']['send_status']=='sent',result
+    lead=oa.OutreachLead.query.one()
+    assert len(calls)==1 and calls[0][0]=='hello@acme.example'
+    assert not oa._qualification_gate(lead)['ok']
+    assert result['outreach']['qualified']==0 and result['outreach']['drafted']==1
+
+
+def test_bulk_click_uses_manual_contact_policy_and_does_not_reactivate_old_held_batch(env,monkeypatch):
+    lead,headers=manual_contact(env,monkeypatch)
+    body={'activate':True,'offer':'Inquiry follow-up and appointment scheduling automation','selections':[{'kind':'lead','lead_id':lead.id}]}
+    from workspace_security import claim,OWNER
+    import hashlib
+    binding=json.dumps([OWNER,[json.dumps(body['selections'][0],sort_keys=True)],body['offer']],sort_keys=True)
+    old=jobs.CampaignExecutionJob(id='old-qualified-batch',kind='campaign',status='completed',request_key='selection-bulk:'+hashlib.sha256(binding.encode()).hexdigest(),payload_json='{}',result_json=json.dumps({'bulk_items':[{'workflow':{'state':'held'}}]}))
+    oa.db.session.add(old);claim('campaign',old.id,OWNER);oa.db.session.commit()
+    sent=[];monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:sent.append(a) or {'ok':True,'message_id':'bulk-manual','thread_id':'bulk-thread'})
+    launch=env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
+    assert launch.status_code==202 and launch.json['job_id']!=old.id
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['batch']['sent']==1 and len(sent)==1,result
+    assert result['bulk_items'][0]['outreach']['qualified']==0
+    assert not oa._qualification_gate(lead)['ok']
+    repeated=env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
+    assert repeated.json['job_id']==launch.json['job_id']
+    assert jobs.process_next_execution_job().get('processed')==0 and len(sent)==1
