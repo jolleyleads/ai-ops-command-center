@@ -801,3 +801,40 @@ def test_directory_website_selection_uses_only_unique_saved_primary_source(env,a
     from src.company_identity import owned_host,email_on_domain
     assert not owned_host(directory['website'],directory['website'])
     assert not email_on_domain(directory['email'],directory['website'])
+
+
+@pytest.mark.parametrize('primary_buyer',[True,False])
+def test_manual_hunter_enriches_only_source_supported_decision_maker(active,env,monkeypatch,primary_buyer):
+    import v1_orchestration as orchestration
+    from workspace_security import claim,OWNER
+    from background_research import ResearchJob
+    from src.selection_refs import reference
+    from src.company_identity import identity_proof
+    get,calls=transport();receipt=hunter.discover_contacts('https://acme.example',get)
+    monkeypatch.setattr(hunter,'discover_contacts',lambda *a:receipt)
+    page=company_page()
+    if primary_buyer:
+        page['page_text']+=' Jane Smith | Owner. Norfolk, Virginia.'
+        page['contact_sections']=['Jane Smith | Owner. Norfolk, Virginia.']
+    page['company_identity']=identity_proof('Acme',page,page['url'])
+    row={'company':'Acme','website':page['url'],'email':'hello@acme.example'}
+    research=ResearchJob(id='hunter-manual-buyer',prompt_text='Find decision makers at HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
+    oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:{'email':email,'mailbox_status':'provider_verified','deliverability_status':'provider_reported_valid','checked_at':datetime.now(timezone.utc).isoformat(),'reason_codes':[]})
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:'isolated-test-access')
+    sent=[];monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:sent.append(a) or {'ok':True,'message_id':'hunter-manual-send','thread_id':'hunter-manual-thread'})
+    headers={'X-Operator-Token':'operator-unit-test'}
+    launch=env.post('/api/chat/workflows/activate',json=selected_body(reference('research',research.id,row)),headers=headers)
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    lead=oa.OutreachLead.query.one()
+    if primary_buyer:
+        assert result['outreach']['sent']==1,result
+        assert len(sent)==1 and sent[0][0]=='jane@acme.example'
+        assert lead.contact_name=='Jane Smith'
+        assert person_email_supported(oa._server_qualification_inputs(lead)[0]['contact_assessment'],lead.contact_email)
+    else:
+        assert not sent and result['outreach']['sent']==0
+        assert 'NAMED_DECISION_MAKER_EMAIL_REQUIRED' in result['workflow']['reason_codes']
+        assert not lead.contact_name

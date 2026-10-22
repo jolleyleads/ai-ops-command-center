@@ -26,9 +26,13 @@ def contact_readiness(lead):
         try:return timedelta(0)<=now-datetime.fromisoformat(str(value).replace('Z','+00:00'))<=timedelta(hours=1)
         except (TypeError,ValueError):return False
     source=validated.get('email_source_url')
+    require_person=any((x.get('context') or {}).get('require_decision_maker') is True for x in evidence if x.get('source')=='campaign_context')
+    person_found=False
     proof_found=False;mailbox_found=False
     for row in evidence:
         if oa.normalize_email(row.get('email'))!=address:continue
+        from src.contact_assessment import person_email_supported
+        if person_email_supported(row.get('contact_assessment') or {},address):person_found=True
         proof=row.get('company_identity') or {}
         if (source and owned_host(source,lead.source_url) and owned_host(row.get('url') or '',lead.source_url)
             and name_key(proof.get('company_name'))==name_key(lead.company)
@@ -36,6 +40,7 @@ def contact_readiness(lead):
             and re.fullmatch(r'[a-f0-9]{64}',str(proof.get('content_sha256') or '')) and fresh(row.get('observed_at'))):proof_found=True
         mailbox=(row.get('contact_assessment') or {}).get('mailbox_validation') or {}
         if mailbox.get('mailbox_status')=='provider_verified' and oa.normalize_email(mailbox.get('email'))==address and fresh(mailbox.get('checked_at')):mailbox_found=True
+    if require_person and not person_found:reasons.append('NAMED_DECISION_MAKER_EMAIL_REQUIRED')
     if not proof_found:reasons.append('CURRENT_COMPANY_EMAIL_SOURCE_REQUIRED')
     if not mailbox_found:reasons.append('VERIFIED_MAILBOX_REQUIRED')
     return {'ok':not reasons,'reason_codes':reasons}
@@ -97,12 +102,22 @@ def prepare_contact(selected,existing,query,territory,offer):
     from workspace_security import claim
     from v1_orchestration import _public_contact_evidence,EMAIL_SCAN_RE
     from src.company_identity import current_contact_source
-    from src.hunter_mailbox import verify_mailbox
+    from src.hunter_mailbox import verify_mailbox,enabled
+    from src.enrichment import enrich_lead
+    from src.hunter_discovery import enrich_contact
+    from src.contact_assessment import person_email_supported
     from src.prospect_quality import POLICY as QUALITY_POLICY,request_spec
     if existing and (existing.gmail_message_id or existing.sent_at or oa.OutreachSendAttempt.query.filter_by(lead_id=existing.id).first()):return existing
     lead=existing
     if lead and (lead.status in {'archived','unsubscribed','opted_out','completed_no_reply'} or oa._is_suppressed(lead.contact_email)):return lead
-    if lead and contact_readiness(lead)['ok']:
+    required_person=bool(re.search(r'(?i)\b(?:decision[ -]?makers?|named contacts?|owners?|founders?|ceos?)\b',query))
+    prior_assessment=oa._server_qualification_inputs(lead)[0].get('contact_assessment') or {} if lead else {}
+    person_ready=bool(lead and person_email_supported(prior_assessment,oa.normalize_email(lead.contact_email)))
+    try:
+        checked=datetime.fromisoformat(str((prior_assessment.get('hunter_discovery') or {}).get('checked_at') or '').replace('Z','+00:00'))
+        hunter_checked=timedelta(0)<=datetime.now(timezone.utc)-checked<=timedelta(hours=1)
+    except (ValueError,TypeError):hunter_checked=False
+    if lead and contact_readiness(lead)['ok'] and (not required_person or person_ready) and (person_ready or not enabled() or hunter_checked):
         if not lead.subject or not lead.body:
             draft=initial_email(lead,json.loads(lead.evidence_json or '[]'));lead.subject=draft['subject'];lead.body=draft['body'];db.session.commit()
         return lead
@@ -121,25 +136,46 @@ def prepare_contact(selected,existing,query,territory,offer):
         for email in EMAIL_SCAN_RE.findall(str(row.get('page_text') or row.get('text') or '')):
             email=oa.normalize_email(email)
             if (not preferred or email==preferred) and oa._recipient_mailbox_allowed(email) and oa.email_on_domain(email,website) and email not in [x[0] for x in choices]:choices.append((email,row))
-    contact=None;mailbox={}
-    for email,row in choices[:3]:
-        checkpoint('verifying_selected_mailbox')
-        mailbox=verify_mailbox(email)
-        if mailbox.get('mailbox_status')=='provider_verified' and oa.normalize_email(mailbox.get('email'))==email:
-            contact=(email,row);break
+    checkpoint('hunter_contact_lookup')
+    enrichment=enrich_lead({'company':company,'website':website,'target_location':territory,'query':query+' '+offer},rows,email_allowed=oa._recipient_mailbox_allowed)
+    enrich_contact(enrichment,website,required_person=required_person,email_allowed=oa._recipient_mailbox_allowed)
+    assessment=enrichment.get('contact_assessment') or {}
+    candidate=(enrichment.get('fields') or {}).get('email') or {}
+    named=person_email_supported(assessment,candidate.get('value'))
+    contact=None;mailbox=assessment.get('mailbox_validation') or {}
+    # Hunter may associate a source-supported buyer with an address not printed
+    # on the page. Its durable association and independent mailbox check must pass.
+    if named and candidate.get('validated'):
+        row=next((x for x in rows if x.get('url')==candidate.get('source_url')),None)
+        email=oa.normalize_email(candidate.get('value'))
+        if row and oa.email_on_domain(email,website):
+            mailbox=verify_mailbox(email)
+            if mailbox.get('mailbox_status')=='provider_verified' and oa.normalize_email(mailbox.get('email'))==email:contact=(email,row)
+    if not contact and not required_person:
+        for email,row in choices[:3]:
+            checkpoint('verifying_selected_mailbox')
+            mailbox=verify_mailbox(email)
+            if mailbox.get('mailbox_status')=='provider_verified' and oa.normalize_email(mailbox.get('email'))==email:
+                contact=(email,row);break
+    if contact:
+        assessment['mailbox_validation']=mailbox
+        if not person_email_supported(assessment,contact[0]):
+            # A general inbox never inherits another person's name or association.
+            assessment={**assessment,'email_person_status':'unconfirmed','person_email':'','person_name':''}
     if not lead:
         lead=oa.OutreachLead(company=company,source_url=website,location=territory,status='needs_evidence',score=0,evidence_json='[]')
         db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER)
     evidence=oa._server_qualification_inputs(lead)[2]+[{**x,'source':'outreach_primary_copy'} for x in rows]
     if contact:
         email,row=contact;lead.contact_email=email
+        lead.contact_name=assessment.get('person_name') or ''
         evidence.append({'email':email,'url':row['url'],'observed_at':row.get('observed_at'),
             'identity_version':'company-domain-v1','company_identity':row['company_identity'],
-            'contact_assessment':{'mailbox_validation':mailbox},'source':'verified_public_contact'})
+            'contact_assessment':assessment,'source':'hunter_verified_contact' if assessment.get('email_person_status')=='hunter_verified_person' else 'verified_public_contact'})
     else:
         lead.contact_email=preferred
-        lead.last_error='No email sent: '+(', '.join(mailbox.get('reason_codes') or []) or 'The selected email could not be verified on a current company source.')
-    evidence.append({'source':'campaign_context','context':{'query':query,'target_location':territory,'offer':offer,'prospect_policy':QUALITY_POLICY,'request_spec':request_spec(query,territory,offer)}})
+        lead.last_error='No email sent: '+(', '.join((mailbox.get('reason_codes') or [])+(assessment.get('hunter_discovery') or {}).get('reason_codes',[])) or ('A named decision-maker email is still needed.' if required_person else 'The selected email could not be verified on a current company source.'))
+    evidence.append({'source':'campaign_context','context':{'query':query,'target_location':territory,'offer':offer,'prospect_policy':QUALITY_POLICY,'require_decision_maker':required_person,'request_spec':request_spec(query,territory,offer)}})
     lead.evidence_json=json.dumps(evidence)
     # Publish the owned record before suppression checks use an independent
     # database session (also important for SQLite's shared connection).

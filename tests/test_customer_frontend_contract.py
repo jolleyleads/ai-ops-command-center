@@ -75,7 +75,7 @@ vm.runInNewContext(code,context);
 const ref={kind:'research',job_id:'research-one',key:'source-one'};
 const html=context.window.selectionControl(ref);
 assert(html.includes('Activate workflow')&&!html.includes(' disabled'));
-assert(html.includes('Your click authorizes sending')&&html.includes('no further confirmation'));
+assert(html.includes('Sends your message and résumé')&&html.includes('No extra confirmation'));
 assert.equal(posts,0);assert.equal(reads,0);
 (async()=>{
  const pending=context.window.activateSelection(ref);context.window.activateSelection(ref);await pending;await Promise.resolve();
@@ -97,7 +97,7 @@ vm.runInNewContext(source.slice(source.indexOf('window.outreachPending=new Set()
 const w=context.window,ref={kind:'lead',lead_id:42},id=w.selectionId(ref);
 function render(status,workflow){w.selectedWorkflows[id]={job:{activation_policy:'selected-contact-v1'},state:{status,result:{workflow}}};return w.selectionControl(ref);}
 let html=render('completed',{state:'held',reason:'Mailbox not verified'});
-assert(html.includes('<b>Not sent</b>'));assert(html.includes('Mailbox not verified'));assert(html.includes('Retry verification'));assert(!html.includes('Retry workflow'));
+assert(html.includes('<b>Not sent</b>'));assert(html.includes('Mailbox not verified'));assert(html.includes('Try again'));assert(!html.includes('Retry workflow'));
 html=render('completed',{state:'active',outreach:{initial:'Send confirmed',followups:'Scheduled',booking:'Waiting for an agreed meeting time'}});
 assert(html.includes('<b>Sent</b>'));assert(html.includes(' disabled'));assert(!html.includes('Retry'));
 // A stale held/stopped job snapshot cannot conceal its confirmed send receipt.
@@ -106,13 +106,19 @@ for(const state of ['held','active']){
  assert(html.includes('<b>Sent</b>'));assert(!html.includes('>Not sent<'));assert(!html.includes('Retry'));
 }
 html=render('completed',{state:'held',outreach:{state:'review',send_status:'unknown'}});
-assert(html.includes('<b>Send status unconfirmed</b>'));assert(!html.includes('<b>Not sent</b>'));assert(html.includes(' disabled'));
-html=render('running',{});assert(html.includes('Send status unconfirmed'));assert(!html.includes('<b>Sent</b>'));
+assert(html.includes('<b>Checking status</b>'));assert(!html.includes('<b>Not sent</b>'));assert(html.includes(' disabled'));
+html=render('running',{});assert(html.includes('Sending…'));assert(!html.includes('<b>Sent</b>'));
 html=render('completed',{state:'active'});assert(!html.includes('<b>Sent</b>'));
 html=w.outreachControl(42,{state:'stopped',label:'Old stopped label',initial:'Send confirmed',reason:'Follow-ups stopped'});
 assert(html.includes('<b>Sent</b>'));assert(html.includes('Follow-ups stopped'));
 html=w.outreachControl(42,{state:'held',label:'Outreach held',reason:'Missing evidence'});
 assert(html.includes('<b>Not sent</b>'));assert(html.includes('Missing evidence'));
+function visible(html){return html.replace(/<details[\s\S]*?<\/details>/g,'');}
+html=render('completed',{state:'active',outreach:{send_status:'sent',reason:'Initial email accepted by Gmail. Delivery is not confirmed.'}});
+assert(visible(html).includes('<b>Sent</b>'));assert(!visible(html).includes('Gmail'));assert(!visible(html).includes('confirmed'));
+html=render('completed',{state:'held',reason:'INTENT_SIGNAL_UNPROVEN',reason_codes:['INTENT_SIGNAL_UNPROVEN']});
+assert(!visible(html).includes('INTENT_SIGNAL_UNPROVEN'));assert(html.includes('<summary>Details</summary>'));
+assert(!visible(w.renderProspectQuality({missing:['INTENT_SIGNAL_UNPROVEN']})).includes('Business fit'));
 context.API='';context.document.querySelectorAll=()=>[];let reads=0;
 context.requestJSON=()=>{reads++;return Promise.resolve(reads===1?{status:'completed',result:{workflow:{state:'held',lead_id:42,reason:'Old hold'}}}:{outreach:{send_status:'sent',initial:'Send confirmed',reason:'Initial email accepted by Gmail.'}});};
 w.selectedWorkflows[id]={ref,job:{poll_url:'/api/demo/campaigns/jobs/one'}};

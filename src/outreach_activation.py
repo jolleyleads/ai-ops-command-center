@@ -6,7 +6,7 @@ from workspace_security import current_workspace, OWNER
 
 
 def activation_view(lead):
-    view={'can_activate':False,'state':'held','label':'Outreach held',
+    view={'recipient':lead.contact_email or '', 'contact_name':lead.contact_name or '', 'can_activate':False,'state':'held','label':'Outreach held',
           'reason':'Verify this contact and qualify the business before activating outreach.',
           'send_status':'not_sent','initial':'Not sent','followups':'Not scheduled','booking':'Waiting for an agreed meeting time'}
     confirmed=oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id,kind='initial',status='sent',recipient=oa.normalize_email(lead.contact_email)).filter(
