@@ -733,7 +733,8 @@ def test_manual_activation_still_requires_email_proof_and_respects_optout(env,mo
     assert 'qualif' not in result['workflow']['reason'].lower()
 
 
-def test_new_selected_candidate_verifies_email_and_sends_without_need_research(env,monkeypatch):
+@pytest.mark.parametrize('displayed_email',['hello@acme.example','support@directory.example'])
+def test_new_selected_candidate_verifies_email_and_sends_without_need_research(env,monkeypatch,displayed_email):
     import v1_orchestration as orchestration
     import src.hunter_mailbox as mailbox
     from workspace_security import claim,OWNER
@@ -741,7 +742,7 @@ def test_new_selected_candidate_verifies_email_and_sends_without_need_research(e
     from src.selection_refs import reference
     from src.company_identity import identity_proof
     page=company_page();page['company_identity']=identity_proof('Acme',page,page['url'])
-    row={'company':'Acme','website':page['url'],'email':'hello@acme.example','classification':'Candidate'}
+    row={'company':'Acme','website':page['url'],'email':displayed_email,'classification':'Candidate'}
     research=ResearchJob(id='new-manual-candidate',prompt_text='Find 10 HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
     oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
     monkeypatch.setattr(orchestration,'_orchestrate_discovery_serial',lambda *a,**k:pytest.fail('Manual activation ran automatic qualification'))

@@ -232,3 +232,10 @@ Repair: new explicit single/bulk activations use selected-contact-v1. A customer
 Controls retained: workspace/resource ownership, source-company/domain/email proof, current mailbox verification, suppression and opt-outs, pinned résumé and approved two-emoji copy, recipient serialization, duplicate/uncertain-send protection, cancellation/claim fences, exact provider receipts and existing reply/booking gates. Continuation authority requires the durable selected-contact grant plus an actual confirmed initial send for that same recipient. No qualification receipt is forged.
 
 Verification: full local regression passed (793 tests, 7 PostgreSQL-only skips); final focused checks including the additional old-bulk-to-manual-policy regression passed (150 tests). GitHub CI and exact live deployment evidence pending. No live prospect emails or Calendar writes used for testing. No migrations, credentials or infrastructure changes. Rollback: revert this release's code and redeploy; already-confirmed sends and follow-ups cannot be undone by a code rollback.
+
+
+### Manual-send deployment and source-email follow-up
+
+PR #167: CI run 39831905691 passed 801 tests. Merge c341a9a313e284e5176f2872074572fcfea172a3 went live in Render deploy dep-dbd5djifngtc73fm570g. Production /api/health returned that SHA and served access.js matched local SHA256. Both signed-out activation endpoints returned 401; post-deploy error-log query empty. Browser reload restored genuine research with the new final-authorization copy. No live email or Calendar test performed.
+
+The public research check exposed a directory support address listed against a different business. Sending rejected the cross-domain address. Follow-up repair filters company-domain addresses in bulk eligibility and card display; individual activation ignores an unrelated preferred address and seeks a real mailbox from the business's own fetched source. It never substitutes guessed or third-party addresses. Local full regression: 795 passed, 7 PostgreSQL-only skips. Follow-up CI/deployment pending; do not infer actual external send success from these tests.

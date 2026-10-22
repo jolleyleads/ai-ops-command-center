@@ -255,9 +255,15 @@ document.addEventListener('click',function(event){
 // One explicit click authorizes exactly the displayed, email-bearing businesses.
 window.bulkTargets={};window.bulkObservers=new Set();
 window.businessEmailValue=function(row){
-  var email=row.contact_email||row.email||((row.contact||{}).email);
-  if(!email)(Array.isArray(row.contacts)?row.contacts:[]).some(function(contact){if(contact.email){email=contact.email;return true;}return false;});
-  return typeof email==='string'&&email.indexOf('@')>0?email:'';
+  // Display is advisory; the server independently checks source and mailbox proof.
+  var website=row.website||row.source_url||row.url||'',host;
+  try{host=new URL(website).hostname.toLowerCase().replace(/^www\./,'');}catch(e){return '';}
+  var values=[row.contact_email,row.email,(row.contact||{}).email].concat((Array.isArray(row.contacts)?row.contacts:[]).map(function(c){return c.email;}));
+  return values.find(function(email){
+    if(typeof email!=='string'||!email.includes('@'))return false;
+    var domain=email.split('@').pop().toLowerCase();
+    return domain===host||domain.endsWith('.'+host)||host.endsWith('.'+domain);
+  })||'';
 };
 window.businessEmail=function(row){var email=window.businessEmailValue(row);return email?'<p class="meta">Email: '+esc(email)+'</p>':'';};
 window.bulkActivationControl=function(rows){
