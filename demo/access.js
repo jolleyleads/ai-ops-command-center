@@ -258,6 +258,7 @@ window.businessEmailValue=function(row){
   // Display is advisory; the server independently checks source and mailbox proof.
   var website=row.website||row.source_url||row.url||'',host;
   try{host=new URL(website).hostname.toLowerCase().replace(/^www\./,'');}catch(e){return '';}
+  if(['threebestrated.com','linkedin.com','yelp.com','facebook.com','google.com','indeed.com','ziprecruiter.com'].some(function(domain){return host===domain||host.endsWith('.'+domain);}))return '';
   var values=[row.contact_email,row.email,(row.contact||{}).email].concat((Array.isArray(row.contacts)?row.contacts:[]).map(function(c){return c.email;}));
   return values.find(function(email){
     if(typeof email!=='string'||!email.includes('@'))return false;
