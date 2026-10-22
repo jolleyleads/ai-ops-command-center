@@ -39,10 +39,13 @@ def task_views(campaign_id):
         from outreach_automation import OutreachLead
         from src.outreach_activation import activation_view
         lead=db.session.get(OutreachLead,lead_id) if lead_id else None
+        from src.prospect_quality import for_lead
+        quality=for_lead(lead) if lead else business.get('prospect_quality')
         views.append({'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
+            'prospect_quality':quality,
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
             'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
-            'contact_status':'Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review')),
+            'contact_status':('Contact '+quality['contact']['state'].lower()) if quality else ('Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review'))),
             'qualification_status':'Qualified' if result.get('qualified') else 'Not qualified',
             'draft_status':'Draft ready' if result.get('drafted') else 'No draft ready',
             'status':status,'stage':row.stage,'error':error,'updated_at':row.updated_at.isoformat()+'Z'})
@@ -63,8 +66,12 @@ def _execute_task(task_id,payload):
         db.session.expire_all()
         parent=db.session.get(CampaignExecutionJob,campaign_id)
         if not parent or parent.status!='running':raise TimeoutError('CAMPAIGN_STOPPED')
-        changed=CampaignBusinessTask.query.filter_by(id=task_id,status='running').update({
-            'stage':details['stage'],'updated_at':datetime.utcnow()},synchronize_session=False)
+        updates={'stage':details['stage'],'updated_at':datetime.utcnow()}
+        if details.get('prospect_quality'):
+            business=json.loads(task.business_json)
+            business['prospect_quality']=details['prospect_quality']
+            updates['business_json']=json.dumps(business)
+        changed=CampaignBusinessTask.query.filter_by(id=task_id,status='running').update(updates,synchronize_session=False)
         db.session.commit()
         if not changed:raise TimeoutError('CONTACT_CLAIM_LOST')
     try:

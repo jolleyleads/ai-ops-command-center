@@ -109,6 +109,8 @@ def hardened_safe_send(lead,*,kind,sequence,subject,body):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
     qualification=oa._qualification_gate(lead)
     if not qualification.get("ok"):return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["QUALIFICATION_REQUIRED"],"qualification":qualification}}
+    quality_gate=oa._prospect_send_gate(lead,kind)
+    if not quality_gate.get('ok'):return quality_gate
     address=normalize_email(lead.contact_email);sg=suppression_gate(address,oa._is_suppressed(address))
     if not sg.get("ok"):return {"ok":False,"stage":"blocked","gate":sg}
     key=send_key(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address);attempt=oa.OutreachSendAttempt.query.filter_by(idempotency_key=key).first();ag=send_attempt_gate(attempt.status if attempt else "")

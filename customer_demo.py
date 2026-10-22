@@ -40,6 +40,8 @@ def _campaign_payload(data):
 def _orchestration_payload(discovery,campaign):
     payload=dict(discovery);target=campaign["target_customer"]
     payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"offer":campaign.get("offer") or "AI lead generation and customer follow-up automation","business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"],"require_decision_maker":campaign.get("require_decision_maker") is True})
+    if campaign.get('prospect_policy'):
+        payload.update(prospect_policy=campaign['prospect_policy'],request_spec=campaign['request_spec'])
     return payload
 def _run_campaign(data):
     from src.execution_deadline import checkpoint
@@ -49,6 +51,9 @@ def _run_campaign(data):
     # This bit exists only in the server-created authenticated job payload.
     campaign["send_authorized"]=data.get("send_authorized") is True
     campaign["require_decision_maker"]=data.get("require_decision_maker") is True
+    from src.prospect_quality import POLICY, request_spec
+    if data.get('prospect_policy')==POLICY:
+        campaign.update(prospect_policy=POLICY,request_spec=request_spec(campaign['query'],campaign['territory'],campaign['offer'],campaign['business_type']))
     checkpoint("researching",requested=campaign["target_count"])
     try:discovery=_smart_search(campaign["query"],campaign["territory"],runtime_budget=research_budget_seconds(campaign["target_count"]),target_count=campaign["target_count"])
     except Exception as exc:return None,"discovery",f"{type(exc).__name__}: {exc}"
@@ -64,6 +69,17 @@ def _run_campaign(data):
         outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] and data.get("draft_only") is not True else orchestrate_discovery(payload,draft_only=True)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
+    if campaign.get('prospect_policy'):
+        from src.prospect_quality import for_lead
+        from app import db
+        qualities=[for_lead(lead) for key in set(outreach.get('lead_ids') or [])
+                   if (lead:=db.session.get(OutreachLead,key)) is not None]
+        supported=sum(q['well_supported'] for q in qualities)
+        outreach['prospect_summary']={'requested':campaign['target_count'],'businesses_researched':len(discovery.get('results') or []),
+            'well_supported':supported,'buyer_identified':sum(bool(q['contact']['buyer']) for q in qualities),
+            'contact_ready':sum(q['contact']['state']=='Ready' for q in qualities),
+            'remaining_well_supported':max(0,campaign['target_count']-supported),
+            'note':'A well-supported business is not automatically ready for outreach. No automatic increase in volume.'}
     visible=[]
     for result in discovery.get("results") or []:
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
@@ -99,13 +115,16 @@ def chat_prepare_campaign():
         return jsonify({"ok":False,"error":"Operator authentication required"}),401
     data=request.get_json(silent=True) or {}
     query=_text(data.get("target_customer") or data.get("prompt"),500)
+    offer=_text(data.get('offer') if 'offer' in data else 'AI lead generation and customer follow-up automation',1200)
+    if not offer:return jsonify(ok=False,error='Describe your offer in Task options before preparing prospects.'),400
     campaign,error=_campaign_payload({
         "target_customer":query,"territory":_text(data.get("territory"),200),
-        "offer":_text(data.get("offer") or "AI lead generation and customer follow-up automation",1200),
+        "offer":offer,
         "sending_limit":1,"target_count":data.get("target_count") or 10,
     })
     if error:return jsonify(error),400
-    campaign.update(draft_only=True,send_authorized=False)
+    from src.prospect_quality import POLICY
+    campaign.update(draft_only=True,send_authorized=False,prospect_policy=POLICY)
     return enqueue_execution("campaign",campaign,request.headers.get("Idempotency-Key"))
 
 @app.route("/api/demo/leads",methods=["GET"])

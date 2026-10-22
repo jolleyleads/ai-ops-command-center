@@ -83,6 +83,11 @@ def _verified_public_email_impl(result):
                 enrichment['fields']['email']['validated']=False
             assessment.setdefault('reason_codes',[]).append('NAMED_DECISION_MAKER_EMAIL_REQUIRED')
     result["_contact_enrichment"]=enrichment
+    if (result.get('_campaign_context') or {}).get('prospect_policy')=='evidence-led-v1':
+        from src.hunter_mailbox import verify_mailbox
+        candidate=(enrichment.get('fields',{}).get('email') or {})
+        if candidate.get('validated') and not (enrichment.get('contact_assessment') or {}).get('mailbox_validation'):
+            enrichment.setdefault('contact_assessment',{})['mailbox_validation']=verify_mailbox(candidate['value'])
     validated=validated_payload(enrichment)
     email=_valid_email(validated.get("email"));url=_clean(validated.get("email_source_url"),1800)
     result["_contact_name"]=""
@@ -100,6 +105,7 @@ def _verified_public_email_impl(result):
 def _evidence_with_contact(result, email, email_source):
     observed = datetime.now(timezone.utc).isoformat()
     evidence = []
+    evidence.extend(result.get('_prospect_sources') or [])
     for raw in _evidence_for_storage(result):
         if isinstance(raw, dict):
             item = dict(raw); item.setdefault("observed_at", observed); evidence.append(item)
@@ -148,11 +154,15 @@ def discovery_lock(company, source_url):
 
 def campaign_context(payload, result):
     query = _clean(payload.get("query") or payload.get("goal") or payload.get("intent_signal"), 1000)
-    return {"target_location": _clean(payload.get("location") or result.get("contact_location"), 300),"offer":_clean(payload.get("offer"),1200),
+    context={"target_location": _clean(payload.get("location") or result.get("contact_location"), 300),"offer":_clean(payload.get("offer"),1200),
             "query": query, "intent_signal": query,
             "business_type": _clean(payload.get("business_type"), 300),
             "candidate_type": _clean(result.get("category") or result.get("type"), 300),
             "require_decision_maker": payload.get("require_decision_maker") is True or bool(re.search(r"(?i)\bdecision[ -]?makers?\b", query))}
+    if payload.get('prospect_policy'):
+        context.update(prospect_policy=payload['prospect_policy'],request_spec=payload.get('request_spec') or {},
+                       discovery_sources=[_clean(result.get('source') or 'Unrecorded discovery source',120)])
+    return context
 
 
 def unfinished_lead_reasons(qualification,mailbox):
@@ -164,6 +174,10 @@ def unfinished_lead_reasons(qualification,mailbox):
 
 def resume_discovery_lead(lead, result, lease_valid=None):
     """Refresh held discovery only, never rewrite a sent conversation."""
+    from src.prospect_quality import POLICY, collect_sources
+    context=result.get('_campaign_context') or {}
+    if context.get('prospect_policy')==POLICY:
+        result['_prospect_sources']=collect_sources(result,context)
     email, source = _verified_public_email(result)
     if lease_valid and not lease_valid():
         return {'ok':False,'reason_codes':['RECOVERY_LEASE_LOST']}
@@ -230,6 +244,23 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
                 summary["lead_ids"].append(existing.id)
                 from lead_recovery import LeadRecovery, schedule_recovery
                 held = db.session.get(LeadRecovery, existing.id)
+                # Reusing an unsent lead must not reuse eligibility for a different
+                # offer. Preserve sent/uncertain conversations and active leases.
+                from outreach_automation import OutreachSendAttempt, _server_qualification_inputs
+                from src.prospect_quality import for_lead
+                context=result['_campaign_context']
+                if (context.get('prospect_policy')=='evidence-led-v1'
+                        and existing.status in {'needs_evidence','qualified','drafted'}
+                        and not existing.gmail_message_id and not existing.sent_at
+                        and not OutreachSendAttempt.query.filter_by(lead_id=existing.id).first()
+                        and not (held and held.state=='running')
+                        and (_server_qualification_inputs(existing)[1]!=context or not for_lead(existing)['ready'])):
+                    evidence=[r for r in json.loads(existing.evidence_json or '[]')
+                              if isinstance(r,dict) and r.get('source')!='campaign_context']
+                    evidence.append({'source':'campaign_context','context':context})
+                    existing.evidence_json=json.dumps(evidence)
+                    _store_qualification(existing)
+                    held=schedule_recovery(existing,result,['PROSPECT_REASSESSMENT_REQUIRED'])
                 if existing.status=='needs_evidence' and not existing.gmail_message_id and not held:
                     held=schedule_recovery(existing,result,['CONTACT_EVIDENCE_MISSING'])
                 if held and existing.status in {'needs_evidence','qualified','drafted'}:
@@ -239,6 +270,10 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
                 continue
             from src.execution_deadline import checkpoint
             checkpoint("enriching_contact")
+            from src.prospect_quality import POLICY, collect_sources, assess
+            if result['_campaign_context'].get('prospect_policy')==POLICY:
+                result['_prospect_sources']=collect_sources(result,result['_campaign_context'])
+                checkpoint('business_need_available',prospect_quality=assess(company,result.get('website') or '',result['_campaign_context'],result['_prospect_sources']))
             email,email_source=_verified_public_email(result)
             evidence=_evidence_with_contact(result,email,email_source)
             evidence.append({'source':'campaign_context','context':result['_campaign_context']})
