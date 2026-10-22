@@ -97,3 +97,20 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
 - Local full suite: 736 passed, 7 PostgreSQL-only skips. Additional small New chat/prompt-preservation changes passed focused basic/frontend checks. Tests cover approved two-emoji first touch plus real résumé attachment, no send during preparation (even with legacy global autosend enabled), explicit activation, duplicate protection, scheduler handoff, uncertain attempts, expired-grant preflight, ownership, CSRF, opt-out preservation and rendering without automatic sends.
 - Live infrastructure inspection: enabled five-minute inbound/outreach cron exists. Its recent OAuth probe fails and provider errors report invalid_grant while a stored refresh grant is present. Reauthorization is required; no credentials replaced and no live outreach/Calendar tests performed.
 - No migrations, new providers or infrastructure/spending. Deployment and final UI checks pending. Rollback is a normal revert of this change; retain genuine records and existing durable provider receipts.
+# Job-source connector onboarding — October 21, 2026
+
+- Base: merged main `27e253e0c8249af47d7322c7eb31b6da27946d27`.
+- Implemented a staged Adzuna US adapter, research-tool wiring, independent feed
+  failure handling and authenticated provider access states. Disabled by default;
+  both credentials and `ADZUNA_USE_APPROVED=true` are required.
+- Confirmed Adzuna terms require written agreement for lead generation. Indeed
+  requires the appropriate partner/search entitlement. ZipRecruiter MCP initial
+  connection returned HTTP 429; no search schema or live result was obtained.
+- Provider applications/inquiry text and exact activation/rollback steps are in
+  `docs/job-source-onboarding.md`. No applications were submitted, credentials
+  changed, accounts created, purchases made, emails sent or Calendar events added.
+- Focused tests: 46 passed. Local full regression: 753 passed, 7 PostgreSQL-only
+  skips. Provider tests are isolated simulations, not proof of approved live access.
+- Next: PR CI, then approved provider onboarding and a bounded read-only live
+  search before enabling each source. Indeed/ZipRecruiter direct search and
+  Adzuna production enablement remain BLOCKED on their stated external access.

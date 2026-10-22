@@ -2,6 +2,7 @@ import os
 import requests
 from flask import jsonify, request
 from app import app, db, AutomationEvent, search_remote_jobs
+from src.job_sources import capabilities as job_source_capabilities
 
 def _clean(value, limit=300): return str(value or "").strip()[:limit]
 def _places_key(): return os.environ.get("GOOGLE_PLACES_API_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY") or ""
@@ -52,7 +53,7 @@ def _normalize_jobs(keyword):
 @app.route("/api/universal-search/capabilities")
 def universal_search_capabilities():
     custom=bool(os.environ.get("GOOGLE_SEARCH_API_KEY") and os.environ.get("GOOGLE_SEARCH_CX"));web=bool((os.environ.get("GOOGLE_WEB_SEARCH_API_KEY") or os.environ.get("GOOGLE_SEARCH_API_KEY")) and os.environ.get("GOOGLE_WEB_SEARCH_CLIENT_ID"));source="Google Web Search Service" if web else ("Google Programmable Search" if custom else "Google Search")
-    return jsonify({"jobs":{"configured":True,"source":"Remotive"},"businesses":{"configured":bool(_places_key()),"source":"Google Places"},"public_records":{"configured":custom or web,"source":source,"google_search_api_key_present":bool(os.environ.get("GOOGLE_SEARCH_API_KEY")),"google_search_cx_present":bool(os.environ.get("GOOGLE_SEARCH_CX"))}})
+    return jsonify({"jobs":{"configured":True,"source":"Remotive", "providers":job_source_capabilities()},"businesses":{"configured":bool(_places_key()),"source":"Google Places"},"public_records":{"configured":custom or web,"source":source,"google_search_api_key_present":bool(os.environ.get("GOOGLE_SEARCH_API_KEY")),"google_search_cx_present":bool(os.environ.get("GOOGLE_SEARCH_CX"))}})
 @app.route("/api/universal-search",methods=["GET","POST"])
 def universal_search():
     data=(request.get_json(silent=True) or {}) if request.method=="POST" else request.args;mode=_clean(data.get("mode") or "jobs",40).lower();query=_clean(data.get("query") or data.get("keyword") or "",300);location=_clean(data.get("location") or "",200)

@@ -14,6 +14,7 @@ from src.company_identity import current_contact_source
 from src.company_identity import name_key
 from src.public_fetch import public_get
 from src.contact_assessment import contact_sections, assess_people, is_shared_email, current_email_context, is_fax_number
+from src.job_sources import search_jobs, adzuna_ready
 
 
 def _clean(v,limit=500):return str(v or "").strip()[:limit]
@@ -111,7 +112,7 @@ def _run_tool(call):
                     payload=dict(payload)
                     payload["message"]=_clean(payload.get("message") or "Records provider unavailable",350)+"; official-source fallback returned no evidence."
         elif tool=="business_search":payload=_search_businesses(q,loc)
-        elif tool=="job_search":payload={"configured":True,"source":"Remotive","message":"","results":_normalize_jobs(q)}
+        elif tool=="job_search":payload=search_jobs(q,loc,_normalize_jobs)
         else:return [],f"Unknown research tool: {tool}"
     except Exception as exc:return [],f"{tool} failed safely: {type(exc).__name__}"
     rows=[]
@@ -274,6 +275,11 @@ def _verification_queries(name,q,intents=None):
 
 def _company_discovery_calls(q,loc,calls):
     """Hiring requests always retrieve job evidence, even after a business-only plan."""
+    if is_hiring_query(q) and adzuna_ready():
+        # An approved structured job feed supplements primary-source verification.
+        # Keep it inside the existing three-call budget; it never verifies a lead.
+        focused=[{"tool":tool,"query":q,"location":loc} for tool in ("web_search","exa_search","job_search")]
+        return focused
     if _plain_business_query(q):
         # A plain company list must not depend on hiring evidence or one provider.
         return [{"tool":tool,"query":q,"location":loc} for tool in ("web_search","exa_search","business_search")]
