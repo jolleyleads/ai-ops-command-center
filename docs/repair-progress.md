@@ -205,3 +205,20 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
   `docs/selected-business-workflows.md`.
 - Next: focused/full regression, diff review, PR/CI, main auto-deploy, exact commit
   and live batch-control verification.
+
+## Final public research email handoff — 2026-10-22
+
+- Bulk change merged in PR165 (`3b8e1cc32bf8cc31df3faf95f0d1173eddda0550`),
+  CI793 passed, Render deploy `dep-dbd4gb142hec73ae1860` live. Exact production
+  health SHA confirmed; unauthenticated bulk POST401.
+- Live read-only research completed with two candidates and a disabled
+  Activate all with email(0) control. Inspection confirmed the completion
+  handler replaced final results with the earlier business-progress projection,
+  which is recorded before source contact attachment and has no email fields.
+- Public completed research now renders final persisted result rows and their
+  contacts. Campaign drafting still uses its per-business task projection.
+  Updated composer/menu guidance for bulk activation. No sending or gate change.
+- Focused frontend checks:8 passed, including a final sourced-email result
+  surviving a stale progress projection. CI/deploy/live verification pending.
+- This does not prove the live run found any valid email. Preserve that unknown
+  until the actual final data is visible. No prospect email or Calendar writes.

@@ -150,3 +150,25 @@ const group=Object.keys(w.bulkTargets)[0];
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_completed_research_renders_final_email_records_instead_of_early_progress_projection():
+    import subprocess
+    script=r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('demo/access.js','utf8');
+const bubble={innerHTML:''},rows=[{company:'Source-backed business',contacts:[{email:'owner@source.example'}]}];
+const context={API:'',window:{activeResearchBubble:bubble,bulkActivationControl:items=>'BATCH '+items.map(x=>(x.contacts||[]).map(c=>c.email).join('')).join(''),renderBusinessCards:()=>{throw Error('Stale progress hid final contacts');}},esc:String,resultCard:r=>r.contacts[0].email,
+ document:{getElementById:()=>({value:'Norfolk'})},sessionStorage:{setItem:()=>{},removeItem:()=>{}},
+ requestJSON:()=>Promise.resolve({status:'completed',result:{results:rows},progress:{businesses:[{company:'Source-backed business',contact_status:'Pending'}]}})};
+vm.runInNewContext(source.slice(source.indexOf('window.renderSavedJobResult='),source.indexOf('(function restoreResearch(){')),context);
+(async()=>{
+ const result=await context.window.followResearchJob({job_id:'source',poll_url:'/api/research/jobs/source'},'research');
+ assert.equal(result.business_progress.length,0);assert.equal(result.results[0].contacts[0].email,'owner@source.example');
+ context.window.renderSavedJobResult(result);assert(bubble.innerHTML.includes('BATCH owner@source.example'));assert(bubble.innerHTML.includes('owner@source.example'));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    # Progress painting itself is covered elsewhere; this test isolates the
+    # completed-job handoff and final business/email rendering.
+    script=script.replace("activeResearchBubble:bubble,bulkActivationControl", "activeResearchBubble:bubble,renderResearchProgress:()=>{},bulkActivationControl")
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

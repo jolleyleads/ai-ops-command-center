@@ -20,7 +20,7 @@
     campaign.disabled=!access.sending_available;
     document.getElementById('prepare').disabled=!access.drafting_available;
     document.getElementById('prepare').title=access.drafting_available?'Prepare verified drafts without sending':'Sign in to save leads and prepare drafts';
-    if(access.signed_in){note.textContent=access.sending_available?'Workspace connected. Research prepares verified contacts and drafts. Activate outreach for each ready contact.':'Your workspace is connected. Campaign drafting and sending require a separately connected mailbox.';}
+    if(access.signed_in){note.textContent=access.sending_available?'Workspace connected. Research prepares verified contacts and drafts. Use Activate all with email above your results to start a batch.':'Your workspace is connected. Campaign drafting and sending require a separately connected mailbox.';}
     else{mode.value='research';note.innerHTML='Research is available. <a href="/login">Sign in to verify contacts and activate outreach</a>.';}
     if(window.syncComposerState)window.syncComposerState();
     return access;
@@ -81,7 +81,7 @@ window.followResearchJob=function(job,kind){
         window.renderResearchProgress(state);
         if(state.status==='completed'){
           sessionStorage.setItem('automake-last-research-job',JSON.stringify({job_id:job.job_id,poll_url:job.poll_url,kind:kind,territory:territory.value}));sessionStorage.removeItem('automake-active-job');sessionStorage.removeItem('automake-research-request');sessionStorage.removeItem('automake-campaign-request');sessionStorage.removeItem('automake-draft-request');window.pendingCampaign=null;
-          state.result.business_progress=(state.progress||{}).businesses||[];resolve(state.result);return;
+          state.result.business_progress=kind==='research'?[]:(state.progress||{}).businesses||[];resolve(state.result);return;
         }
         if(state.status==='failed'||state.status==='cancelled'){
           sessionStorage.removeItem('automake-active-job');
