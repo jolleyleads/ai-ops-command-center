@@ -186,3 +186,22 @@ Current final local suite: 726 passed, seven environment-specific PostgreSQL che
   deployed revision pending. Next: CI, deploy,
   verify live assets and the customer card. Rollback: revert this code change;
   no data migration or configuration reversal is required.
+
+## One-click email batch — 2026-10-22
+
+- Base `58d972b00aac95ff658bb444214750efe6235812`, branch
+  `feature/bulk-email-activation`. User wants one activation for all displayed
+  businesses with email, rather than one click per card.
+- Added the list-level batch control, visible sourced/saved emails, private
+  atomic selection validation, and one durable bounded batch with per-business
+  outcomes. Existing send gates and approved message/résumé remain authoritative.
+- Repeated/reordered clicks are idempotent. First focused run identified a retry
+  lookup after mutable email validation; moved existing-batch lookup before
+  that mutable check while preserving ownership checks. Full local suite:
+  786 passed, 7 PostgreSQL-only skips. Final focused checks:42 passed.
+  CI/deployment verification pending.
+- No real external emails or Calendar writes in testing. No schema, provider,
+  secret or infrastructure changes. Limits and rollback documented in
+  `docs/selected-business-workflows.md`.
+- Next: focused/full regression, diff review, PR/CI, main auto-deploy, exact commit
+  and live batch-control verification.

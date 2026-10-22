@@ -34,6 +34,7 @@ window.renderResearchProgress=function(state){
   var html='<b>AutoMake AI · '+esc(state.status)+'</b><p>'+esc(stages[p.stage]||'Research and verification in progress')+'</p>';
   html+='<p class="meta">Requested '+esc(p.requested||state.target_count||'')+' · Discovered '+esc(p.discovered||rows.length)+' · Qualified '+esc(p.qualified||0)+' · Drafts ready '+esc(p.drafted||0)+'.</p>';
   if(p.updated_at)html+='<p class="meta">Last update: '+esc(p.updated_at)+'</p>';
+  if(window.bulkActivationControl)html+=window.bulkActivationControl(rows);
   rows.forEach(function(row){
     html+='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status||'Candidate — verification pending')+'</p>';
     if(row.contact_status)html+='<p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
@@ -61,7 +62,7 @@ window.showRequestInterpretation=function(query,location,count,sending){
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
-  bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):rows.map(resultCard).join(''));
+  bubble.innerHTML='<b>Saved results</b><p>Research results: '+esc(rows.length)+' · Verified businesses: '+esc(research.verified||research.verified_count||0)+'. A verified business is not automatically ready for outreach.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
   if(result.outreach)bubble.innerHTML+='<p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p>';
   var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p>';
 };
@@ -115,7 +116,7 @@ window.requestKeyFor=function(kind,body){
 };
 
 window.renderBusinessCards=function(rows){
-  return rows.map(function(row){
+  return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
     var html='<div class="lead"><b>'+esc(row.company)+'</b><p>'+esc(row.business_status)+'</p><p>'+esc(row.contact_status)+' · '+esc(row.qualification_status||'Qualification pending')+' · '+esc(row.draft_status||'No draft ready')+'</p>';
     if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
@@ -193,9 +194,9 @@ window.selectionControl=function(ref){
   return html+'</div>';
 };
 window.businessAction=function(row){
-  if(row.lead_id&&row.outreach&&['active','stopped','review'].indexOf(row.outreach.state)!==-1)return window.outreachControl(row.lead_id,row.outreach);
+  if(row.lead_id&&row.outreach&&['active','stopped','review'].indexOf(row.outreach.state)!==-1)return (window.businessEmail?window.businessEmail(row):'')+window.outreachControl(row.lead_id,row.outreach);
   var ref=row.selection||(row.lead_id?{kind:'lead',lead_id:row.lead_id}:null);
-  if(ref)return window.selectionControl(ref);
+  if(ref)return (window.businessEmail?window.businessEmail(row):'')+window.selectionControl(ref);
   return row.lead_id&&window.outreachControl?window.outreachControl(row.lead_id,row.outreach):'';
 };
 window.refreshSelectionCards=function(id){
@@ -235,7 +236,7 @@ window.activateSelection=function(ref){
   window.selectedWorkflows[id]=entry;entry.pending=true;entry.error='';window.refreshSelectionCards(id);
   var offer=document.getElementById('customer-offer').value;
   var body={selection:ref,offer:offer,activate:true};
-  if(entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
+  if(entry.job&&!entry.job.bulk&&entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
   return workspaceMutation('/api/chat/workflows/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(job){
       if(!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(job.poll_url||''))throw new Error('Invalid saved workflow.');
@@ -250,9 +251,75 @@ document.addEventListener('click',function(event){
   var id=stop.dataset.cancelSelection,entry=window.selectedWorkflows[id];if(!entry||!entry.job)return;
   stop.disabled=true;workspaceMutation(entry.job.poll_url+'/cancel',{method:'POST'}).then(function(state){entry.state=state;window.refreshSelectionCards(id);}).catch(function(error){entry.error=error.message;window.refreshSelectionCards(id);});
 });
+
+// One explicit click authorizes exactly the displayed, email-bearing businesses.
+window.bulkTargets={};window.bulkObservers=new Set();
+window.businessEmailValue=function(row){
+  var email=row.contact_email||row.email||((row.contact||{}).email);
+  if(!email)(Array.isArray(row.contacts)?row.contacts:[]).some(function(contact){if(contact.email){email=contact.email;return true;}return false;});
+  return typeof email==='string'&&email.indexOf('@')>0?email:'';
+};
+window.businessEmail=function(row){var email=window.businessEmailValue(row);return email?'<p class="meta">Email: '+esc(email)+'</p>':'';};
+window.bulkActivationControl=function(rows){
+  if(!rows.length)return '';
+  var refs=[],seen=new Set();
+  rows.forEach(function(row){var ref=row.selection||(row.lead_id?{kind:'lead',lead_id:row.lead_id}:null);if(!ref||!window.businessEmailValue(row))return;var key=window.selectionId(ref);if(!seen.has(key)){seen.add(key);refs.push(ref);}});
+  var group=rows.map(function(row){return row.selection?window.selectionId(row.selection):String(row.lead_id||row.company||row.title||'');}).sort().join('|');
+  window.bulkTargets[group]={refs:refs,rows:rows};
+  return window.bulkControl(group);
+};
+window.bulkControl=function(group){
+  var target=window.bulkTargets[group]||{},refs=target.refs||[],entries=refs.map(function(ref){
+    var id=window.selectionId(ref),entry=window.selectedWorkflows[id];if(entry)return entry;
+    var row=(target.rows||[]).find(function(row){var r=row.selection||(row.lead_id?{kind:'lead',lead_id:row.lead_id}:null);return r&&window.selectionId(r)===id;})||{};
+    return {state:{result:{workflow:{outreach:row.outreach||{}}}}};
+  });
+  var busy=entries.some(function(e){return e.pending||['queued','running'].indexOf((e.state||{}).status)!==-1;}),sent=entries.filter(function(e){return window.emailSendStatus((((e.state||{}).result||{}).workflow||{}).outreach)==='Sent';}).length;
+  var batch=entries.length&&entries.every(function(e){return e.job&&e.job.bulk;}),done=batch&&!busy;
+  var disabled=!refs.length||refs.length>20||busy||done;
+  var label=busy?'Batch in progress':done?'Batch finished':('Activate all with email ('+refs.length+')');
+  var note=refs.length>20?'Filter to 20 or fewer businesses with email before starting.':refs.length?'One click starts outreach for these '+refs.length+' businesses. Sends your approved message with two emojis and résumé when the required checks pass.':'Businesses will appear here as emails are found. No emails have been selected.';
+  return '<div class="outreach-workflow bulk-workflow" data-bulk-group="'+esc(group)+'"><button class="ghost" type="button" data-activate-bulk="'+esc(group)+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(note)+'</p><p role="status">'+sent+' of '+refs.length+' emails sent'+(done?' · Review individual results below.':'.')+'</p></div>';
+};
+window.refreshBulkControls=function(){document.querySelectorAll('[data-bulk-group]').forEach(function(el){el.outerHTML=window.bulkControl(el.dataset.bulkGroup);});};
+window.observeBulkWorkflow=function(job){
+  if(window.bulkObservers.has(job.job_id))return;window.bulkObservers.add(job.job_id);
+  var failures=0,started=Date.now();
+  function poll(){requestJSON(API+job.poll_url,{cache:'no-store'}).then(function(state){
+    failures=0;var items=(state.result||{}).bulk_items||(state.progress||{}).bulk_items||((state.result||{}).progress||{}).bulk_items||[];
+    Object.keys(window.selectedWorkflows).forEach(function(id){
+      var entry=window.selectedWorkflows[id];if(!entry.job||entry.job.job_id!==job.job_id)return;
+      var item=items.find(function(x){return window.selectionId(x.selection)===id;}),terminal=['completed','failed','cancelled'].indexOf(state.status)!==-1;
+      entry.pending=false;entry.error='';entry.state={status:item&&item.status==='completed'?'completed':terminal?state.status:item&&item.status==='running'?'running':'queued',
+        result:{workflow:item&&item.workflow||{}},error:terminal&&(!item||item.status!=='completed')?(state.error||'Batch stopped before this business finished. Review its saved send status.') :''};
+      window.refreshSelectionCards(id);
+      var flow=item&&item.workflow;
+      if(terminal&&flow&&flow.lead_id)requestJSON(API+'/api/chat/dashboard/leads/'+encodeURIComponent(flow.lead_id),{cache:'no-store'}).then(function(detail){
+        if(detail.outreach){entry.state.result.workflow.outreach=detail.outreach;window.refreshSelectionCards(id);window.refreshBulkControls();}
+      }).catch(function(){});
+    });window.refreshBulkControls();
+    if(['queued','running'].indexOf(state.status)!==-1&&Date.now()-started<2700000)setTimeout(poll,2000);else window.bulkObservers.delete(job.job_id);
+  }).catch(function(error){
+    if(++failures<4){setTimeout(poll,failures*2000);return;}
+    window.bulkObservers.delete(job.job_id);Object.keys(window.selectedWorkflows).forEach(function(id){var e=window.selectedWorkflows[id];if(e.job&&e.job.job_id===job.job_id){e.error='Batch status could not be confirmed. Reload to check it; do not resend.';window.refreshSelectionCards(id);}});
+  });}poll();
+};
+window.activateAllWithEmail=function(group){
+  var target=window.bulkTargets[group];if(!target||!target.refs.length||target.refs.length>20)return;
+  if(target.refs.some(function(ref){var e=window.selectedWorkflows[window.selectionId(ref)]||{};return e.pending||['queued','running'].indexOf((e.state||{}).status)!==-1;}))return;
+  var offer=document.getElementById('customer-offer').value;
+  target.refs.forEach(function(ref){var id=window.selectionId(ref),e=window.selectedWorkflows[id]||{ref:ref};e.pending=true;e.error='';window.selectedWorkflows[id]=e;window.refreshSelectionCards(id);});window.refreshBulkControls();
+  return workspaceMutation('/api/chat/workflows/activate-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activate:true,selections:target.refs,offer:offer})}).then(function(job){
+    if(!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(job.poll_url||''))throw new Error('Invalid saved batch.');
+    var saved={job_id:job.job_id,poll_url:job.poll_url,bulk:true};
+    target.refs.forEach(function(ref){var id=window.selectionId(ref),entry=window.selectedWorkflows[id];entry.pending=false;entry.offer=offer;entry.job=saved;entry.state=job;window.refreshSelectionCards(id);});
+    window.saveSelectedWorkflows();window.refreshBulkControls();window.observeBulkWorkflow(saved);
+  }).catch(function(error){target.refs.forEach(function(ref){var id=window.selectionId(ref),entry=window.selectedWorkflows[id];entry.pending=false;entry.error=error.message;window.refreshSelectionCards(id);});window.refreshBulkControls();});
+};
+document.addEventListener('click',function(event){var button=event.target.closest('[data-activate-bulk]');if(button&&!button.disabled)window.activateAllWithEmail(button.dataset.activateBulk);});
 (function restoreSelectedWorkflows(){
   var saved;try{saved=JSON.parse(sessionStorage.getItem('automake-selected-workflows')||'{}');}catch(e){return;}
   Object.keys(saved).slice(0,50).forEach(function(id){var entry=saved[id];if(!entry||!entry.ref||!entry.job||!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(entry.job.poll_url||''))return;
-    window.selectedWorkflows[id]={ref:entry.ref,job:entry.job,offer:entry.offer};window.observeSelectedWorkflow(id);
+    window.selectedWorkflows[id]={ref:entry.ref,job:entry.job,offer:entry.offer};if(entry.job.bulk)window.observeBulkWorkflow(entry.job);else window.observeSelectedWorkflow(id);
   });
 })();

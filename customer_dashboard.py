@@ -105,7 +105,7 @@ def dashboard():
                         'business_type':context.get('business_type') or context.get('candidate_type') or '',
                         'score':lead.score, 'status':lead.status,
                         'has_sent_message':bool(lead.gmail_message_id), 'replied_at':iso(lead.replied_at),
-                        'contact_name':lead.contact_name or '', 'has_email':bool(lead.contact_email),
+                        'contact_name':lead.contact_name or '', 'contact_email':lead.contact_email or '', 'has_email':bool(lead.contact_email),
                         'follow_up_due_at':iso(lead.follow_up_due_at), 'updated_at':iso(lead.updated_at),
                         'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead), 'prospect_quality':for_lead(lead),'selection':{'kind':'lead','lead_id':lead.id}})
     return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,lead_offset=lead_offset,campaign_offset=campaign_offset,lead_total=lead_query.count(),campaign_total=campaign_query.count(),

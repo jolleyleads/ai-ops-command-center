@@ -103,6 +103,94 @@ def activate_selected_workflow():
     return enqueue_execution('campaign',payload,request_key)
 
 
+
+def _email_for_selection(selected):
+    row,_,_,lead_id=selected
+    if lead_id:
+        lead=db.session.get(oa.OutreachLead,lead_id)
+        return oa.normalize_email(lead.contact_email) if lead else ''
+    values=[row.get('contact_email'),row.get('email')]
+    values += [c.get('email') for c in (row.get('contacts') or []) if isinstance(c,dict)]
+    return next((oa.normalize_email(x) for x in values if x and '@' in str(x)), '')
+
+
+@app.post('/api/chat/workflows/activate-bulk')
+def activate_bulk_workflow():
+    if current_workspace()!=OWNER:return jsonify(ok=False,error='Sign in to the connected workspace to activate outreach.'),403
+    data=request.get_json(silent=True) or {}
+    refs=data.get('selections')
+    if data.get('activate') is not True:return jsonify(ok=False,error='Explicit batch activation is required.'),400
+    if not isinstance(refs,list) or not 1<=len(refs)<=20:
+        return jsonify(ok=False,error='Choose between 1 and 20 displayed businesses with email per batch.'),400
+    offer=str(data.get('offer') or '').strip()[:1200]
+    if not offer:return jsonify(ok=False,error='Describe your offer in Task options first.'),400
+    items=[];seen=set();missing_email=False
+    # Resolve the entire selection before scheduling anything. A forged or
+    # foreign reference cannot partially authorize other sends.
+    for ref in refs:
+        if not isinstance(ref,dict):return jsonify(ok=False,error='Invalid business selection.'),400
+        keys=('kind','lead_id') if ref.get('kind')=='lead' else ('kind','job_id','key')
+        ref={key:ref.get(key) for key in keys}
+        selected=resolve_selection(ref)
+        if not selected:return jsonify(ok=False,error='A selected business was not found in your results.'),404
+        email=_email_for_selection(selected)
+        if not email:missing_email=True
+        canonical=json.dumps(ref,sort_keys=True)
+        if canonical in seen:continue
+        seen.add(canonical)
+        row,query,territory,lead_id=selected
+        items.append({'selection':ref,'company':row.get('company') or row.get('title') or row.get('name') or '',
+                      'payload':{'_selected_workflow':True,'_selected_workspace':OWNER,'_selection_send_authorized':True,
+                                 '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
+                                 'query':query,'target_customer':query,'territory':territory,'offer':offer,
+                                 'target_count':1,'sending_limit':1,'draft_only':True,'send_authorized':False}})
+    binding=json.dumps([OWNER,sorted(seen),offer],sort_keys=True)
+    key='selection-bulk:'+hashlib.sha256(binding.encode()).hexdigest()
+    existing=CampaignExecutionJob.query.filter_by(request_key=key).first()
+    if existing:
+        if not owns('campaign',existing.id):return jsonify(ok=False,error='Batch not found.'),404
+        return jsonify(_view(existing)),202
+    if missing_email:return jsonify(ok=False,error='A selected business has no saved email. Refresh your results before activation.'),409
+    return enqueue_execution('campaign',{'_selected_bulk':True,'_selected_workspace':OWNER,
+        '_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
+        'target_count':len(items),'sending_limit':len(items),'draft_only':True,'send_authorized':False},key)
+
+
+def run_bulk_selected_workflows(data,job_id):
+    from src.execution_deadline import checkpoint,hard_stage_limit
+    items=data.get('items') or []
+    if (data.get('_selected_workspace')!=OWNER or data.get('_selection_send_authorized') is not True
+            or not owns('campaign',job_id,OWNER) or not 1<=len(items)<=20):
+        return None,'authorization','BULK_WORKFLOW_AUTHORIZATION_REQUIRED'
+    results=[{'selection':x['selection'],'company':x['company'],'status':'queued',
+              'workflow':{'lead_id':x['payload'].get('_selected_lead_id'),'state':'pending'}} for x in items]
+    for index,item in enumerate(items):
+        results[index]['status']='running'
+        checkpoint('activating_email_batch',bulk_items=results,batch_requested=len(items),batch_completed=index)
+        try:
+            with hard_stage_limit(185,'bulk_business'):
+                outcome,stage,reason=run_selected_workflow(item['payload'],job_id)
+            results[index].update(status='completed' if outcome else 'failed',
+                workflow=(outcome or {}).get('workflow') or {'state':'held','reason':reason or 'This business requires review.',
+                                                          'outreach':{'send_status':'unknown','state':'review'}},
+                outreach=(outcome or {}).get('outreach') or {})
+        except TimeoutError as exc:
+            # Claim loss, cancellation and the overall deadline always fence the
+            # batch. A per-business deadline may leave an external effect unknown.
+            if str(exc)!='BULK_BUSINESS_DEADLINE_EXCEEDED':raise
+            db.session.rollback()
+            results[index].update(status='failed',workflow={'state':'held','reason':'This business timed out. Review its send status before retrying.',
+                                                           'outreach':{'send_status':'unknown','state':'review'}})
+        except Exception:
+            db.session.rollback()
+            results[index].update(status='failed',workflow={'state':'held','reason':'This business could not finish. Review its saved send status.',
+                                                           'outreach':{'send_status':'unknown','state':'review'}})
+        checkpoint('activating_email_batch',bulk_items=results,batch_requested=len(items),batch_completed=index+1)
+    sent=sum((x.get('workflow',{}).get('outreach') or {}).get('send_status')=='sent' for x in results)
+    return {'ok':True,'bulk_items':results,'batch':{'requested':len(items),'sent':sent,'not_sent_or_review':len(items)-sent},
+            'outreach':{'sent':sum((x.get('outreach') or {}).get('sent',0) for x in results)},
+            'campaign':{'target_customer':'Selected businesses with email','offer':data.get('offer'),'target_count':len(items)}},None,None
+
 def run_selected_workflow(data,job_id):
     from src.execution_deadline import checkpoint
     from src.prospect_quality import POLICY,request_spec

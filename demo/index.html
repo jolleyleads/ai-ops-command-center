@@ -104,7 +104,7 @@ window.activeResearchBubble=wait.querySelector(".bubble");
 var send=document.getElementById("send");send.disabled=true;
 (campaign?campaignSearch(q):deepSearch(q)).then(function(d){
 var research=d.discovery||d,rs=research.results||[],out=d.outreach||{},cards="";
-if(d.business_progress&&d.business_progress.length)cards=window.renderBusinessCards(d.business_progress);else for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);
+if(d.business_progress&&d.business_progress.length)cards=window.renderBusinessCards(d.business_progress);else{cards=window.bulkActivationControl?window.bulkActivationControl(rs):'';for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);}
 var stats='<div class="stats"><div class="stat"><b>'+esc(rs.length)+'</b>Businesses found</div><div class="stat"><b>'+esc(research.verified||research.verified_count||0)+'</b>Confirmed</div>';
 if(d.outreach)stats+='<div class="stat"><b>'+esc(out.sent||0)+'</b>Emails sent</div><div class="stat"><b>'+esc(out.drafted||0)+'</b>Drafts prepared</div>';
 stats+='</div>';
@@ -166,4 +166,4 @@ function loadCampaignPerformance(){if(window.openWorkspace){window.openWorkspace
   }).catch(function(err){slot.querySelector(".bubble").innerHTML="<b>Campaign Performance</b><p class='error'>"+esc(err.message)+"</p><p class='meta'>Authorization required. No sample data displayed.</p>";});
 }
 
-</script><script src="/chat-operator/dashboard.js?v=clear-send-status-1" defer></script><script src="/chat-operator/access.js?v=clear-send-status-1"></script></body></html>
+</script><script src="/chat-operator/dashboard.js?v=bulk-email-activation-1" defer></script><script src="/chat-operator/access.js?v=bulk-email-activation-1"></script></body></html>

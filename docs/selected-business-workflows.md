@@ -71,3 +71,39 @@ Rollback through the normal code-revert deployment. Cancel/review queued selecte
 work before reverting when possible; preserve genuine leads, receipts and external
 history. Legacy campaign flags fail closed for sending if an older worker sees a
 selection payload. Reverting code does not undo emails or bookings.
+
+## Activate all displayed businesses with email
+
+The result list and filtered My Leads list now have **Activate all with email
+(N)**. One explicit click submits the displayed, deduplicated business references
+with a saved/source-observed email. Cards display the actual available email.
+Businesses without email remain in research and are excluded from this action.
+
+`POST /api/chat/workflows/activate-bulk` resolves every reference and its saved
+email server-side before scheduling. Client-supplied company/email fields carry
+no authority. It requires owner mailbox access, explicit activation, and the
+existing session CSRF/Origin checks. A deterministic selection/offer key makes
+repeat/reordered clicks observe the same saved batch, including after enrichment
+changes a held contact.
+
+One existing durable campaign job processes at most20 businesses. This avoids
+creating20 competing queue jobs or bypassing queue capacity. Provider calls run
+with bounded work; one click starts the batch, rather than requiring20 clicks.
+The worker sends sequentially under existing limits, not an unlimited parallel
+blast. Per-business185-second and total1200-second execution limits remain.
+A per-business timeout requires review and other businesses may continue; overall
+claim loss, cancellation, or deadline fences the batch. Durable per-business
+progress survives polling/reload; unfinished or uncertain work never says Sent.
+
+All current qualification, evidence, verified contact, suppression/opt-out,
+approved two-emoji message/résumé, recipient locking, duplicate-send protection,
+follow-up and Calendar requirements remain. An email being visible does not
+guarantee sending. Each card reports Sent, Not sent plus the reason, or send
+status unconfirmed. Follow-ups and booking continue only from actual workflow
+events. Stop batch applies to remaining work and cannot undo an in-flight email.
+
+Lists with more than20 email-bearing businesses require filtering before launch;
+there is no silent truncation. No new infrastructure, migrations, credential
+changes, or paid providers. Rollback is a code revert; preserve saved receipts
+and review/cancel queued batches before reverting. No real email/Calendar tests
+are authorized by this UI change.
