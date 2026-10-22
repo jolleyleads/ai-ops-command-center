@@ -108,6 +108,9 @@ def prepare_contact(selected,existing,query,territory,offer):
         return lead
     company=selected['company'];website=selected['website']
     preferred=oa.normalize_email((lead.contact_email if lead else '') or selected.get('contact_email') or selected.get('email') or next((x.get('email') for x in selected.get('contacts') or [] if isinstance(x,dict) and x.get('email')),''))
+    # Directory/support addresses are not this company's contact. Discover a
+    # real address on its own current source instead of pinning an unrelated one.
+    if preferred and not oa.email_on_domain(preferred,website):preferred=''
     checkpoint('verifying_selected_email_source')
     fetched=_public_contact_evidence({**selected,'location':territory,'target_location':territory,'query':query})
     rows=fetched[0] if isinstance(fetched,tuple) else fetched

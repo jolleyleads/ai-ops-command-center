@@ -108,10 +108,11 @@ def _email_for_selection(selected):
     row,_,_,lead_id=selected
     if lead_id:
         lead=db.session.get(oa.OutreachLead,lead_id)
-        return oa.normalize_email(lead.contact_email) if lead else ''
+        return oa.normalize_email(lead.contact_email) if lead and oa.email_on_domain(lead.contact_email,lead.source_url) else ''
     values=[row.get('contact_email'),row.get('email')]
     values += [c.get('email') for c in (row.get('contacts') or []) if isinstance(c,dict)]
-    return next((oa.normalize_email(x) for x in values if x and '@' in str(x)), '')
+    website=row.get('website') or row.get('source_url') or row.get('url') or ''
+    return next((oa.normalize_email(x) for x in values if x and oa.email_on_domain(x,website)), '')
 
 
 @app.post('/api/chat/workflows/activate-bulk')
@@ -150,7 +151,7 @@ def activate_bulk_workflow():
     if existing:
         if not owns('campaign',existing.id):return jsonify(ok=False,error='Batch not found.'),404
         return jsonify(_view(existing)),202
-    if missing_email:return jsonify(ok=False,error='A selected business has no saved email. Refresh your results before activation.'),409
+    if missing_email:return jsonify(ok=False,error='A selected business has no company-domain email. Activate that business individually to find and verify its contact.'),409
     return enqueue_execution('campaign',{'_selected_bulk':True,'_selected_workspace':OWNER,
         '_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
         'target_count':len(items),'sending_limit':len(items),'draft_only':True,'send_authorized':False},key)

@@ -129,18 +129,18 @@ def test_bulk_email_button_submits_displayed_emails_once_and_restores_without_se
     script=r"""
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 let writes=0,reads=0,body,saved='{}';
-const context={API:'',window:{workspaceAccess:{signed_in:true}},esc:String,Set,Number,document:{addEventListener:()=>{},querySelectorAll:()=>[],getElementById:()=>({value:'Scheduling automation'})},
+const context={API:'',window:{workspaceAccess:{signed_in:true}},esc:String,Set,Number,URL,document:{addEventListener:()=>{},querySelectorAll:()=>[],getElementById:()=>({value:'Scheduling automation'})},
  sessionStorage:{getItem:()=>saved,setItem:(key,value)=>{saved=value;}},setTimeout:()=>{},
  workspaceMutation:(path,options)=>{writes++;assert.equal(path,'/api/chat/workflows/activate-bulk');body=JSON.parse(options.body);return Promise.resolve({job_id:'batch-one',poll_url:'/api/demo/campaigns/jobs/batch-one',status:'queued'});},
  requestJSON:()=>{reads++;return Promise.resolve({status:'running',progress:{bulk_items:[]}});}};
 const source=fs.readFileSync('demo/access.js','utf8'),code=source.slice(source.indexOf('window.outreachPending=new Set();'));
 vm.runInNewContext(code,context);let w=context.window;
-const a={company:'A',selection:{kind:'research',job_id:'r',key:'a'},contacts:[{email:'owner@a.example'}]},
- b={company:'B',selection:{kind:'research',job_id:'r',key:'b'},contact_email:'owner@b.example'},
+const a={company:'A',website:'https://a.example/',selection:{kind:'research',job_id:'r',key:'a'},contacts:[{email:'owner@a.example'}]},
+ b={company:'B',website:'https://b.example/',selection:{kind:'research',job_id:'r',key:'b'},contact_email:'owner@b.example'},
  no={company:'No email',selection:{kind:'research',job_id:'r',key:'c'}};
 let html=w.bulkActivationControl([a,b,no,a]);assert(html.includes('Activate all with email (2)'));assert(!html.includes(' disabled'));
-assert(w.businessEmail(a).includes('owner@a.example'));assert.equal(writes,0);
-assert(w.bulkActivationControl(Array.from({length:21},(_,i)=>({selection:{kind:'lead',lead_id:i+1},contact_email:'owner'+i+'@example.com'}))).includes('Filter to 20 or fewer'));
+assert(w.businessEmail(a).includes('owner@a.example'));assert.equal(w.businessEmailValue({...a,contacts:[{email:'support@directory.example'}]}),'');assert.equal(writes,0);
+assert(w.bulkActivationControl(Array.from({length:21},(_,i)=>({selection:{kind:'lead',lead_id:i+1},website:'https://example.com/',contact_email:'owner'+i+'@example.com'}))).includes('Filter to 20 or fewer'));
 const group=Object.keys(w.bulkTargets)[0];
 (async()=>{
  const promise=w.activateAllWithEmail(group);w.activateAllWithEmail(group);await promise;await Promise.resolve();
