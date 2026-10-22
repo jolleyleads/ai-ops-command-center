@@ -139,7 +139,7 @@ const a={company:'A',website:'https://a.example/',selection:{kind:'research',job
  b={company:'B',website:'https://b.example/',selection:{kind:'research',job_id:'r',key:'b'},contact_email:'owner@b.example'},
  no={company:'No email',selection:{kind:'research',job_id:'r',key:'c'}};
 let html=w.bulkActivationControl([a,b,no,a]);assert(html.includes('Activate all with email (2)'));assert(!html.includes(' disabled'));
-assert(w.businessEmail(a).includes('owner@a.example'));assert.equal(w.businessEmailValue({...a,contacts:[{email:'support@directory.example'}]}),'');assert.equal(writes,0);
+assert(w.businessEmail(a).includes('owner@a.example'));assert.equal(w.businessEmailValue({...a,contacts:[{email:'support@directory.example'}]}),'');assert.equal(w.businessEmailValue({...a,website:'https://threebestrated.com/hvac-in-norfolk-va',contacts:[{email:'support@threebestrated.com'}]}),'');assert.equal(writes,0);
 assert(w.bulkActivationControl(Array.from({length:21},(_,i)=>({selection:{kind:'lead',lead_id:i+1},website:'https://example.com/',contact_email:'owner'+i+'@example.com'}))).includes('Filter to 20 or fewer'));
 const group=Object.keys(w.bulkTargets)[0];
 (async()=>{

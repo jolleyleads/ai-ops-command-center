@@ -30,7 +30,7 @@ def current_contact_source(row, now=None):
         return False
 
 SHARED_HOSTS = frozenset({
-    "linkedin.com", "facebook.com", "google.com", "maps.google.com", "yelp.com",
+    "threebestrated.com", "linkedin.com", "facebook.com", "google.com", "maps.google.com", "yelp.com",
     "indeed.com", "ziprecruiter.com", "glassdoor.com", "yellowpages.com",
     "career.com", "milwaukeejobs.com", "contactout.com", "pissedconsumer.com",
     "promallu.com", "remotive.com", "github.io", "wordpress.com", "wixsite.com",

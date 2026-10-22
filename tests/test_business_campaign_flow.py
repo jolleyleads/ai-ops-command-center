@@ -780,3 +780,24 @@ def test_bulk_click_uses_manual_contact_policy_and_does_not_reactivate_old_held_
     repeated=env.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
     assert repeated.json['job_id']==launch.json['job_id']
     assert jobs.process_next_execution_job().get('processed')==0 and len(sent)==1
+
+
+@pytest.mark.parametrize('ambiguous',[False,True])
+def test_directory_website_selection_uses_only_unique_saved_primary_source(env,ambiguous):
+    from background_research import ResearchJob
+    from workspace_security import claim,OWNER
+    from src.selection_refs import reference
+    from src.selection_workflows import resolve_selection,_email_for_selection
+    directory={'company':'Acme','website':'https://threebestrated.com/hvac-in-norfolk-va','email':'support@threebestrated.com'}
+    primary={'company':'Acme','source_url':'https://acme.example/contact'}
+    candidates=[primary]+([{'company':'Acme','source_url':'https://different.example/'}] if ambiguous else [])
+    research=ResearchJob(id='directory-selection',prompt_text='Find HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[directory],'progress':{'candidates':candidates}}))
+    oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
+    with oa.app.test_request_context(headers={'X-Operator-Token':'operator-unit-test'}):
+        chosen=resolve_selection(reference('research',research.id,directory))
+        assert chosen[0]['website']==(directory['website'] if ambiguous else primary['source_url'])
+        assert _email_for_selection(chosen)==''
+    # Never turn a directory into the official company/contact domain.
+    from src.company_identity import owned_host,email_on_domain
+    assert not owned_host(directory['website'],directory['website'])
+    assert not email_on_domain(directory['email'],directory['website'])

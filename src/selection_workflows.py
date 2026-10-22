@@ -9,7 +9,7 @@ import outreach_automation as oa
 from campaign_jobs import CampaignExecutionJob, enqueue_execution, _view
 from workspace_security import OWNER, current_workspace, owns, scope
 from src.selection_refs import business_key
-from src.company_identity import name_key, owned_host
+from src.company_identity import name_key, owned_host, host, shared_host
 
 
 def _unpack(value):
@@ -51,7 +51,21 @@ def resolve_selection(ref):
         query=payload.get('query') or payload.get('target_customer') or '';location=payload.get('territory') or ''
     else:return None
     row=next((x for x in rows if isinstance(x,dict) and business_key(x)==key),None)
-    return (copy.deepcopy(row),query,location,None) if row else None
+    if not row:return None
+    selected=copy.deepcopy(row)
+    website=selected.get('website') or selected.get('source_url') or selected.get('url') or ''
+    if shared_host(host(website)):
+        # Recover only a uniquely observed primary-site candidate for this same
+        # business. This is a discovery hint, re-fetched and verified by the worker.
+        label=lambda x:name_key(x.get('company') or x.get('candidate_name') or x.get('name') or x.get('title'))
+        anchors={}
+        for candidate in rows:
+            if not isinstance(candidate,dict) or label(candidate)!=label(selected):continue
+            url=candidate.get('website') or candidate.get('source_url') or candidate.get('url') or ''
+            site=host(url)
+            if site and not shared_host(site):anchors[site]=url
+        if len(anchors)==1:selected['website']=next(iter(anchors.values()))
+    return selected,query,location,None
 
 
 @app.post('/api/chat/workflows/activate')
