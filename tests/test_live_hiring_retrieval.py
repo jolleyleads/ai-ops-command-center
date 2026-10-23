@@ -32,9 +32,15 @@ def test_hampton_roads_hiring_queries_separate_enrichment_and_search_cities(monk
     assert all('hunter' not in c['query'].lower() and 'email' not in c['query'].lower() for c in calls)
     assert 'construction' in calls[0]['query'] and 'automation engineers' in calls[0]['query']
     assert 'Norfolk' in calls[0]['query'] and 'Newport News' in calls[0]['query']
+    assert 'Hampton Roads' not in calls[0]['query']
+    assert all(c['tool']!='business_search' for c in calls)
     follow=search._company_discovery_calls(q,'Hampton Roads, Virginia',[
         {'tool':'exa_search','query':'Acme automation engineers current careers'}])
     assert follow[0]['query'].startswith('Acme')  # Keep targeted employer follow-ups.
+    city=search._additional_discovery(q,'Hampton Roads, VA',0)
+    normalized=search._company_discovery_calls(q,'Hampton Roads, VA',[city])
+    assert normalized[0]['location']=='Norfolk, Virginia'
+    assert ' OR ' not in normalized[0]['query']
 
 
 def test_regional_hiring_fallback_varies_city_and_preserves_business_constraint():

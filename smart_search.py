@@ -280,6 +280,15 @@ def _hiring_discovery_request(q,loc):
     return clean,regional
 
 
+def _hiring_job_topic(q):
+    # Preserve an industry or named employer before the geography/hiring clause,
+    # while dropping list/count instructions that pull retrieval toward Places.
+    prefix=re.split(r'(?i)\b(?:in|near|around|with|that|who|hiring|hire|seeking|recruiting|looking for)\b',q,maxsplit=1)[0]
+    stop={'find','show','list','me','please','a','an','the','business','businesses','company','companies','firm','firms','currently','actively'}
+    constraint=' '.join(w for w in re.findall(r'[a-zA-Z]+',prefix) if w.lower() not in stop)
+    return ' '.join(x for x in (constraint,'employers hiring',' '.join(requested_role_terms(q)),'current job openings careers apply') if x)
+
+
 def _company_discovery_calls(q,loc,calls):
     """Hiring requests always retrieve job evidence, even after a business-only plan."""
     search_loc=loc
@@ -291,11 +300,19 @@ def _company_discovery_calls(q,loc,calls):
             # City names improve retrieval; the original region still governs
             # validation and display. No employer or domain is hardcoded.
             search_loc='("Norfolk" OR "Virginia Beach" OR "Chesapeake" OR "Newport News" OR "Hampton") Virginia'
-            calls=[{**c,'query':c['query']+' '+search_loc} if c.get('tool') in {'web_search','exa_search'} and search_loc not in c['query'] else c for c in calls]
+            generic=any(c.get('tool')=='business_search' or re.search(r'(?i)\b(?:hampton\s+roads|hrva)\b',c['query']) for c in calls)
+            if generic and _verification_intent(q)==('hiring',):
+                # Retrieve positions first; a Places result for the region or an
+                # automation vendor cannot establish an employer's job opening.
+                topic=_hiring_job_topic(q)
+                calls=[{'tool':tool,'query':topic+' '+search_loc,'location':loc} for tool in ('web_search','exa_search')]
+            else:
+                calls=[{**c,'query':c['query']+' '+search_loc} if c.get('tool') in {'web_search','exa_search'} and search_loc not in c['query'] and (not c.get('location') or re.search(r'(?i)\b(?:hampton\s+roads|hrva)\b',c['location'])) else c for c in calls]
     if is_hiring_query(q) and adzuna_ready():
         # An approved structured job feed supplements primary-source verification.
         # Keep it inside the existing three-call budget; it never verifies a lead.
-        focused=[{"tool":tool,"query":q+(f' {search_loc}' if search_loc!=loc and tool!='job_search' else ''),"location":loc} for tool in ("web_search","exa_search","job_search")]
+        topic=_hiring_job_topic(q) if search_loc!=loc and _verification_intent(q)==('hiring',) else q
+        focused=[{"tool":tool,"query":topic+(f' {search_loc}' if search_loc!=loc and tool!='job_search' else ''),"location":loc} for tool in ("web_search","exa_search","job_search")]
         return focused
     if _plain_business_query(q):
         # A plain company list must not depend on hiring evidence or one provider.
@@ -361,7 +378,7 @@ def _additional_discovery(q,loc,round_number):
         # Rotate through the region instead of repeating the same regional
         # query after an empty round. Verification still uses the original loc.
         if regional:loc=HAMPTON_ROADS[round_number%len(HAMPTON_ROADS)].title()+', Virginia'
-        topic=clean+' employer hiring careers application current openings'
+        topic=(_hiring_job_topic(clean) if regional else clean)+' employer hiring careers application current openings'
     else:topic=q
     detail=("official company sources","recent postings and contact pages","additional employers and direct sources","company application and service pages","current company locations and contact details","dated evidence and primary sources")[round_number%6]
     return {"tool":"web_search" if round_number%2 else "exa_search","query":f"{loc} {topic} {detail}","location":loc}
