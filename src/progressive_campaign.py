@@ -24,6 +24,22 @@ class CampaignBusinessTask(db.Model):
 with app.app_context():db.create_all()
 
 
+def _contact_phone(lead):
+    from src.company_identity import owned_host
+    if not lead:return ''
+    try:rows=json.loads(lead.evidence_json or '[]')
+    except (TypeError,ValueError):return ''
+    for row in rows:
+        if not isinstance(row,dict):continue
+        enrichment=row.get('enrichment') or {}
+        fields=enrichment.get('fields') or {};phone=fields.get('phone') or {};website=fields.get('website') or {}
+        if (enrichment.get('identity_status')=='source_bound' and phone.get('validated') is True
+                and website.get('validated') is True and phone.get('value')
+                and owned_host(phone.get('source_url') or '',website.get('value') or '')):
+            return phone['value']
+    return ''
+
+
 def task_views(campaign_id):
     rows=CampaignBusinessTask.query.filter_by(campaign_id=campaign_id).order_by(CampaignBusinessTask.id).all()
     from campaign_jobs import CampaignExecutionJob
@@ -48,12 +64,14 @@ def task_views(campaign_id):
                         ('Contact '+quality['contact']['state'].lower()) if quality else
                         ('Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review'))))
         from workspace_security import owns
-        email=lead.contact_email if lead and owns('lead',lead.id) else ''
-        views.append({'contact_email':email,'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
+        owned=bool(lead and owns('lead',lead.id))
+        email=lead.contact_email if owned else ''
+        phone=_contact_phone(lead) if owned else ''
+        views.append({'contact_email':email,'contact_phone':phone,'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
             'prospect_quality':quality,
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
             'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
-            'contact_status':contact_status,'contact_check':contact_check,
+            'contact_status':contact_status,'contact_check':contact_check,'request_match_status':business.get('request_match_status'),
             'qualification_status':'Qualified' if result.get('qualified') else 'Not qualified',
             'draft_status':'Draft ready' if result.get('drafted') else 'No draft ready',
             'status':status,'stage':row.stage,'error':error,'updated_at':row.updated_at.isoformat()+'Z'})

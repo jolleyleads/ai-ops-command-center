@@ -650,6 +650,33 @@ def _scope_search_results(rows,query,location,evidence):
         kept.append(row)
     return kept,excluded
 
+def _contact_research_candidates(rows, confirmed, evidence, query, limit):
+    """Keep sourced companies available for contact work, never as hiring matches."""
+    if not is_hiring_query(query):return []
+    seen={name_key(r.get('candidate_name') or r.get('company') or r.get('title')) for r in confirmed}
+    out=[]
+    for raw in rows:
+        company=raw.get('candidate_name') or raw.get('company') or raw.get('title')
+        key=name_key(company)
+        if not key or key in seen or raw.get('classification')=='Rejected':continue
+        website=raw.get('website') or ''
+        if not website:
+            proofs=[identity_proof(company,r) for r in evidence
+                    if r.get('candidate_name') in {None,'',company} and current_contact_source(r)]
+            domains={p['official_host'] for p in proofs if p}
+            if len(domains)==1:website='https://'+domains.pop()
+        if not website.startswith(('https://','http://')) or not host(website) or shared_host(host(website)):continue
+        seen.add(key)
+        row=_source_summary(raw)
+        row.update(company=company,title=company,website=website,classification='Candidate',
+                   promotion_status='candidate',verification_gate='pending',verified_channels=[],
+                   request_match_status='unconfirmed',contacts=[],
+                   evidence_basis='Company discovered; requested current hiring remains unconfirmed.')
+        out.append(row)
+        if len(out)>=limit:break
+    return out
+
+
 def _fallback_candidates(discovery,limit=10):
     out=[];seen=set()
     for item in discovery or []:
@@ -851,7 +878,9 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         visible=_verification_gate(discovery_visible,promoted,evaluation,q,loc,contact_evidence)
         if runtime_budget>25:
             visible=rank_research_results(visible+promoted,target_count,q,loc)
+        contact_pool=visible+discovery_visible
         visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
+        contact_candidates=_contact_research_candidates(contact_pool,visible,contact_evidence,q,target_count)
         checkpoint('business_results_ready',businesses=[{'company':x.get('company') or x.get('title') or x.get('name'),
             'source_url':x.get('website') or x.get('source_url') or x.get('url'),
             'business_status':'Business verified' if x.get('classification')=='Verified Lead' else 'Candidate — verification pending',
@@ -878,7 +907,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
         if is_hiring_query(q) or _deterministic_route_intent(q) in {"permits","permit_leads"}:
             answer_summary=f"{len(visible)} source-confirmed matches for the requested role or record and location." if visible else "No source-confirmed matches for the requested role or record and location."
         if provider_message: app.logger.warning("SMART_SEARCH_PROVIDER_DIAGNOSTIC query=%r location=%r tools=%r live_source_count=%d message=%s",q,loc,unique_tools,len(live),provider_message)
-        return {**scope_summary,"verification_diagnostics":verification_diagnostics,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=total_deadline,"contact_followup_source_count":len(contact_followups),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
+        return {**scope_summary,"verification_diagnostics":verification_diagnostics,"configured":True,"agent_mode":True,"rag_enabled":True,"adaptive_search":True,"dynamic_tool_selection":True,"research_rounds":research_rounds,"target_count":target_count,"target_met":verified_count>=target_count,"planning_degraded":bool(plan.get("planning_degraded")),"planning_recovered":bool(plan.get("planning_recovered")),"planning_error":plan.get("planning_error") or "","semantic_relevance":True,"framework":"discover-extract-candidates-verify-identity-join-evidence-promote-rag","intent":_deterministic_route_intent(q),"research_intent":_clean(plan.get("intent"),1200),"runtime_budget_seconds":runtime_budget,"budget_exhausted":time.monotonic()>=total_deadline,"contact_followup_source_count":len(contact_followups),"goal":plan.get("goal") or q,"query":q,"location":loc,"source":" + ".join(unique_tools+["semantic RAG"]),"tools_used":unique_tools,"live_source_count":len(live),"candidate_count":len(candidates),"joined_evidence_count":len(joined),"count":len(visible),"promoted_count":len(promoted),"verified_count":verified_count,"unverified_candidate_count":candidate_count_visible,"rejected_count":rejected_count,"verification_gate":True,"results":visible,"contact_research_candidates":contact_candidates,"answer_summary":answer_summary,"provider_message":provider_message,"runtime_ms":runtime,"message":(f"Verification gate: {verified_count} Verified Leads, {candidate_count_visible} Candidates, {rejected_count} Rejected. Verified Lead requires direct source evidence for the requested claim.")}
     except Exception as exc:
         app.logger.exception("RESEARCH_AGENT_ERROR");return {"configured":True,"agent_mode":False,"query":q,"location":loc,"count":0,"results":[],"intent":_deterministic_route_intent(q),"runtime_budget_seconds":runtime_budget,"agent_error":type(exc).__name__,"message":"Search agent failed safely without fabricating results."}
 
