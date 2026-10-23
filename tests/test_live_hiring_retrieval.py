@@ -23,6 +23,36 @@ def test_hiring_plan_without_requested_role_gets_focused_queries():
     assert 'accounting assistants' in calls[0]['query'] and 'construction' in calls[0]['query']
 
 
+def test_hampton_roads_hiring_queries_separate_enrichment_and_search_cities(monkeypatch):
+    monkeypatch.setattr(search,'adzuna_ready',lambda:False)
+    q='Find construction companies in Hampton Roads, Virginia looking for automation engineers. Enrich them using Hunter.io and give me their email and phone.'
+    calls=search._company_discovery_calls(q,'Hampton Roads, Virginia',[
+        {'tool':'web_search','query':q}])
+    assert len(calls)<=3
+    assert all('hunter' not in c['query'].lower() and 'email' not in c['query'].lower() for c in calls)
+    assert 'construction' in calls[0]['query'] and 'automation engineers' in calls[0]['query']
+    assert 'Norfolk' in calls[0]['query'] and 'Newport News' in calls[0]['query']
+    follow=search._company_discovery_calls(q,'Hampton Roads, Virginia',[
+        {'tool':'exa_search','query':'Acme automation engineers current careers'}])
+    assert follow[0]['query'].startswith('Acme')  # Keep targeted employer follow-ups.
+
+
+def test_regional_hiring_fallback_varies_city_and_preserves_business_constraint():
+    q='construction companies hiring automation engineers. Enrich them using Hunter.io'
+    calls=[search._additional_discovery(q,'Hampton Roads, VA',n) for n in range(3)]
+    assert len({c['query'] for c in calls})==3
+    assert all('construction' in c['query'] and 'Hunter' not in c['query'] for c in calls)
+    assert [c['location'] for c in calls]==['Norfolk, Virginia','Portsmouth, Virginia','Chesapeake, Virginia']
+
+
+def test_job_links_ignore_script_markup_assets_and_page_fragments():
+    raw='''<script>const fake='<a href="/careers/logo.png">Jobs</a>';</script>
+    <a href="#about">Careers</a><a href="/careers/logo.svg">Jobs</a>
+    <a href="/jobs/1">Automation Engineer</a>'''
+    links=job_page_metadata(raw,'https://acme.example/careers')['source_job_links']
+    assert links==[{'url':'https://acme.example/jobs/1','label':'Automation Engineer'}]
+
+
 def test_inspection_prioritizes_employer_over_shared_job_directory(monkeypatch,live_job_page):
     seen=[]
     monkeypatch.setattr(search,'_page_snapshot',lambda url:seen.append(url) or live_job_page(url=url))

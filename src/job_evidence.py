@@ -138,11 +138,13 @@ def job_page_metadata(raw, source_url):
     # Page-authored links are discovery hints only. The destination must pass the
     # complete live posting validator; a careers index never proves an opening.
     links=[]
-    for anchor in re.findall(r"(?is)<a\b[^>]*>.*?</a>",detail):
+    link_markup=re.sub(r'(?is)<(script|style|template)\b[^>]*>.*?</\1>',' ',detail)
+    for anchor in re.findall(r"(?is)<a\b[^>]*>.*?</a>",link_markup):
         href=re.search(r"""(?is)href=["']([^"']+)["']""",anchor)
         if not href:continue
         target=urljoin(source_url,html.unescape(href.group(1)))
         label=visible_page_text(anchor)
+        if _same_job_url(target,source_url) or re.search(r'(?i)\.(?:png|jpe?g|svg|gif|ico|css|js|pdf)(?:[?#]|$)',target):continue
         if urlparse(target).scheme in {'https','http'} and re.search(r'(?i)job|career|position|opening|requisition|vacanc|employment',target+' '+label):
             links.append({'url':target,'label':label})
     for record in records:
