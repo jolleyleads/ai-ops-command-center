@@ -17,7 +17,11 @@ APPLY = re.compile(r"^(?:apply(?: now| here| today| for (?:this )?(?:job|positio
 
 
 def is_hiring_query(query):
-    return bool(re.search(r"\b(?:hiring|hire|jobs?|careers?|recruiting|seeking|vacanc(?:y|ies)|open (?:roles?|positions?)|openings?)\b", str(query or ""), re.I))
+    q=str(query or "")
+    if re.search(r"\b(?:hiring|hire|jobs?|careers?|recruiting|seeking|vacanc(?:y|ies)|open (?:roles?|positions?)|openings?)\b",q,re.I):return True
+    # “Looking for” is hiring intent only when its object is a person/role,
+    # not when someone asks us to find companies or automation services.
+    return bool(re.search(r"\blooking\s+for\s+(?:(?:an?|the|experienced|senior|junior|ai|software|automation|electrical|mechanical|sales|support|licensed|master)\s+){0,6}(?:engineers?|developers?|technicians?|electricians?|plumbers?|assistants?|managers?|specialists?|analysts?|nurses?|staff|employees?)\b",q,re.I))
 
 
 def alternative_claim_allowed(query,channels):
@@ -41,7 +45,7 @@ def requested_role_terms(query):
             before=re.search(r"^(.*?)\b(?:jobs?|careers?|openings?|positions?|roles?)\b",q)
             role=before.group(1) if before else ""
             role=re.sub(r"^.*?\b(?:with|that\s+(?:have|offer))\s+","",role)
-    role=re.split(r"\b(?:in|near|around|with|that|or|include|exclude|rank)\b|[.;]",role,maxsplit=1)[0]
+    role=re.split(r"\b(?:in|near|around|with|that|or|include|exclude|rank|enrich(?:ing)?|using|give|provide|email|phone)\b|[.;]",role,maxsplit=1)[0]
     stop={"find","show","list","me","a","an","and","the","for","current","currently","active","actively","job","jobs","role","roles","position","positions","opening","openings","open","now","today","remote","remotely","hybrid","companies","company","businesses","business","firms","firm"}
     return [x for x in re.findall(r"[a-z0-9]+",role) if (len(x)>=3 or x in {"ai","ml","hr","it","qa","rn"}) and x not in stop and not x.isdigit()][:10]
 

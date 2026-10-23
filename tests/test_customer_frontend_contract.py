@@ -192,3 +192,43 @@ vm.runInNewContext(source.slice(source.indexOf('window.renderSavedJobResult='),s
     # completed-job handoff and final business/email rendering.
     script=script.replace("activeResearchBubble:bubble,bulkActivationControl", "activeResearchBubble:bubble,renderResearchProgress:()=>{},bulkActivationControl")
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_search_failure_distinguishes_empty_and_partial_results_and_connection_errors():
+    import re, subprocess
+    html=Path('demo/index.html').read_text()
+    functions=html[html.index('function requestJSON('):html.index('function health(')]
+    script="const assert=require('node:assert/strict');const esc=String,API='';const setTimeout=(fn,ms)=>{if(ms<25000)queueMicrotask(fn);return 0;};const clearTimeout=()=>{};"+functions+"""
+(async()=>{
+  const empty={innerHTML:'Finding businesses…',querySelector:()=>null};
+  showResearchFailure(empty,new Error('Failed'));
+  assert(empty.innerHTML.includes('No results were displayed.'));
+  assert(!empty.innerHTML.includes('Finding businesses'));
+  assert(!empty.innerHTML.includes('shown above'));
+  const partial={innerHTML:'<div class="lead">Saved company</div>',querySelector:()=>({})};
+  showResearchFailure(partial,new Error('Failed'));
+  assert(partial.innerHTML.includes('Saved company'));
+  assert(partial.innerHTML.includes('Results found so far are shown above.'));
+  let calls=0;
+  global.fetch=async()=>{calls++;throw new TypeError('Load failed');};
+  await assert.rejects(requestJSON('/api/chat/campaigns/prepare',{method:'POST'}),/Couldn’t connect to AutoMake AI/);
+  assert.equal(calls,1); // Never automatically repeat a mutation after an ambiguous response.
+  const options={method:'POST',headers:{'Idempotency-Key':'same-search-key'},body:'same search'};
+  calls=0;const keys=[];
+  global.fetch=async(url,settings)=>{calls++;keys.push(settings.headers['Idempotency-Key']);if(calls===1)throw new TypeError('Load failed');return {ok:true,text:async()=>JSON.stringify({job_id:'same-job'})};};
+  assert.equal((await requestJSON('/api/chat/campaigns/prepare',options)).job_id,'same-job');
+  assert.equal(calls,2);assert.deepEqual(keys,['same-search-key','same-search-key']);
+  calls=0;global.fetch=async()=>{calls++;throw new TypeError('Load failed');};
+  await assert.rejects(requestJSON('/api/research/jobs',options),/Couldn’t connect/);
+  assert.equal(calls,4);
+  calls=0;await assert.rejects(requestJSON('/api/chat/leads/1/activate-outreach',options),/Couldn’t connect/);
+  assert.equal(calls,1);
+  calls=0;global.fetch=async()=>{calls++;return {ok:true,text:async()=>{throw new TypeError('Load failed');}};};
+  await assert.rejects(requestJSON('/api/chat/campaign-settings'),/Couldn’t connect/);assert.equal(calls,4);
+  global.fetch=async()=>({ok:true,text:async()=>'<html>Application loading</html>'});
+  await assert.rejects(requestJSON('/api/health'),/still loading/);
+  calls=0;global.fetch=async()=>{calls++;return {ok:false,status:401,text:async()=>' {"error":"Sign in required"}'};};
+  await assert.rejects(requestJSON('/api/chat/campaign-settings'),/Sign in required/);assert.equal(calls,1);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

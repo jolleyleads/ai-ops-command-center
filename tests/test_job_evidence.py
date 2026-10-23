@@ -266,3 +266,19 @@ def test_unrelated_or_unbound_application_control_cannot_open_selected_job(live_
 
 def test_job_bound_application_form_is_supported(live_job_page):
     assert check(live_job_page(now=NOW,apply_html='<form action="/apply/1"><button>Apply now</button></form>'))["ok"]
+
+
+def test_looking_for_engineers_routes_to_hiring_and_ignores_enrichment_instructions():
+    from src.job_evidence import is_hiring_query
+    query='Find me businesses in Hampton Roads, Virginia that are looking for automation engineers enrich them using Hunter Io and give me their email and their phone number if possible'
+    assert is_hiring_query(query)
+    assert requested_role_terms(query)==['automation','engineers']
+    assert not is_hiring_query('I am looking for automation companies in Hampton Roads')
+    assert not is_hiring_query('Find businesses looking for automation services')
+
+
+def test_looking_for_engineers_keeps_current_role_and_location_checks(live_job_page):
+    query='Find businesses looking for AI automation engineers enrich them using Hunter.io'
+    assert check(live_job_page(now=NOW),query=query)['ok']
+    assert not check(live_job_page(now=NOW,title='Software Engineer'),query=query)['ok']
+    assert not check(live_job_page(now=NOW,city='Boston',state='MA'),query=query)['ok']
