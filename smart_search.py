@@ -11,7 +11,7 @@ from src.company_identity import identity_proof, host, owned_host, email_on_doma
 from src.job_evidence import job_page_metadata, check_job_evidence, receipt_is_current, requested_role_terms, is_hiring_query, requested_location, alternative_claim_allowed, role_matches, ATS_HOSTS
 from src.record_evidence import check_record_evidence, record_receipt_is_current
 from src.company_identity import current_contact_source
-from src.company_identity import name_key
+from src.company_identity import name_key, HAMPTON_ROADS
 from src.public_fetch import public_get
 from src.contact_assessment import contact_sections, assess_people, is_shared_email, current_email_context, is_fax_number
 from src.job_sources import search_jobs, adzuna_ready
@@ -273,12 +273,29 @@ def _verification_queries(name,q,intents=None):
     return list(dict.fromkeys(queries))
 
 
+def _hiring_discovery_request(q,loc):
+    # Contact enrichment is a later step, not a keyword constraint on a job.
+    clean=re.split(r'(?i)\b(?:enrich(?:ing)?\b|using\s+hunter\b|(?:and\s+)?(?:give|show|provide)\s+me\s+(?:their|its|the|your)\s+(?:email|phone))',q,maxsplit=1)[0].rstrip(' ,.;')
+    regional=bool(re.search(r'(?i)\b(?:hampton\s+roads|hrva)\b',loc))
+    return clean,regional
+
+
 def _company_discovery_calls(q,loc,calls):
     """Hiring requests always retrieve job evidence, even after a business-only plan."""
+    search_loc=loc
+    if is_hiring_query(q):
+        clean,regional=_hiring_discovery_request(q,loc)
+        q=clean
+        calls=[{**c,'query':_hiring_discovery_request(str(c.get('query') or ''),loc)[0]} for c in calls]
+        if regional:
+            # City names improve retrieval; the original region still governs
+            # validation and display. No employer or domain is hardcoded.
+            search_loc='("Norfolk" OR "Virginia Beach" OR "Chesapeake" OR "Newport News" OR "Hampton") Virginia'
+            calls=[{**c,'query':c['query']+' '+search_loc} if c.get('tool') in {'web_search','exa_search'} and search_loc not in c['query'] else c for c in calls]
     if is_hiring_query(q) and adzuna_ready():
         # An approved structured job feed supplements primary-source verification.
         # Keep it inside the existing three-call budget; it never verifies a lead.
-        focused=[{"tool":tool,"query":q,"location":loc} for tool in ("web_search","exa_search","job_search")]
+        focused=[{"tool":tool,"query":q+(f' {search_loc}' if search_loc!=loc and tool!='job_search' else ''),"location":loc} for tool in ("web_search","exa_search","job_search")]
         return focused
     if _plain_business_query(q):
         # A plain company list must not depend on hiring evidence or one provider.
@@ -291,11 +308,11 @@ def _company_discovery_calls(q,loc,calls):
     kept=[c for c in calls if c.get("tool")!="job_search"]
     focused=[]
     if "hiring" in intents:
-        focused.append({"tool":"web_search","query":f'{loc} {_clean(q,450)} official employer job detail careers apply current openings',"location":loc})
+        focused.append({"tool":"web_search","query":f'{search_loc} {_clean(q,450)} official employer job detail careers apply current openings',"location":loc})
     if "response_complaints" in intents:
         focused.append({"tool":"exa_search","query":f'{loc} business reviews "never called back" "unanswered calls" dates',"location":loc})
     elif "hiring" in intents:
-        focused.append({"tool":"exa_search","query":f'{loc} {_clean(q,450)} official employer job posting application',"location":loc})
+        focused.append({"tool":"exa_search","query":f'{search_loc} {_clean(q,450)} official employer job posting application',"location":loc})
     unique=[];seen=set()
     for call in focused+kept:
         key=(call.get('tool'),call.get('query'))
@@ -340,7 +357,11 @@ def _additional_discovery(q,loc,round_number):
     if "response_complaints" in intents and ("hiring" not in intents or round_number%2):
         topic='business reviews "never called back" OR "unanswered calls" dated local branch'
     elif "hiring" in intents:
-        topic='employers "'+" ".join(_requested_role_terms(q))+'" hiring careers application current openings'
+        clean,regional=_hiring_discovery_request(q,loc)
+        # Rotate through the region instead of repeating the same regional
+        # query after an empty round. Verification still uses the original loc.
+        if regional:loc=HAMPTON_ROADS[round_number%len(HAMPTON_ROADS)].title()+', Virginia'
+        topic=clean+' employer hiring careers application current openings'
     else:topic=q
     detail=("official company sources","recent postings and contact pages","additional employers and direct sources","company application and service pages","current company locations and contact details","dated evidence and primary sources")[round_number%6]
     return {"tool":"web_search" if round_number%2 else "exa_search","query":f"{loc} {topic} {detail}","location":loc}
