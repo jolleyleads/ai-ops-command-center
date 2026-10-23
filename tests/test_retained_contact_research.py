@@ -98,3 +98,22 @@ assert(html.includes('Hiring not confirmed. Contact research only.'));
 assert(html.includes('owner@acme.example')&&html.includes('(757) 555-0100'));
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_search_result_retains_primary_site_candidate_when_hiring_scope_returns_zero(monkeypatch):
+    source={**ROW,'research_tool':'business_search','subtitle':'Acme, Norfolk, Virginia'}
+    monkeypatch.setattr(search,'plan_research',lambda *a:{'tool_calls':[{'tool':'business_search'}]})
+    monkeypatch.setattr(search,'_run_calls',lambda *a,**k:([source],[],['business_search']))
+    monkeypatch.setattr(search,'_memory',lambda *a:[])
+    monkeypatch.setattr(search,'extract_candidates',lambda *a:[{'name':'Acme','discovery_urls':[source['url']]}])
+    monkeypatch.setattr(search,'evaluate_research',lambda *a:{})
+    monkeypatch.setattr(search,'remember_evidence',lambda *a:None)
+    monkeypatch.setattr(search,'_inspect_discovery',lambda *a:None)
+    monkeypatch.setattr(search,'_inspect',lambda *a:None)
+    monkeypatch.setattr(search,'_candidate_followups',lambda *a:([],[],[]))
+    monkeypatch.setattr(search,'_page_snapshot',lambda *a:{})
+    result=search._smart_search(QUERY,'Hampton Roads, Virginia',runtime_budget=12,target_count=1)
+    assert not result.get('agent_error')
+    assert result['results']==[] and result['verified_count']==0
+    assert result['contact_research_candidates'][0]['company']=='Acme'
+    assert result['contact_research_candidates'][0]['website']==ROW['website']
