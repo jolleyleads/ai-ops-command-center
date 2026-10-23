@@ -10,7 +10,7 @@ from flask import jsonify, request
 from app import app, db
 from src.grounded_reply import routine_answer
 from src.automatic_reply_router import current_reply_text
-from src.company_identity import owned_host, name_key
+from src.company_identity import owned_host, name_key, host, shared_host
 from src.enrichment import enrich_lead, validated_payload
 from src.email_validation import apply_email_domain_check
 from outreach_bridge import QUEUE_MIN_SCORE, _candidate_urls, _clean, _outreach_search, _evidence_for_storage, _evidence_score, _public_contact_evidence, _same_company_domain, _valid_email, _verified
@@ -219,7 +219,7 @@ def orchestrate_discovery(payload, *, authorized_send=False, draft_only=False):
 
 def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=False):
     send_enabled=not draft_only and (AUTOSEND_ENABLED or authorized_send is True)
-    summary={"enabled":True,"autosend_enabled":send_enabled,"lead_ids":[],"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[]}
+    summary={"enabled":True,"autosend_enabled":send_enabled,"lead_ids":[],"eligible":0,"saved":0,"qualified":0,"drafted":0,"sent":0,"skipped":[],"contact_checks":[]}
     try: outreach_limit=max(0,int(payload.get("outreach_limit") or 0))
     except (TypeError,ValueError): outreach_limit=0
     if not _outreach_search(payload):
@@ -232,7 +232,15 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
         # An explicit selection can start evidence/contact work before discovery
         # ranking is complete. Qualification and sending still fail closed.
         selected=payload.get('_selected_workflow') is True
-        if not company or (not selected and (score<QUEUE_MIN_SCORE or not _verified(result))): continue
+        # Draft-only research may inspect a discovered company's own site before
+        # business/offer qualification is complete. The contact extractor still
+        # requires freshly fetched company identity, and qualification below is
+        # unchanged. A discovery label/score must not prevent that investigation.
+        website=_clean(result.get('website'),1800)
+        contact_research=(draft_only and result.get('classification')=='Candidate'
+                          and website.startswith(('https://','http://'))
+                          and bool(host(website)) and not shared_host(host(website)))
+        if not company or (not selected and not contact_research and (score<QUEUE_MIN_SCORE or not _verified(result))): continue
         summary["eligible"]+=1
         urls=_candidate_urls(result); source_url=urls[0] if urls else ""
         if not source_url:
@@ -295,9 +303,18 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
                 result['_prospect_sources']=collect_sources(result,result['_campaign_context'])
                 checkpoint('business_need_available',prospect_quality=assess(company,result.get('website') or '',result['_campaign_context'],result['_prospect_sources']))
             email,email_source=_verified_public_email(result)
+            assessment=(result.get('_contact_enrichment') or {}).get('contact_assessment') or {}
+            mailbox=assessment.get('mailbox_validation') or {}
+            from src.contact_assessment import person_email_supported
+            summary['contact_checks'].append({
+                'company':company,'identity_status':(result.get('_contact_enrichment') or {}).get('identity_status','unproven'),
+                'mailbox_verified':bool(email and mailbox.get('mailbox_status')=='provider_verified' and str(mailbox.get('email') or '').casefold()==email.casefold()),
+                'named_contact':bool(email and person_email_supported(assessment,email)),
+                'checked_at':mailbox.get('checked_at'),
+                'provider_reason_codes':list(dict.fromkeys(((assessment.get('hunter_discovery') or {}).get('reason_codes') or [])+(mailbox.get('reason_codes') or [])))})
             evidence=_evidence_with_contact(result,email,email_source)
             evidence.append({'source':'campaign_context','context':result['_campaign_context']})
-            lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or "SOURCE_VERIFIED",status="needs_evidence")
+            lead=OutreachLead(company=company,contact_email=email,contact_name=_clean(result.get("_contact_name"),300),location=_clean(result.get("location") or payload.get("location"),300),source_url=source_url,evidence_json=json.dumps(evidence),score=score,verification=_clean(result.get("verification"),100) or ("CANDIDATE" if contact_research else "SOURCE_VERIFIED"),status="needs_evidence")
             db.session.add(lead); db.session.flush();
             from src.campaign_reporting import attribute_new_lead
             attribute_new_lead(lead)

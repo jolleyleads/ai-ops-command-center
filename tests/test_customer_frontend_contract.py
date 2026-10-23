@@ -11,6 +11,20 @@ def test_restored_customer_interface_matches_deployment_smoke():
     assert validate_frontend('<title>AutoMake AI</title>')
 
 
+def test_verified_contact_is_not_reported_as_failed_when_business_qualification_is_held():
+    import re, subprocess
+    source=Path('demo/access.js').read_text()
+    function=re.search(r'window.contactProgressMessage=function\(row\)\{.*?\n\};',source,re.S).group(0)
+    script='const window={};'+function+'''
+const assert=require('assert');
+const held={error:'CONTACT_OR_QUALIFICATION_REQUIRES_REVIEW',qualification_status:'Not qualified'};
+assert.equal(window.contactProgressMessage({...held,contact_check:{mailbox_verified:true,named_contact:true}}),'Decision-maker email verified. Business qualification still needs evidence.');
+assert.equal(window.contactProgressMessage({...held,contact_check:{mailbox_verified:true,named_contact:false}}),'Company email verified. Business qualification still needs evidence.');
+assert(window.contactProgressMessage({...held,contact_check:{mailbox_verified:false}}).includes('needs review'));
+'''
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
 def test_count_parser_ignores_unrelated_numbers_and_preserves_large_requests():
     import re,json,subprocess,shutil
     import pytest

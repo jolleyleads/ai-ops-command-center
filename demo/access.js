@@ -27,6 +27,11 @@
   }).catch(function(){note.textContent='Research is available. Workspace access could not be checked; refresh before sending.';return window.workspaceAccess;});
 })();
 
+window.contactProgressMessage=function(row){
+  var check=row.contact_check;
+  if(check&&check.mailbox_verified)return (check.named_contact?'Decision-maker email verified.':'Company email verified.')+(row.qualification_status==='Not qualified'?' Business qualification still needs evidence.':'');
+  return row.error?'Contact verification needs review. Business research is preserved.':'';
+};
 window.renderResearchProgress=function(state){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var p=state.progress||{},rows=p.businesses||p.candidates||[];
@@ -39,7 +44,7 @@ window.renderResearchProgress=function(state){
   rows.forEach(function(row){
     html+='<div class="lead"><b>'+esc(row.company)+'</b>';
 
-    if(row.error)html+='<p>Contact check needs attention. Other businesses can continue.</p>';
+    var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(window.businessAction)html+=window.businessAction(row);
@@ -119,7 +124,7 @@ window.requestKeyFor=function(kind,body){
 window.renderBusinessCards=function(rows){
   return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
     var html='<div class="lead"><b>'+esc(row.company)+'</b>';
-    if(row.error)html+='<p>Contact verification needs review. Business research is preserved.</p>';
+    var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(window.businessAction)html+=window.businessAction(row);

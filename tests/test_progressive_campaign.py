@@ -28,7 +28,8 @@ def fake(payload,**kw):
     assert kw=={'draft_only':True}
     row=payload['results'][0]
     time.sleep(3 if row['title']=='Slow Business' else 0.05)
-    return {'eligible':1,'saved':0,'qualified':1,'drafted':1,'sent':0,'lead_ids':[],'skipped':[]}
+    return {'eligible':1,'saved':0,'qualified':1,'drafted':1,'sent':0,'lead_ids':[],'skipped':[],
+            'contact_checks':[{'company':row['title'],'mailbox_verified':True,'named_contact':True}]}
 v._orchestrate_discovery_serial=fake
 v._send_prepared_lead=lambda *a:(_ for _ in ()).throw(AssertionError('No sends allowed'))
 with app.app_context():
@@ -52,8 +53,10 @@ with app.app_context():
     assert CampaignBusinessTask.query.count()==2
     views=task_views('isolated')
     assert next(r for r in views if r['company']=='Fast Business')['draft_status']=='Draft ready'
+    assert next(r for r in views if r['company']=='Fast Business')['contact_status']=='Decision-maker email verified'
     assert next(r for r in views if r['company']=='Slow Business')['status']=='cancelled'
     assert summary['sent']==0 and summary['drafted']==1
+    assert summary['contact_checks']==[{'company':'Fast Business','mailbox_verified':True,'named_contact':True}]
     import campaign_jobs as jobs,customer_demo as demo
     def run(payload):
         return {'ok':True,'outreach':v.orchestrate_discovery({'query':'businesses','results':[{'title':'Fresh Business','website':'https://fresh.example','classification':'Verified Lead'}]},draft_only=True)},None,None
