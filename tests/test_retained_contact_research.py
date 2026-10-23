@@ -27,6 +27,7 @@ def test_unconfirmed_company_is_separate_from_current_hiring_matches():
     assert not search._contact_research_candidates([{**ROW,'website':''}],[],[],QUERY,1)
     assert not search._contact_research_candidates([{**ROW,'website':'https://linkedin.com/company/acme'}],[],[],QUERY,1)
     assert not search._contact_research_candidates([ROW],[ROW],[],QUERY,1)
+    assert not search._contact_research_candidates([ROW],[],[],QUERY,0)
 
 
 def test_only_draft_research_can_add_unconfirmed_companies_to_contact_work():

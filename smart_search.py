@@ -652,7 +652,7 @@ def _scope_search_results(rows,query,location,evidence):
 
 def _contact_research_candidates(rows, confirmed, evidence, query, limit):
     """Keep sourced companies available for contact work, never as hiring matches."""
-    if not is_hiring_query(query):return []
+    if not is_hiring_query(query) or limit<=0:return []
     seen={name_key(r.get('candidate_name') or r.get('company') or r.get('title')) for r in confirmed}
     out=[]
     for raw in rows:
@@ -880,7 +880,7 @@ def _smart_search(q,loc,runtime_budget=25,target_count=10):
             visible=rank_research_results(visible+promoted,target_count,q,loc)
         contact_pool=visible+discovery_visible
         visible,excluded=_scope_search_results(visible,q,loc,contact_evidence)
-        contact_candidates=_contact_research_candidates(contact_pool,visible,contact_evidence,q,target_count)
+        contact_candidates=_contact_research_candidates(contact_pool,visible,contact_evidence,q,max(0,target_count-len(visible)))
         checkpoint('business_results_ready',businesses=[{'company':x.get('company') or x.get('title') or x.get('name'),
             'source_url':x.get('website') or x.get('source_url') or x.get('url'),
             'business_status':'Business verified' if x.get('classification')=='Verified Lead' else 'Candidate — verification pending',
