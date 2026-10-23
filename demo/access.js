@@ -32,6 +32,13 @@ window.contactProgressMessage=function(row){
   if(check&&check.mailbox_verified)return (check.named_contact?'Decision-maker email verified.':'Company email verified.')+(row.qualification_status==='Not qualified'?' Business qualification still needs evidence.':'');
   return row.error?'Contact verification needs review. Business research is preserved.':'';
 };
+window.businessMatchNote=function(row){return row.request_match_status==='unconfirmed'?'<p class="meta">Hiring not confirmed. Contact research only.</p>':'';};
+window.researchResultHeading=function(result){
+  var research=result.discovery||result,matched=(research.results||[]).length;
+  var additional=(research.contact_research_candidates||[]).length;
+  return additional?(matched?matched+' hiring matches confirmed. ':'No hiring matches confirmed. ')+
+    'Contact research saved for '+additional+' additional '+(additional===1?'business.':'businesses.'):'Found '+matched+' businesses.';
+};
 window.renderResearchProgress=function(state){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var p=state.progress||{},rows=p.businesses||p.candidates||[];
@@ -42,7 +49,7 @@ window.renderResearchProgress=function(state){
   html+='</details>';
   if(window.bulkActivationControl)html+=window.bulkActivationControl(rows);
   rows.forEach(function(row){
-    html+='<div class="lead"><b>'+esc(row.company)+'</b>';
+    html+='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
 
     var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
@@ -68,7 +75,7 @@ window.showRequestInterpretation=function(query,location,count,sending){
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
-  bubble.innerHTML='<b>Your results</b><p>Found '+esc(rows.length)+' businesses.</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
+  bubble.innerHTML='<b>Your results</b><p>'+esc(window.researchResultHeading?window.researchResultHeading(result):'Found '+rows.length+' businesses.')+'</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
   if(result.outreach)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p></details>';
   var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<details class="research-details"><summary>Result details</summary><p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p></details>';
 };
@@ -123,7 +130,7 @@ window.requestKeyFor=function(kind,body){
 
 window.renderBusinessCards=function(rows){
   return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
-    var html='<div class="lead"><b>'+esc(row.company)+'</b>';
+    var html='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
     var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
@@ -293,7 +300,7 @@ window.businessEmailValue=function(row){
     return domain===host||domain.endsWith('.'+host)||host.endsWith('.'+domain);
   })||'';
 };
-window.businessEmail=function(row){var email=window.businessEmailValue(row);return email?'<p class="meta">Email: '+esc(email)+'</p>':'';};
+window.businessEmail=function(row){var email=window.businessEmailValue(row);return (email?'<p class="meta">Email: '+esc(email)+'</p>':'')+(row.contact_phone?'<p class="meta">Phone: '+esc(row.contact_phone)+'</p>':'');};
 window.bulkActivationControl=function(rows){
   if(!rows.length)return '';
   var refs=[],seen=new Set();

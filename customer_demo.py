@@ -37,9 +37,21 @@ def _campaign_payload(data):
     if not target:return None,{"ok":False,"error":"target_customer_required"}
     if not territory:return None,{"ok":False,"error":"territory_required"}
     return {"target_customer":target,"territory":territory,"offer":offer,"sending_limit":send_limit,"target_count":target_count,"business_type":_text(data.get("business_type"),300),"query":target},None
-def _orchestration_payload(discovery,campaign):
+def _orchestration_payload(discovery,campaign,*,research_contacts=False):
     payload=dict(discovery);target=campaign["target_customer"]
     payload.update({"query":target,"goal":target,"intent":target,"location":campaign["territory"],"offer":campaign.get("offer") or "AI lead generation and customer follow-up automation","business_type":_text(campaign.get("business_type"),300),"intent_signal":target,"outreach_limit":campaign["sending_limit"],"require_decision_maker":campaign.get("require_decision_maker") is True})
+    if research_contacts:
+        # Only authenticated draft-only work may investigate unconfirmed companies.
+        # These rows never enter the confirmed hiring results or a sending campaign.
+        from src.company_identity import name_key
+        rows=list(payload.get('results') or []);seen={name_key(r.get('company') or r.get('title')) for r in rows}
+        for raw in discovery.get('contact_research_candidates') or []:
+            key=name_key(raw.get('company') or raw.get('title'))
+            if key and key not in seen:
+                rows.append({**raw,'classification':'Candidate','promotion_status':'candidate',
+                             'verification_gate':'pending','request_match_status':'unconfirmed'})
+                seen.add(key)
+        payload['results']=rows
     if campaign.get('prospect_policy'):
         payload.update(prospect_policy=campaign['prospect_policy'],request_spec=campaign['request_spec'])
     return payload
@@ -65,7 +77,7 @@ def _run_campaign(data):
     except Exception as exc:app.logger.exception("V11_EVIDENCE_UPGRADE_ERROR");return None,"verification",f"{type(exc).__name__}: {exc}"
     try:
         checkpoint("qualifying_contacts")
-        payload=_orchestration_payload(discovery,campaign)
+        payload=_orchestration_payload(discovery,campaign,research_contacts=data.get("draft_only") is True and not campaign["send_authorized"])
         outreach=orchestrate_discovery(payload,authorized_send=True) if campaign["send_authorized"] and data.get("draft_only") is not True else orchestrate_discovery(payload,draft_only=True)
     except Exception as exc:return None,"orchestration",f"{type(exc).__name__}: {exc}"
     if not isinstance(outreach,dict):return None,"orchestration","OUTREACH_NOT_OBJECT"
@@ -83,7 +95,7 @@ def _run_campaign(data):
     visible=[]
     for result in discovery.get("results") or []:
         if isinstance(result,dict):visible.append({"company":result.get("company") or result.get("name") or result.get("business_name") or result.get("title") or "Unknown company","classification":result.get("classification") or "Candidate","verification":result.get("verification_gate") or result.get("promotion_status") or "candidate","source_url":result.get("url") or "","website":result.get("website") or "","supporting_urls":result.get("supporting_urls") or [],"evidence_basis":result.get("evidence_basis") or result.get("verified_claim") or "Source-backed discovery result"})
-    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"provider_message":discovery.get("provider_message", ""),"live_source_count":discovery.get("live_source_count",0),"candidate_count":discovery.get("candidate_count",0),"excluded_result_count":discovery.get("excluded_result_count",0),"verification_diagnostics":discovery.get("verification_diagnostics",{}),"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible},"outreach":outreach},None,None
+    return {"ok":True,"campaign":{"target_customer":campaign["target_customer"],"territory":campaign["territory"],"offer":campaign["offer"],"sending_limit":campaign["sending_limit"],"target_count":campaign["target_count"],"research_budget_seconds":research_budget_seconds(campaign["target_count"]),"safety":"V1 verification, qualification and safe-send gates unchanged"},"discovery":{"provider_message":discovery.get("provider_message", ""),"live_source_count":discovery.get("live_source_count",0),"candidate_count":discovery.get("candidate_count",0),"excluded_result_count":discovery.get("excluded_result_count",0),"verification_diagnostics":discovery.get("verification_diagnostics",{}),"target_met":discovery.get("target_met",False),"runtime_budget_seconds":discovery.get("runtime_budget_seconds"),"budget_exhausted":discovery.get("budget_exhausted",False),"verified":discovery.get("verified_count",0),"candidates":discovery.get("unverified_candidate_count",0),"rejected":discovery.get("rejected_count",0),"results":visible,"contact_research_candidates":[{"company":r.get("company") or r.get("title"),"website":r.get("website"),"source_url":r.get("url"),"request_match_status":"unconfirmed"} for r in discovery.get("contact_research_candidates") or []]},"outreach":outreach},None,None
 
 @app.route("/api/chat/lead-status",methods=["GET"])
 def chat_lead_status():
