@@ -41,13 +41,19 @@ def task_views(campaign_id):
         lead=db.session.get(OutreachLead,lead_id) if lead_id else None
         from src.prospect_quality import for_lead
         quality=for_lead(lead) if lead else business.get('prospect_quality')
+        contact_check=next(iter(result.get('contact_checks') or []),None)
+        contact_status=(('Decision-maker email verified' if contact_check['named_contact'] else 'Company email verified')
+                        if contact_check and contact_check['mailbox_verified'] else
+                        'Contact not verified' if contact_check else
+                        ('Contact '+quality['contact']['state'].lower()) if quality else
+                        ('Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review'))))
         from workspace_security import owns
         email=lead.contact_email if lead and owns('lead',lead.id) else ''
         views.append({'contact_email':email,'lead_id':lead_id,'outreach':activation_view(lead) if lead else None,'task_id':row.id,'company':business.get('company') or business.get('title') or business.get('name'),
             'prospect_quality':quality,
             'source_url':business.get('website') or business.get('source_url') or business.get('url'),
             'business_status':{'Verified Lead':'Business verified','Rejected':'Business rejected','Needs More Evidence':'Business held — more evidence required'}.get(business.get('classification'),'Candidate — verification pending'),
-            'contact_status':('Contact '+quality['contact']['state'].lower()) if quality else ('Verified contact' if result.get('qualified') else ('Contact not started — business not verified' if business.get('classification')!='Verified Lead' else ('Contact pending' if status in {'queued','running'} else 'Contact requires review'))),
+            'contact_status':contact_status,'contact_check':contact_check,
             'qualification_status':'Qualified' if result.get('qualified') else 'Not qualified',
             'draft_status':'Draft ready' if result.get('drafted') else 'No draft ready',
             'status':status,'stage':row.stage,'error':error,'updated_at':row.updated_at.isoformat()+'Z'})
@@ -100,7 +106,7 @@ def run_business_tasks(payload,campaign_id,send_enabled,limit):
     from v1_orchestration import _send_prepared_lead
     from outreach_automation import OutreachLead
     from src.company_identity import name_key
-    summary={'enabled':True,'autosend_enabled':send_enabled,'lead_ids':[],'eligible':0,'saved':0,'qualified':0,'drafted':0,'sent':0,'skipped':[]}
+    summary={'enabled':True,'autosend_enabled':send_enabled,'lead_ids':[],'eligible':0,'saved':0,'qualified':0,'drafted':0,'sent':0,'skipped':[],'contact_checks':[]}
     tasks=[];seen=set()
     for business in payload.get('results') or []:
         if not isinstance(business,dict):continue
@@ -150,6 +156,7 @@ def run_business_tasks(payload,campaign_id,send_enabled,limit):
                 result=json.loads(task.result_json or '{}');counted.add(key)
                 for metric in ('eligible','saved','qualified','drafted'):summary[metric]+=result.get(metric,0)
                 summary['lead_ids']+=result.get('lead_ids') or []
+                summary['contact_checks']+=result.get('contact_checks') or []
                 summary['skipped']+=result.get('skipped') or []
                 if task.error:summary['skipped'].append({'task_id':key,'reason':task.error})
                 if send_enabled:

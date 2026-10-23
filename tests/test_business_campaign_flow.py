@@ -176,6 +176,56 @@ def test_hunter_person_address_requires_primary_role_and_durable_association(act
     assert not person_email_supported(generic['contact_assessment'],'hello@acme.example')
 
 
+def test_draft_only_candidate_reaches_hunter_before_offer_qualification(active,env,monkeypatch):
+    import v1_orchestration as orchestration
+    import src.email_validation as email_validation
+    from src.company_identity import identity_proof
+    from src.prospect_quality import POLICY
+    get,calls=transport();receipt=hunter.discover_contacts('https://acme.example',get)
+    lookups=[]
+    monkeypatch.setattr(hunter,'discover_contacts',lambda website:lookups.append(website) or receipt)
+    page=company_page()
+    page['page_text']+=' Jane Smith | Owner. Norfolk, Virginia.'
+    page['contact_sections']=['Jane Smith | Owner. Norfolk, Virginia.']
+    page['company_identity']=identity_proof('Acme',page,page['url'])
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(email_validation,'check_email_domain',lambda *a,**k:{'domain_status':'mx_published'})
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:{'email':email,'mailbox_status':'provider_verified','deliverability_status':'provider_reported_valid','checked_at':datetime.now(timezone.utc).isoformat(),'reason_codes':[]})
+    monkeypatch.setattr(orchestration,'_draft_email',lambda *a:pytest.fail('Unproven offer must not draft'))
+    monkeypatch.setattr(orchestration,'_safe_send',lambda *a,**k:pytest.fail('Draft-only research must not send'))
+    candidate={'company':'Acme','website':page['url'],'classification':'Candidate','intent_score':0}
+    result=orchestration._orchestrate_discovery_serial({'query':'Find decision makers at HVAC businesses','location':'Norfolk, Virginia',
+        'offer':'Undocumented invoice processing need','prospect_policy':POLICY,'results':[candidate]},draft_only=True,authorized_send=True)
+    lead=oa.OutreachLead.query.one()
+    assert lookups==[page['url']]
+    assert lead.contact_email=='jane@acme.example' and lead.contact_name=='Jane Smith'
+    assert lead.verification=='CANDIDATE' and candidate['classification']=='Candidate'
+    assert result['contact_checks'][0]['mailbox_verified'] and result['contact_checks'][0]['named_contact']
+    assert result['qualified']==result['drafted']==result['sent']==0
+    assert not oa._qualification_gate(lead)['ok'] and oa.OutreachSendAttempt.query.count()==0
+
+
+@pytest.mark.parametrize('change',[{'classification':'Rejected'},{'website':'https://linkedin.com/company/acme'},{'website':''}])
+def test_draft_contact_research_rejects_disallowed_candidates(env,monkeypatch,change):
+    import v1_orchestration as orchestration
+    monkeypatch.setattr(orchestration,'_verified_public_email',lambda *a:pytest.fail('Rejected or unbound candidate researched'))
+    row={'company':'Acme','website':'https://acme.example/','classification':'Candidate',**change}
+    result=orchestration._orchestrate_discovery_serial({'query':'Find HVAC businesses','results':[row]},draft_only=True)
+    assert result['eligible']==0 and oa.OutreachLead.query.count()==0
+
+
+def test_candidate_contact_research_requires_primary_identity(env,monkeypatch):
+    import v1_orchestration as orchestration
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([{'url':'https://acme.example/','page_text':'Acme owner Jane Smith jane@acme.example','directly_fetched':False}],{}))
+    monkeypatch.setattr(hunter,'discover_contacts',lambda *a:pytest.fail('Snippet-only identity reached Hunter'))
+    monkeypatch.setattr(orchestration,'_safe_send',lambda *a,**k:pytest.fail('Unverified candidate sent'))
+    result=orchestration._orchestrate_discovery_serial({'query':'Find HVAC businesses','results':[{'company':'Acme','website':'https://acme.example/','classification':'Candidate'}]},draft_only=True)
+    lead=oa.OutreachLead.query.one()
+    assert not lead.contact_email and not lead.body
+    assert result['contact_checks'][0]['identity_status']=='unproven'
+    assert not result['contact_checks'][0]['mailbox_verified']
+
+
 def test_unverified_mailbox_never_becomes_a_hunter_contact(active,monkeypatch):
     get,_=transport();receipt=hunter.discover_contacts('https://acme.example',get)
     monkeypatch.setattr(hunter,'discover_contacts',lambda *a:receipt)
