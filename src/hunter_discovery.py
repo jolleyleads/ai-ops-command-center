@@ -21,7 +21,7 @@ from src.company_identity import host, email_on_domain, name_key, owned_host, sh
 from src.contact_assessment import is_shared_email
 
 
-def discover_contacts(website, get=None):
+def discover_contacts(website, get=None, *, decision_makers=False):
     domain=host(website)
     receipt={"provider":"hunter","domain":domain,"contacts":[],"reason_codes":[],"checked_at":datetime.now(timezone.utc).isoformat()}
     def fail(reason):
@@ -34,7 +34,7 @@ def discover_contacts(website, get=None):
     if not key or key=="test-api-key":return fail("HUNTER_REAL_CREDENTIAL_REQUIRED")
     if not expected:return fail("HUNTER_ACCOUNT_EMAIL_REQUIRED")
     if not has_app_context():return fail("HUNTER_CACHE_UNAVAILABLE")
-    cache_key=hashlib.sha256(("hunter-discovery:"+hashlib.sha256(key.encode()).hexdigest()+":"+expected+":"+domain).encode()).hexdigest()
+    cache_key=hashlib.sha256(("hunter-discovery:"+hashlib.sha256(key.encode()).hexdigest()+":"+expected+":"+domain+(':decision-makers' if decision_makers else '')).encode()).hexdigest()
     receipt["cache_key"]=cache_key
     now=time.time();token=uuid.uuid4().hex
     try:
@@ -64,7 +64,9 @@ def discover_contacts(website, get=None):
                 remaining=bucket.get("remaining")
                 if isinstance(remaining,bool) or not isinstance(remaining,(int,float)) or not math.isfinite(remaining) or remaining<1:fail("HUNTER_FREE_QUOTA_UNAVAILABLE")
                 else:
-                    data,code=mailbox._request("domain-search",key,{"domain":domain,"limit":10},get)
+                    params={"domain":domain,"limit":10}
+                    if decision_makers:params.update(type='personal',decision_maker='true',required_field='full_name,position',verification_status='valid')
+                    data,code=mailbox._request("domain-search",key,params,get)
                     if code==429:fail("HUNTER_FREE_QUOTA_EXHAUSTED")
                     elif code!=200 or not isinstance(data,dict) or host("https://"+str(data.get("domain") or ""))!=domain:fail("HUNTER_DISCOVERY_UNCONFIRMED")
                     else:
@@ -89,10 +91,10 @@ def discover_contacts(website, get=None):
     return receipt
 
 
-def enrich_contact(enrichment, website, *, required_person=False, email_allowed=None):
+def enrich_contact(enrichment, website, *, required_person=False, email_allowed=None, provider_people=False):
     """Prefer a current source-supported person; retain shared inboxes as shared."""
-    if enrichment.get("identity_status")!="source_bound":return enrichment
-    receipt=discover_contacts(website)
+    if enrichment.get('identity_status')!='source_bound' and not (provider_people and enrichment.get('identity_status')=='provider_bound'):return enrichment
+    receipt=discover_contacts(website,decision_makers=True) if provider_people else discover_contacts(website)
     assessment=enrichment.setdefault("contact_assessment",{})
     assessment["hunter_discovery"]={k:v for k,v in receipt.items() if k!="contacts"}
     people=[p for p in enrichment.get("decision_maker_candidates") or [] if p.get("status")=="source_supported"]
@@ -104,6 +106,21 @@ def enrich_contact(enrichment, website, *, required_person=False, email_allowed=
         if email_allowed and not email_allowed(email):continue
         person=next((p for p in people if name_key(p["name"])==name_key(contact["name"])),None) if len(names)==1 else None
         if person and contact["type"]=="personal" and not is_shared_email(email):options.append((person,contact))
+    # Contact-list research can select a Hunter-associated person without
+    # pretending the company's website published their name. Company identity
+    # is still independently bound above; deliverability is checked below.
+    if not options and provider_people:
+        from src.contact_assessment import responsibility_matches
+        for contact in receipt['contacts']:
+            if (contact.get('type')!='personal' or is_shared_email(contact['email'])
+                    or len(contact.get('name','').split())<2
+                    or (email_allowed and not email_allowed(contact['email']))):continue
+            basis=responsibility_matches(contact.get('title',''),'','business outreach follow-up automation')
+            if not basis:continue
+            person={'name':contact['name'],'title':contact['title'],
+                    'source_url':enrichment['fields']['website']['source_url'],
+                    'status':'provider_supported','responsibility_status':'provider_supported'}
+            options.append((person,contact))
     if not options and not required_person:
         options=[(None,c) for c in receipt["contacts"] if c["type"]=="generic" and is_shared_email(c["email"]) and (not email_allowed or email_allowed(c["email"]))]
     # Prefer a named contact, otherwise keep a valid published email already found.
@@ -118,7 +135,7 @@ def enrich_contact(enrichment, website, *, required_person=False, email_allowed=
         assessment.update(mailbox_validation=check,email_person_status="hunter_verified_person" if person else "shared_inbox",person_email=contact["email"] if person else "")
         if person:
             enrichment["fields"]["decision_maker"]={"value":person["name"],"title":person["title"],"source_url":source,"validated":True}
-            assessment.update(decision_maker_status="source_supported",person_name=person["name"],hunter_association={"cache_key":receipt["cache_key"],"domain":receipt["domain"],"email":contact["email"],"name":person["name"]})
+            assessment.update(decision_maker_status=person.get('status','source_supported'),person_name=person["name"],person_title=person['title'],hunter_association={"cache_key":receipt["cache_key"],"domain":receipt["domain"],"email":contact["email"],"name":person["name"]})
         enrichment["validated"]=True
         break
     return enrichment

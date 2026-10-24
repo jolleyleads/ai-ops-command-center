@@ -20,5 +20,8 @@ def annotate(payload,kind,job_id):
     groups=[progress.get('candidates') or [],progress.get('businesses') or [],discovery.get('results') or []]
     for rows in groups:
         for row in rows:
-            if isinstance(row,dict):row['selection']=reference(kind,job_id,row)
+            if isinstance(row,dict):
+                row['selection']=({'kind':'lead','lead_id':row['lead_id']}
+                    if row.get('provider_contact_research') is True and type(row.get('lead_id')) is int
+                    else reference(kind,job_id,row))
     return payload

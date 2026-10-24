@@ -63,6 +63,12 @@ def _run_campaign(data):
     # This bit exists only in the server-created authenticated job payload.
     campaign["send_authorized"]=data.get("send_authorized") is True
     campaign["require_decision_maker"]=data.get("require_decision_maker") is True
+    # A contact-list request has a direct Hunter path. It does not need an
+    # automation-buying signal, an LLM research plan or a draft before showing
+    # verified addresses. Sending continues through the existing workflow.
+    from src.hunter_research import use_native_contact_search, run_contact_research
+    if data.get('draft_only') is True and use_native_contact_search(campaign['query']):
+        return run_contact_research(campaign)
     from src.prospect_quality import POLICY, request_spec
     if data.get('prospect_policy')==POLICY:
         campaign.update(prospect_policy=POLICY,request_spec=request_spec(campaign['query'],campaign['territory'],campaign['offer'],campaign['business_type']))

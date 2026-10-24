@@ -76,14 +76,21 @@ def process_next_research_job():
             db.session.commit()
             if not changed:raise TimeoutError('Research cancelled or claim lost')
         with execution_scope(budget+30,progress):
-            result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
+            from src.hunter_research import use_native_contact_search, run_contact_research, ContactResearchUnavailable
+            if use_native_contact_search(job.prompt_text):
+                result,stage,error=run_contact_research({'query':job.prompt_text,'territory':job.location,
+                    'target_count':job.target_count,'offer':''},save_contacts=False)
+                if error:raise ContactResearchUnavailable(error)
+            else:
+                result=_smart_search(job.prompt_text,job.location,runtime_budget=budget,target_count=job.target_count)
         result_json=json.dumps(result)
         status="failed" if result.get("agent_error") else "completed"
         error="Research could not finish. Please try again." if status=="failed" else ""
-    except Exception:
+    except Exception as exc:
         app.logger.exception("BACKGROUND_RESEARCH_FAILED")
         db.session.rollback()
-        result_json,status,error='{}','failed','Research could not finish. Please try again.'
+        from src.hunter_research import ContactResearchUnavailable
+        result_json,status,error='{}','failed',str(exc) if isinstance(exc,ContactResearchUnavailable) else 'Research could not finish. Please try again.'
     previous=json.loads(db.session.get(ResearchJob,job_id).result_json or '{}')
     persisted=json.loads(result_json)
     persisted['progress']=previous.get('progress') or {}

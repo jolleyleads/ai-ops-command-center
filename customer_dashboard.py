@@ -198,6 +198,13 @@ def settings():
                    sender_company=os.getenv('OUTREACH_SENDER_COMPANY') or 'AutoMake AI',
                    sender_email=(connection.email if connection else '') or os.getenv('GMAIL_FROM_EMAIL') or '',
                    google_configured=bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),
+                   integrations={
+                       'hunter':{'configured':bool(os.getenv('HUNTER_API_KEY','').strip() and os.getenv('HUNTER_ACCOUNT_EMAIL','').strip()
+                           and os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'),
+                           'purpose':'Business discovery, contact enrichment and email verification'},
+                       'web_research':{'configured':bool(os.getenv('EXA_API_KEY','').strip()),'purpose':'Current web sources and business research'},
+                       'google':{'configured':bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),
+                           'purpose':'Outreach, reply detection, follow-ups and Calendar booking'}},
                    first_followup_days=oa.FIRST_FOLLOWUP_DAYS, maximum_followups=oa.MAX_FOLLOWUPS)
 
 

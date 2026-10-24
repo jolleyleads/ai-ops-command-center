@@ -36,3 +36,28 @@ The live search smoke waits for the exact deployed commit and validates stable
 labels, response shape, failure flags, verified counts, and source URLs. It is an
 API contract test. Empty verified results are reported honestly; full lead
 availability, relevance, and outreach require separate acceptance evidence.
+
+## Direct business contact research
+
+Plain business/company lists now use Hunter Discover when Hunter is configured,
+followed by Domain Search filtered to named decision makers and valid addresses,
+then the independent mailbox verifier. Prompts explicitly requesting Hunter or
+verified emails report missing configuration instead of silently using another
+provider. Hiring, permit, and evidence-of-need requests keep the evidence research
+engine. A location in the chat prompt overrides the saved territory for the direct
+contact path.
+
+The list reports company, named contact, role, verified email, and the provider's
+verification date. It streams the company list first and updates individual
+contact results. Hunter associations are stored as provider evidence, not as a
+claim that the company website published those people or addresses. Business
+purchase intent is not implied by a valid mailbox. Research does not draft,
+send, or book appointments.
+
+Public read-only jobs store results only in the requesting browser's owned
+research job. They neither read nor write the owner's private lead list. Signed-in
+contact preparation saves unsent leads. Existing sent conversations are retained.
+The existing selected workflow handles activation, requires current company-domain
+proof and mailbox checks, and preserves the displayed recipient. Follow-ups,
+reply handling, suppression, Gmail receipts, and Calendar booking remain on the
+existing automation path.
