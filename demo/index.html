@@ -106,9 +106,10 @@ var m=q.match(/(?:^\s*|\b(?:find|research|get|show|list)\s+(?:me\s+)?(?:up to\s+
 return m?Number(m[1]):10;
 }
 window.requestedLeadCount=requestedLeadCount;
+window.requestedTerritory=function(query,fallback){var match=String(query||'').match(/\b(?:in|near|around)\s+(.+?)(?=\b(?:with|that|who|use|using|enrich|verify|verified)\b|[.;]|$)/i);return match?match[1].trim().replace(/[, ]+$/,''):fallback;};
 function deepSearch(q){return Promise.resolve(window.workspaceAccessReady).then(function(access){return access&&access.drafting_available?campaignSearch(q):publicResearch(q);});}
 function publicResearch(q){
-var requested=window.requestedLeadCount(q),location=document.getElementById("territory").value;
+var requested=window.requestedLeadCount(q),location=window.requestedTerritory(q,document.getElementById("territory").value);
 var body=JSON.stringify({prompt:q,location:location,target_count:requested});
 var pending;try{pending=JSON.parse(sessionStorage.getItem('automake-research-request')||'null');}catch(e){}
 if(!pending||pending.body!==body){pending={body:body,key:crypto.randomUUID()};sessionStorage.setItem('automake-research-request',JSON.stringify(pending));}
@@ -116,7 +117,7 @@ window.showRequestInterpretation(q,location,requested,false);
 return requestJSON(API+"/api/research/jobs",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":pending.key},body:body,cache:"no-store"}).then(function(job){return window.followResearchJob(job,'research');});}
 function campaignSearch(q){
 var requested=window.requestedLeadCount(q);
-var body={target_customer:q,territory:document.getElementById('territory').value,target_count:requested,offer:document.getElementById('customer-offer').value,draft_only:true};
+var body={target_customer:q,territory:window.requestedTerritory(q,document.getElementById('territory').value),target_count:requested,offer:document.getElementById('customer-offer').value,draft_only:true};
 window.showRequestInterpretation(q,body.territory,requested,false);
 var fingerprint=JSON.stringify(body);
 return workspaceMutation('/api/chat/campaigns/prepare',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':window.requestKeyFor('draft',fingerprint)},body:fingerprint})
@@ -195,4 +196,4 @@ function loadCampaignPerformance(){if(window.openWorkspace){window.openWorkspace
   }).catch(function(err){slot.querySelector(".bubble").innerHTML="<b>Campaign Performance</b><p class='error'>"+esc(err.message)+"</p><p class='meta'>Authorization required. No sample data displayed.</p>";});
 }
 
-</script><script src="/chat-operator/dashboard.js?v=hunter-contact-flow-1" defer></script><script src="/chat-operator/access.js?v=hunter-contact-flow-1"></script></body></html>
+</script><script src="/chat-operator/dashboard.js?v=hunter-contact-flow-2" defer></script><script src="/chat-operator/access.js?v=hunter-contact-flow-2"></script></body></html>
