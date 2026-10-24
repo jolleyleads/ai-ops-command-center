@@ -11,7 +11,7 @@ import uuid
 
 import requests
 
-from app import db
+from app import app, db
 from src import hunter_mailbox as mailbox
 from src.company_identity import host, shared_host
 from src.execution_deadline import checkpoint
@@ -53,6 +53,7 @@ def discover_companies(query, location, limit, get=None, post=None):
     if blocked:return {**receipt,'reason_codes':[blocked]}
     try:
         account,code=mailbox._request('account',key,{},get or requests.get)
+        receipt['account_http_status']=code
         if not isinstance(account,dict):receipt['reason_codes']=['HUNTER_ACCOUNT_CHECK_FAILED']
         elif str(account.get('email') or '').lower()!=expected:receipt['reason_codes']=['HUNTER_ACCOUNT_MISMATCH']
         elif str(account.get('plan_name') or '').lower()!='free':receipt['reason_codes']=['HUNTER_FREE_PLAN_REQUIRED']
@@ -63,6 +64,7 @@ def discover_companies(query, location, limit, get=None, post=None):
             response=(post or requests.post)('https://api.hunter.io/v2/discover',
                 headers={'X-API-KEY':key},json={'query':prompt,'limit':limit},
                 timeout=(2,30),allow_redirects=False)
+            receipt['provider_http_status']=response.status_code
             if response.status_code==429:receipt['reason_codes']=['HUNTER_DISCOVER_QUOTA_EXHAUSTED']
             elif response.status_code in {401,403}:receipt['reason_codes']=['HUNTER_DISCOVER_ACCESS_REQUIRED']
             elif response.status_code!=200 or len(response.content)>200000:receipt['reason_codes']=['HUNTER_DISCOVER_UNAVAILABLE']
@@ -84,7 +86,9 @@ def discover_companies(query, location, limit, get=None, post=None):
                             'location':location,'classification':'Candidate','contact_status':'Finding contact',
                             'provider_contact_research':True})
                     receipt['filters']=(body.get('meta') or {}).get('filters') or {}
-    except Exception:receipt['reason_codes']=['HUNTER_DISCOVER_UNAVAILABLE']
+    except Exception as exc:
+        receipt['diagnostic_error']=type(exc).__name__
+        receipt['reason_codes']=['HUNTER_DISCOVER_UNAVAILABLE']
     finally:
         try:mailbox._release_account(account_key,token,receipt['reason_codes'])
         except Exception:receipt={'provider':'hunter','companies':[],'reason_codes':['HUNTER_CACHE_UNAVAILABLE']}
@@ -119,6 +123,8 @@ def run_contact_research(campaign, *, save_contacts=True):
     checkpoint('discovering_businesses')
     receipt=discover_companies(query,location,campaign['target_count'])
     if receipt['reason_codes']:
+        app.logger.warning('HUNTER_CONTACT_RESEARCH_FAILED reasons=%s account_http=%s provider_http=%s error_type=%s',
+            receipt['reason_codes'],receipt.get('account_http_status'),receipt.get('provider_http_status'),receipt.get('diagnostic_error'))
         messages={'HUNTER_NOT_ENABLED':'Connect Hunter in Settings to find and verify business contacts.',
             'HUNTER_REAL_CREDENTIAL_REQUIRED':'Your Hunter API connection needs attention in Settings.',
             'HUNTER_DISCOVER_QUOTA_EXHAUSTED':'Your Hunter search allowance is used up. Check Hunter usage in Settings.',
