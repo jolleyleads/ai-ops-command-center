@@ -32,9 +32,16 @@ window.contactProgressMessage=function(row){
   if(check&&check.mailbox_verified)return (check.named_contact?'Decision-maker email verified.':'Company email verified.')+(row.qualification_status==='Not qualified'?' Business qualification still needs evidence.':'');
   return row.error?'Contact verification needs review. Business research is preserved.':'';
 };
+window.renderContactSummary=function(row){
+  if(!row.provider_contact_research)return '';
+  var name=row.contact_name||'Contact not found',role=row.contact_role||'';
+  var email=row.contact_email||'',status=row.email_status||row.contact_status||'Finding contact';
+  return '<dl class="contact-grid"><div><dt>Contact</dt><dd>'+esc(name)+(role?'<small>'+esc(role)+'</small>':'')+'</dd></div><div><dt>Email</dt><dd>'+(email?esc(email):'No verified email yet')+'<small>'+esc(status)+(row.email_verified_on?' · Last verified '+esc(row.email_verified_on):'')+'</small></dd></div></dl>';
+};
 window.businessMatchNote=function(row){return row.request_match_status==='unconfirmed'?'<p class="meta">Hiring not confirmed. Contact research only.</p>':'';};
 window.researchResultHeading=function(result){
   var research=result.discovery||result,matched=(research.results||[]).length;
+  if(result.contact_research){var verified=(research.results||[]).filter(function(r){return r.email_status==='Verified';}).length;return 'Found '+matched+' businesses · '+verified+' verified emails.';}
   var additional=(research.contact_research_candidates||[]).length;
   return additional?(matched?matched+' hiring matches confirmed. ':'No hiring matches confirmed. ')+
     'Contact research saved for '+additional+' additional '+(additional===1?'business.':'businesses.'):'Found '+matched+' businesses.';
@@ -43,13 +50,15 @@ window.renderResearchProgress=function(state){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var p=state.progress||{},rows=p.businesses||p.candidates||[];
   var stages={planning:'Understanding your request',discovering_businesses:'Finding businesses',verifying_candidates:'Checking business evidence',researching_more_sources:'Finding additional evidence',checking_contacts:'Checking available contact sources',business_results_ready:'Business research available',enriching_individual_contacts:'Verifying each contact and preparing qualified drafts'};
-  var html='<b>AutoMake AI</b><p>'+esc(state.status==='queued'?'Starting your search…':state.status==='cancelled'?'Search stopped.':'Finding businesses…')+'</p><p class="meta">'+esc(p.discovered||rows.length)+' found</p><details class="research-details"><summary>Search details</summary><p>'+esc(stages[p.stage]||'Checking sources')+'</p>';
+  var native=rows.some(function(r){return r.provider_contact_research;});
+  var html='<b>AutoMake AI</b><p>'+esc(state.status==='queued'?'Starting your search…':state.status==='cancelled'?'Search stopped.':native?'Finding and verifying contacts with Hunter…':'Finding businesses…')+'</p><p class="meta">'+esc(p.discovered||rows.length)+' found'+(native?' · '+esc(p.contacts_verified||0)+' verified emails':'')+'</p><details class="research-details"><summary>Search details</summary><p>'+esc(stages[p.stage]||'Checking sources')+'</p>';
   html+='<p class="meta">Requested '+esc(p.requested||state.target_count||'')+' · Discovered '+esc(p.discovered||rows.length)+' · Qualified '+esc(p.qualified||0)+' · Drafts ready '+esc(p.drafted||0)+'.</p>';
   if(p.updated_at)html+='<p class="meta">Last update: '+esc(p.updated_at)+'</p>';
   html+='</details>';
   if(window.bulkActivationControl)html+=window.bulkActivationControl(rows);
   rows.forEach(function(row){
     html+='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
+    if(window.renderContactSummary)html+=window.renderContactSummary(row);
 
     var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
@@ -94,7 +103,7 @@ window.followResearchJob=function(job,kind){
         window.renderResearchProgress(state);
         if(state.status==='completed'){
           sessionStorage.setItem('automake-last-research-job',JSON.stringify({job_id:job.job_id,poll_url:job.poll_url,kind:kind,territory:territory.value}));sessionStorage.removeItem('automake-active-job');sessionStorage.removeItem('automake-research-request');sessionStorage.removeItem('automake-campaign-request');sessionStorage.removeItem('automake-draft-request');window.pendingCampaign=null;
-          state.result.business_progress=kind==='research'?[]:(state.progress||{}).businesses||[];resolve(state.result);return;
+          state.result.business_progress=state.result.contact_research?(state.result.discovery||{}).results||[]:kind==='research'?[]:(state.progress||{}).businesses||[];resolve(state.result);return;
         }
         if(state.status==='failed'||state.status==='cancelled'){
           sessionStorage.removeItem('automake-active-job');
@@ -131,6 +140,7 @@ window.requestKeyFor=function(kind,body){
 window.renderBusinessCards=function(rows){
   return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
     var html='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
+    if(window.renderContactSummary)html+=window.renderContactSummary(row);
     var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';

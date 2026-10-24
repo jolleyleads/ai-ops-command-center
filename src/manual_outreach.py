@@ -138,7 +138,11 @@ def prepare_contact(selected,existing,query,territory,offer):
             if (not preferred or email==preferred) and oa._recipient_mailbox_allowed(email) and oa.email_on_domain(email,website) and email not in [x[0] for x in choices]:choices.append((email,row))
     checkpoint('hunter_contact_lookup')
     enrichment=enrich_lead({'company':company,'website':website,'target_location':territory,'query':query+' '+offer},rows,email_allowed=oa._recipient_mailbox_allowed)
-    enrich_contact(enrichment,website,required_person=required_person,email_allowed=oa._recipient_mailbox_allowed)
+    provider_people=selected.get('provider_contact_research') is True or bool(lead and any((r.get('context') or {}).get('provider_contact_research') is True
+        for r in oa._server_qualification_inputs(lead)[2]))
+    options={'provider_people':True} if provider_people else {}
+    allowed=(lambda email:oa._recipient_mailbox_allowed(email) and (not preferred or email==preferred)) if provider_people else oa._recipient_mailbox_allowed
+    enrich_contact(enrichment,website,required_person=required_person,email_allowed=allowed,**options)
     assessment=enrichment.get('contact_assessment') or {}
     candidate=(enrichment.get('fields') or {}).get('email') or {}
     named=person_email_supported(assessment,candidate.get('value'))

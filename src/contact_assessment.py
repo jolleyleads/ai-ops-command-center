@@ -14,9 +14,10 @@ from src.email_syntax import EMAIL_RE as EMAIL
 SHARED={"info","sales","support","contact","hello","office","mail","admin","jobs","careers","hr","hiring","recruiting","recruitment","team","owner","service","billing","press","marketing","noreply","no-reply"}
 
 def person_email_supported(assessment,email):
-    if not email or assessment.get('decision_maker_status')!='source_supported' or assessment.get('person_email')!=email:return False
-    if assessment.get('email_person_status')=='same_source_card':return True
+    if not email or assessment.get('person_email')!=email:return False
+    if assessment.get('email_person_status')=='same_source_card':return assessment.get('decision_maker_status')=='source_supported'
     if assessment.get('email_person_status')=='hunter_verified_person':
+        if assessment.get('decision_maker_status') not in {'source_supported','provider_supported'}:return False
         from src.hunter_discovery import current_person_association
         return current_person_association(assessment,email)
     return False

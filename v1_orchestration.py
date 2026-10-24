@@ -72,7 +72,9 @@ def _verified_public_email_impl(result):
     enrichment=enrich_lead({"company":company,"website":website,"target_location":location,"query":query},rows or [],email_allowed=_purpose_mailbox_allowed)
     from src.hunter_discovery import enrich_contact
     checkpoint("hunter_contact_lookup")
-    enrich_contact(enrichment,website,required_person=(result.get('_campaign_context') or {}).get('require_decision_maker') is True,email_allowed=_purpose_mailbox_allowed)
+    contact_options={}
+    if (result.get('_campaign_context') or {}).get('provider_contact_research') is True:contact_options['provider_people']=True
+    enrich_contact(enrichment,website,required_person=(result.get('_campaign_context') or {}).get('require_decision_maker') is True,email_allowed=_purpose_mailbox_allowed,**contact_options)
     checkpoint("verifying_mailbox")
     apply_email_domain_check(enrichment)
     if (result.get('_campaign_context') or {}).get('require_decision_maker') is True:
