@@ -1,6 +1,7 @@
 """Contact research uses Hunter without becoming permission to send."""
 import copy
 import json
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -73,6 +74,33 @@ def test_direct_discovery_uses_hunter_and_keeps_key_out_of_query(native):
     receipt=research.discover_companies('Find businesses','Charlotte, NC',2,get=transport,post=post)
     assert [x['company'] for x in receipt['companies']]==['Acme']
     assert 'unit-test-secret' not in json.dumps(receipt) and len(seen)==1
+
+
+def test_free_discovery_rechecks_account_despite_cached_lookup_quota_pause(native):
+    key,blocked=mailbox._claim_account('owner@example.com','old',time.time())
+    assert not blocked
+    mailbox._release_account(key,'old',['HUNTER_FREE_QUOTA_UNAVAILABLE'])
+    assert mailbox._claim_account('owner@example.com','paid',time.time())[1]=='HUNTER_FREE_QUOTA_UNAVAILABLE'
+    receipt=research.discover_companies('Find businesses','Charlotte, NC',1,get=transport,
+        post=lambda *a,**kw:response([{'organization':'Acme','domain':'acme.example'}]))
+    assert receipt['account_http_status']==200 and receipt['companies']
+    assert not receipt['reason_codes']
+    # Free discovery released its lease. A subsequent lookup can check the
+    # current balance again instead of inheriting the old one-hour pause.
+    _,blocked=mailbox._claim_account('owner@example.com','new',time.time())
+    assert not blocked
+
+
+@pytest.mark.parametrize('bucket,expected',[
+    ({'remaining':46,'available':50,'used':4},46),
+    ({'available':50,'used':4},46),
+    ({'available':50},None),({'available':True,'used':0},None),
+    ({'remaining':0,'available':50,'used':0},0),
+    ({'remaining':True,'available':50,'used':0},None),
+    ({'available':50,'used':51},0),
+])
+def test_quota_parser_never_treats_total_allocation_as_remaining(bucket,expected):
+    assert mailbox.remaining_requests(bucket)==expected
 
 
 @pytest.mark.parametrize('status,reason',[(403,'HUNTER_DISCOVER_ACCESS_REQUIRED'),(429,'HUNTER_DISCOVER_QUOTA_EXHAUSTED'),(500,'HUNTER_DISCOVER_UNAVAILABLE')])

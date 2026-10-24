@@ -61,7 +61,7 @@ def discover_contacts(website, get=None, *, decision_makers=False):
             else:
                 buckets=account.get("requests") or {}
                 bucket=buckets.get("credits") or buckets.get("searches") or {}
-                remaining=bucket.get("remaining")
+                remaining=mailbox.remaining_requests(bucket)
                 if isinstance(remaining,bool) or not isinstance(remaining,(int,float)) or not math.isfinite(remaining) or remaining<1:fail("HUNTER_FREE_QUOTA_UNAVAILABLE")
                 else:
                     params={"domain":domain,"limit":10}

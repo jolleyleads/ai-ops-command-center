@@ -31,16 +31,18 @@ class HunterAccountGuard(db.Model):
     reason = db.Column(db.String(80), nullable=False, default='HUNTER_CHECK_IN_PROGRESS')
 
 
-def _claim_account(expected, token, now):
+def _claim_account(expected, token, now, *, free_lookup=False):
     key = hashlib.sha256(('hunter-account:' + expected).encode()).hexdigest()
     try:
         with Session(db.engine) as session:
             row = session.get(HunterAccountGuard, key)
-            if row and row.expires_at > now:
+            quota_pause=bool(row and free_lookup and row.reason in {'HUNTER_FREE_QUOTA_UNAVAILABLE','HUNTER_FREE_QUOTA_EXHAUSTED'})
+            if row and row.expires_at > now and not quota_pause:
                 return key, row.reason
             if row:
                 claimed = session.execute(update(HunterAccountGuard).where(
-                    HunterAccountGuard.key == key, HunterAccountGuard.expires_at <= now
+                    HunterAccountGuard.key == key,
+                    (HunterAccountGuard.reason.in_(['HUNTER_FREE_QUOTA_UNAVAILABLE','HUNTER_FREE_QUOTA_EXHAUSTED']) if quota_pause else HunterAccountGuard.expires_at <= now)
                 ).values(lease_token=token, expires_at=now+120, reason='HUNTER_CHECK_IN_PROGRESS')).rowcount
                 if not claimed:return key, 'HUNTER_CHECK_IN_PROGRESS'
             else:session.add(HunterAccountGuard(key=key, lease_token=token, expires_at=now+120))
@@ -61,6 +63,17 @@ def _release_account(key, token, reasons):
 
 def enabled():
     return os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'
+
+
+def remaining_requests(bucket):
+    """Read current balance; support legacy total-minus-used responses safely."""
+    if not isinstance(bucket,dict):return None
+    def number(value):return not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and value>=0
+    if 'remaining' in bucket:
+        value=bucket['remaining']
+        return value if number(value) else None
+    total,used=bucket.get('available'),bucket.get('used')
+    return max(0,total-used) if number(total) and number(used) else None
 
 
 def base_receipt(email,reason):
@@ -164,7 +177,7 @@ def verify_mailbox(email,get=None):
             requests_left=account.get('requests') or {}
             credits=requests_left.get('credits')
             bucket=credits if isinstance(credits,dict) else requests_left.get('verifications') or {}
-            remaining=bucket.get('remaining')
+            remaining=remaining_requests(bucket)
             if isinstance(remaining,bool) or not isinstance(remaining,(int,float)) or not math.isfinite(remaining) or remaining<(0.5 if isinstance(credits,dict) else 1):
                 receipt['reason_codes']=['HUNTER_FREE_QUOTA_UNAVAILABLE']
             else:
