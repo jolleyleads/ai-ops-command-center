@@ -34,9 +34,9 @@ window.contactProgressMessage=function(row){
 };
 window.renderContactSummary=function(row){
   if(!row.provider_contact_research)return '';
-  var name=row.contact_name||'Contact not found',role=row.contact_role||'';
+  var name=row.contact_name||(row.contact_issue?'Contact lookup paused':row.email_status?'Contact not found':'Finding contact…'),role=row.contact_role||'';
   var email=row.contact_email||'',status=row.email_status||row.contact_status||'Finding contact';
-  return '<dl class="contact-grid"><div><dt>Contact</dt><dd>'+esc(name)+(role?'<small>'+esc(role)+'</small>':'')+'</dd></div><div><dt>Email</dt><dd>'+(email?esc(email):'No verified email yet')+'<small>'+esc(status)+(row.email_verified_on?' · Last verified '+esc(row.email_verified_on):'')+'</small></dd></div></dl>';
+  return '<dl class="contact-grid"><div><dt>Contact</dt><dd>'+esc(name)+(role?'<small>'+esc(role)+'</small>':'')+'</dd></div><div><dt>Email</dt><dd>'+(email?esc(email):'No verified email yet')+'<small>'+esc(status)+(row.email_verified_on?' · Last verified '+esc(row.email_verified_on):'')+'</small></dd></div></dl>'+(row.contact_issue?'<p class="meta">'+esc(row.contact_issue)+'</p>':'');
 };
 window.businessMatchNote=function(row){return row.request_match_status==='unconfirmed'?'<p class="meta">Hiring not confirmed. Contact research only.</p>':'';};
 window.researchResultHeading=function(result){

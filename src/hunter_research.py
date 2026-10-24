@@ -4,6 +4,7 @@ This path researches contacts only. It cannot send, book or infer purchase inten
 Existing selected-workflow activation owns all subsequent outreach.
 """
 import json
+import hashlib
 import os
 import re
 import time
@@ -60,6 +61,11 @@ def discover_companies(query, location, limit, get=None, post=None):
         elif str(account.get('email') or '').lower()!=expected:receipt['reason_codes']=['HUNTER_ACCOUNT_MISMATCH']
         elif str(account.get('plan_name') or '').lower()!='free':receipt['reason_codes']=['HUNTER_FREE_PLAN_REQUIRED']
         else:
+            usage=account.get('requests') or {}
+            app.logger.warning('HUNTER_CONTACT_ACCOUNT fingerprint=%s credits_remaining=%s searches_remaining=%s verifications_remaining=%s',
+                hashlib.sha256(str(account.get('email') or '').lower().encode()).hexdigest()[:12],
+                mailbox.remaining_requests(usage.get('credits')),mailbox.remaining_requests(usage.get('searches')),
+                mailbox.remaining_requests(usage.get('verifications')))
             # Natural language is interpreted by Hunter's own company filters.
             # The original prompt is kept for inspection; geography is explicit.
             prompt=query+'\nCompany headquarters location: '+location if location else query
@@ -102,6 +108,11 @@ def contact_view(lead):
     _,enrichment,_=evidence_parts(lead)
     assessment=enrichment.get('contact_assessment') or {}
     check=assessment.get('mailbox_validation') or {}
+    reasons=list(dict.fromkeys((assessment.get('hunter_discovery') or {}).get('reason_codes',[])+check.get('reason_codes',[])))
+    issue=('Hunter email credits are unavailable. Check your Hunter usage.' if any('QUOTA' in code for code in reasons) else
+           'Hunter is already checking another contact. Please try again shortly.' if 'HUNTER_CHECK_IN_PROGRESS' in reasons else
+           'Your Hunter connection needs attention.' if any(code in reasons for code in ['HUNTER_ACCOUNT_MISMATCH','HUNTER_ACCOUNT_EMAIL_REQUIRED','HUNTER_REAL_CREDENTIAL_REQUIRED','HUNTER_FREE_PLAN_REQUIRED','HUNTER_NOT_ENABLED']) else
+           'Hunter could not verify this contact yet.' if reasons and 'HUNTER_NO_DOMAIN_CONTACTS' not in reasons else '')
     person=(enrichment.get('fields') or {}).get('decision_maker') or {}
     valid=bool(lead.contact_email and check.get('email')==lead.contact_email
                and check.get('mailbox_status')=='provider_verified')
@@ -109,6 +120,7 @@ def contact_view(lead):
         'source_url':lead.source_url,'location':lead.location,'lead_id':lead.id,
         'contact_name':lead.contact_name or '', 'contact_role':person.get('title') if lead.contact_name else '',
         'contact_email':lead.contact_email if valid else '',
+        'contact_issue':issue if not valid else '',
         'email_status':'Verified' if valid else 'Not verified',
         'email_verified_on':check.get('provider_verified_on') if valid else None,
         'contact_status':'Verified email' if valid else 'No verified email found',
@@ -163,6 +175,9 @@ def run_contact_research(campaign, *, save_contacts=True):
             check=assessment.get('mailbox_validation') or {}
             email=(field.get('value') if field.get('validated') and check.get('email')==field.get('value')
                    and check.get('mailbox_status')=='provider_verified' and person_email_supported(assessment,field.get('value')) else '') or ''
+            if not email:
+                reasons=list(dict.fromkeys((assessment.get('hunter_discovery') or {}).get('reason_codes',[])+check.get('reason_codes',[])))
+                app.logger.warning('HUNTER_CONTACT_LOOKUP_HELD reasons=%s',reasons)
             contact_name=assessment.get('person_name') if email else ''
             if not lead:
                 lead=OutreachLead(company=row['company'],source_url=row['website'],location=location,
