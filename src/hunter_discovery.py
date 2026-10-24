@@ -61,7 +61,7 @@ def discover_contacts(website, get=None, *, decision_makers=False):
             else:
                 buckets=account.get("requests") or {}
                 bucket=buckets.get("credits") or buckets.get("searches") or {}
-                remaining=bucket.get("remaining")
+                remaining=mailbox.remaining_requests(bucket)
                 if isinstance(remaining,bool) or not isinstance(remaining,(int,float)) or not math.isfinite(remaining) or remaining<1:fail("HUNTER_FREE_QUOTA_UNAVAILABLE")
                 else:
                     params={"domain":domain,"limit":10}
@@ -91,7 +91,7 @@ def discover_contacts(website, get=None, *, decision_makers=False):
     return receipt
 
 
-def enrich_contact(enrichment, website, *, required_person=False, email_allowed=None, provider_people=False):
+def enrich_contact(enrichment, website, *, required_person=False, email_allowed=None, provider_people=False, research_only=False):
     """Prefer a current source-supported person; retain shared inboxes as shared."""
     if enrichment.get('identity_status')!='source_bound' and not (provider_people and enrichment.get('identity_status')=='provider_bound'):return enrichment
     receipt=discover_contacts(website,decision_makers=True) if provider_people else discover_contacts(website)
@@ -126,7 +126,7 @@ def enrich_contact(enrichment, website, *, required_person=False, email_allowed=
     # Prefer a named contact, otherwise keep a valid published email already found.
     if options and options[0][0] is None and enrichment.get("fields",{}).get("email",{}).get("validated"):return enrichment
     for person,contact in options[:3]:
-        check=mailbox.verify_mailbox(contact["email"])
+        check=mailbox.verify_mailbox(contact['email'],research_only=True) if research_only else mailbox.verify_mailbox(contact['email'])
         if check.get("mailbox_status")!="provider_verified":
             assessment["mailbox_validation"]=check
             continue

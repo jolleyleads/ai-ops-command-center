@@ -1,7 +1,8 @@
 """Contact research uses Hunter without becoming permission to send."""
 import copy
 import json
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +50,7 @@ def wire(monkeypatch):
     original_discover=discovery.discover_contacts
     original_verify=mailbox.verify_mailbox
     monkeypatch.setattr(discovery,'discover_contacts',lambda website,**kw:original_discover(website,transport,**kw))
-    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:original_verify(email,transport))
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email,**kw:original_verify(email,transport,**kw))
     page={'url':'https://acme.example','candidate_name':'Acme','title':'Acme',
         'page_text':'Acme is based in Charlotte, North Carolina. Business services.',
         'directly_fetched':True,'http_status':200,'observed_at':datetime.now(timezone.utc).isoformat()}
@@ -73,6 +74,48 @@ def test_direct_discovery_uses_hunter_and_keeps_key_out_of_query(native):
     receipt=research.discover_companies('Find businesses','Charlotte, NC',2,get=transport,post=post)
     assert [x['company'] for x in receipt['companies']]==['Acme']
     assert 'unit-test-secret' not in json.dumps(receipt) and len(seen)==1
+
+
+def test_free_discovery_rechecks_account_despite_cached_lookup_quota_pause(native):
+    key,blocked=mailbox._claim_account('owner@example.com','old',time.time())
+    assert not blocked
+    mailbox._release_account(key,'old',['HUNTER_FREE_QUOTA_UNAVAILABLE'])
+    assert mailbox._claim_account('owner@example.com','paid',time.time())[1]=='HUNTER_FREE_QUOTA_UNAVAILABLE'
+    receipt=research.discover_companies('Find businesses','Charlotte, NC',1,get=transport,
+        post=lambda *a,**kw:response([{'organization':'Acme','domain':'acme.example'}]))
+    assert receipt['account_http_status']==200 and receipt['companies']
+    assert not receipt['reason_codes']
+    # Free discovery released its lease. A subsequent lookup can check the
+    # current balance again instead of inheriting the old one-hour pause.
+    _,blocked=mailbox._claim_account('owner@example.com','new',time.time())
+    assert not blocked
+
+
+@pytest.mark.parametrize('bucket,expected',[
+    ({'remaining':46,'available':50,'used':4},46),
+    ({'available':50,'used':4},46),
+    ({'available':50},None),({'available':True,'used':0},None),
+    ({'remaining':0,'available':50,'used':0},0),
+    ({'remaining':True,'available':50,'used':0},None),
+    ({'available':50,'used':51},0),
+])
+def test_quota_parser_never_treats_total_allocation_as_remaining(bucket,expected):
+    assert mailbox.remaining_requests(bucket)==expected
+
+
+def test_research_verification_matches_hunter_dates_without_reusing_send_eligibility(native):
+    def get(url,**kwargs):
+        r=transport(url,**kwargs)
+        if url.endswith('/email-verifier'):
+            data=r.json()['data'];data['verification']['date']=(datetime.now(timezone.utc)-timedelta(days=17)).date().isoformat()
+            return response(data)
+        return r
+    preview=mailbox.verify_mailbox('jane@acme.example',get,research_only=True)
+    assert preview['mailbox_status']=='provider_verified'
+    assert preview['verification_policy']=='research-last-known-30-days'
+    send=mailbox.verify_mailbox('jane@acme.example',get)
+    assert send['mailbox_status']=='unconfirmed' and not send.get('cache_hit')
+    assert send['verification_policy']=='send-current-7-days'
 
 
 @pytest.mark.parametrize('status,reason',[(403,'HUNTER_DISCOVER_ACCESS_REQUIRED'),(429,'HUNTER_DISCOVER_QUOTA_EXHAUSTED'),(500,'HUNTER_DISCOVER_UNAVAILABLE')])

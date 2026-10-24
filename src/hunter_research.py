@@ -49,7 +49,9 @@ def discover_companies(query, location, limit, get=None, post=None):
     if not key or key=='test-api-key':return {**receipt,'reason_codes':['HUNTER_REAL_CREDENTIAL_REQUIRED']}
     if not expected:return {**receipt,'reason_codes':['HUNTER_ACCOUNT_EMAIL_REQUIRED']}
     token=uuid.uuid4().hex
-    account_key,blocked=mailbox._claim_account(expected,token,time.time())
+    # Discover and account checks cost no credits. A prior paid-operation quota
+    # pause must not block these free calls or conceal a restored balance.
+    account_key,blocked=mailbox._claim_account(expected,token,time.time(),free_lookup=True)
     if blocked:return {**receipt,'reason_codes':[blocked]}
     try:
         account,code=mailbox._request('account',key,{},get or requests.get)
@@ -127,6 +129,8 @@ def run_contact_research(campaign, *, save_contacts=True):
             receipt['reason_codes'],receipt.get('account_http_status'),receipt.get('provider_http_status'),receipt.get('diagnostic_error'))
         messages={'HUNTER_NOT_ENABLED':'Connect Hunter in Settings to find and verify business contacts.',
             'HUNTER_REAL_CREDENTIAL_REQUIRED':'Your Hunter API connection needs attention in Settings.',
+            'HUNTER_FREE_QUOTA_UNAVAILABLE':'Hunter has no confirmed email lookup credits available. Check your Hunter usage.',
+            'HUNTER_FREE_QUOTA_EXHAUSTED':'Hunter email lookup credits are used up. Company discovery is still available.',
             'HUNTER_DISCOVER_QUOTA_EXHAUSTED':'Your Hunter search allowance is used up. Check Hunter usage in Settings.',
             'HUNTER_DISCOVER_ACCESS_REQUIRED':'Hunter did not allow this search. Check your Hunter API connection and plan.'}
         return None,'contact_research',messages.get(receipt['reason_codes'][0],'Hunter could not complete the search. Please try again shortly.')
@@ -154,7 +158,7 @@ def run_contact_research(campaign, *, save_contacts=True):
             enrichment={'company_name':row['company'],'identity_status':'provider_bound',
                 'fields':{'website':{'value':row['website'],'source_url':provider_source,'validated':True}},
                 'contact_assessment':{'company_status':'hunter_domain_association','reason_codes':[]},'validated':True}
-            enrich_contact(enrichment,row['website'],required_person=True,email_allowed=_purpose_mailbox_allowed,provider_people=True)
+            enrich_contact(enrichment,row['website'],required_person=True,email_allowed=_purpose_mailbox_allowed,provider_people=True,research_only=True)
             assessment=enrichment['contact_assessment'];field=enrichment['fields'].get('email') or {}
             check=assessment.get('mailbox_validation') or {}
             email=(field.get('value') if field.get('validated') and check.get('email')==field.get('value')
