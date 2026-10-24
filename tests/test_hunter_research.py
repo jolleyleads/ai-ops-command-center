@@ -2,7 +2,7 @@
 import copy
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -50,7 +50,7 @@ def wire(monkeypatch):
     original_discover=discovery.discover_contacts
     original_verify=mailbox.verify_mailbox
     monkeypatch.setattr(discovery,'discover_contacts',lambda website,**kw:original_discover(website,transport,**kw))
-    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:original_verify(email,transport))
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email,**kw:original_verify(email,transport,**kw))
     page={'url':'https://acme.example','candidate_name':'Acme','title':'Acme',
         'page_text':'Acme is based in Charlotte, North Carolina. Business services.',
         'directly_fetched':True,'http_status':200,'observed_at':datetime.now(timezone.utc).isoformat()}
@@ -101,6 +101,21 @@ def test_free_discovery_rechecks_account_despite_cached_lookup_quota_pause(nativ
 ])
 def test_quota_parser_never_treats_total_allocation_as_remaining(bucket,expected):
     assert mailbox.remaining_requests(bucket)==expected
+
+
+def test_research_verification_matches_hunter_dates_without_reusing_send_eligibility(native):
+    def get(url,**kwargs):
+        r=transport(url,**kwargs)
+        if url.endswith('/email-verifier'):
+            data=r.json()['data'];data['verification']['date']=(datetime.now(timezone.utc)-timedelta(days=17)).date().isoformat()
+            return response(data)
+        return r
+    preview=mailbox.verify_mailbox('jane@acme.example',get,research_only=True)
+    assert preview['mailbox_status']=='provider_verified'
+    assert preview['verification_policy']=='research-last-known-30-days'
+    send=mailbox.verify_mailbox('jane@acme.example',get)
+    assert send['mailbox_status']=='unconfirmed' and not send.get('cache_hit')
+    assert send['verification_policy']=='send-current-7-days'
 
 
 @pytest.mark.parametrize('status,reason',[(403,'HUNTER_DISCOVER_ACCESS_REQUIRED'),(429,'HUNTER_DISCOVER_QUOTA_EXHAUSTED'),(500,'HUNTER_DISCOVER_UNAVAILABLE')])

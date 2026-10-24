@@ -98,7 +98,7 @@ def processing_restricted(email):
     return processing_restriction_state(email)!='clear'
 
 
-def normalize_result(email,data,now=None):
+def normalize_result(email,data,now=None,*,max_age_days=7):
     receipt=base_receipt(email,'HUNTER_RESULT_UNCONFIRMED')
     if not isinstance(data,dict) or str(data.get('email') or '').lower()!=email.lower():
         receipt['reason_codes']=['HUNTER_RESPONSE_EMAIL_MISMATCH'];return receipt
@@ -117,7 +117,7 @@ def normalize_result(email,data,now=None):
     try:
         verified=datetime.fromisoformat(str(date).replace('Z','+00:00'))
         verified=verified.replace(tzinfo=timezone.utc) if verified.tzinfo is None else verified.astimezone(timezone.utc)
-        fresh=now-timedelta(days=7)<=verified<=now
+        fresh=now-timedelta(days=max_age_days)<=verified<=now
     except (ValueError,TypeError):fresh=False
     if status=='valid' and verification.get('status')=='valid' and data.get('smtp_check') is True and data.get('accept_all') is False and data.get('block') is False and data.get('disposable') is False and fresh:
         receipt.update(mailbox_status='provider_verified',deliverability_status='provider_reported_valid',reason_codes=[])
@@ -134,7 +134,7 @@ def _request(path,key,params,get):
     return body.get('data'),200
 
 
-def verify_mailbox(email,get=None):
+def verify_mailbox(email,get=None,*,research_only=False):
     email=str(email or '').strip().lower()
     restriction=processing_restriction_state(email) if has_app_context() else 'clear'
     if restriction=='unavailable':return base_receipt(email,'HUNTER_CACHE_UNAVAILABLE')
@@ -146,7 +146,8 @@ def verify_mailbox(email,get=None):
     if not key or key=='test-api-key':return base_receipt(email,'HUNTER_REAL_CREDENTIAL_REQUIRED')
     if not expected:return base_receipt(email,'HUNTER_ACCOUNT_EMAIL_REQUIRED')
     if not has_app_context():return base_receipt(email,'HUNTER_CACHE_UNAVAILABLE')
-    cache_key=hashlib.sha256(('hunter:'+hashlib.sha256(key.encode()).hexdigest()+':'+expected+':'+email).encode()).hexdigest()
+    max_age_days=30 if research_only else 7
+    cache_key=hashlib.sha256(('hunter:'+hashlib.sha256(key.encode()).hexdigest()+':'+expected+':'+email+(':research-30' if research_only else '')).encode()).hexdigest()
     now=time.time()
     token=uuid.uuid4().hex
     # Separate transaction: never commit/roll back the caller's lead workflow.
@@ -186,7 +187,7 @@ def verify_mailbox(email,get=None):
                 elif code==429:receipt['reason_codes']=['HUNTER_FREE_QUOTA_EXHAUSTED']
                 elif code==451:
                     receipt.update(mailbox_status='provider_rejected',reason_codes=['HUNTER_PROCESSING_RESTRICTED'])
-                elif code==200:receipt=normalize_result(email,data)
+                elif code==200:receipt=normalize_result(email,data,max_age_days=max_age_days)
     except Exception:
         # Never persist exception text: HTTP exceptions can contain credentials.
         receipt=base_receipt(email,'HUNTER_PROVIDER_UNAVAILABLE')
@@ -199,7 +200,8 @@ def verify_mailbox(email,get=None):
     if receipt['mailbox_status']=='provider_verified':
         verified=datetime.fromisoformat(receipt['provider_verified_on'].replace('Z','+00:00'))
         verified=verified.replace(tzinfo=timezone.utc) if verified.tzinfo is None else verified.astimezone(timezone.utc)
-        ttl=max(0,min(86400,(verified+timedelta(days=7)).timestamp()-time.time()))
+        ttl=max(0,min(86400,(verified+timedelta(days=max_age_days)).timestamp()-time.time()))
+    receipt['verification_policy']='research-last-known-30-days' if research_only else 'send-current-7-days'
     try:
         with Session(db.engine) as session:
             completed=session.execute(update(HunterMailboxCheck).where(HunterMailboxCheck.key==cache_key,HunterMailboxCheck.state=='reserved',HunterMailboxCheck.lease_token==token).values(state='complete',expires_at=time.time()+ttl,receipt_json=json.dumps(receipt))).rowcount

@@ -158,7 +158,7 @@ def run_contact_research(campaign, *, save_contacts=True):
             enrichment={'company_name':row['company'],'identity_status':'provider_bound',
                 'fields':{'website':{'value':row['website'],'source_url':provider_source,'validated':True}},
                 'contact_assessment':{'company_status':'hunter_domain_association','reason_codes':[]},'validated':True}
-            enrich_contact(enrichment,row['website'],required_person=True,email_allowed=_purpose_mailbox_allowed,provider_people=True)
+            enrich_contact(enrichment,row['website'],required_person=True,email_allowed=_purpose_mailbox_allowed,provider_people=True,research_only=True)
             assessment=enrichment['contact_assessment'];field=enrichment['fields'].get('email') or {}
             check=assessment.get('mailbox_validation') or {}
             email=(field.get('value') if field.get('validated') and check.get('email')==field.get('value')
