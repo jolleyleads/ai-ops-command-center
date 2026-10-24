@@ -53,6 +53,8 @@ def resolve_selection(ref):
     row=next((x for x in rows if isinstance(x,dict) and business_key(x)==key),None)
     if not row:return None
     selected=copy.deepcopy(row)
+    if selected.get('provider_contact_research') is True:
+        location=selected.get('location') or location
     website=selected.get('website') or selected.get('source_url') or selected.get('url') or ''
     if shared_host(host(website)):
         # Recover only a uniquely observed primary-site candidate for this same

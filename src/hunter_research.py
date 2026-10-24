@@ -161,7 +161,7 @@ def run_contact_research(campaign, *, save_contacts=True):
                     db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
             lead.contact_email=email;lead.contact_name=contact_name or ''
             lead.location=location;lead.status='needs_evidence';lead.subject='';lead.body=''
-            lead.evidence_json=json.dumps([{'source':'hunter_contact_research','url':provider_source,'email':email,
+            lead.evidence_json=json.dumps([{'source':'hunter_contact_research','url':provider_source,
                 'enrichment':enrichment,'contact_assessment':assessment,'observed_at':check.get('checked_at')},
                 {'source':'campaign_context','context':context}])
             if save_contacts:

@@ -131,3 +131,20 @@ def test_unknown_mailbox_not_displayed_as_verified(native,monkeypatch):
     row={'company':'Acme','website':'https://acme.example','contact_location':'Charlotte, NC',
         '_campaign_context':{'provider_contact_research':True,'require_decision_maker':True}}
     assert workflow._verified_public_email(row)==('','')
+
+
+def test_research_contact_can_be_prepared_by_existing_workflow_after_company_check(native,monkeypatch):
+    wire(monkeypatch)
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':[{'company':'Acme',
+        'title':'Acme','website':'https://acme.example','url':'https://acme.example'}],'reason_codes':[]})
+    result,_,_=research.run_contact_research({'query':'Find businesses in Charlotte, NC with verified emails',
+        'territory':'Hampton Roads, VA','target_count':1,'offer':'AI automation'})
+    lead=oa.OutreachLead.query.one()
+    from src.manual_outreach import prepare_contact,contact_readiness
+    from src.outreach_copy import initial_email
+    prepared=prepare_contact(result['discovery']['results'][0],lead,'Find businesses in Charlotte, NC',
+        'Charlotte, NC','AI automation')
+    assert prepared.contact_email=='jane@acme.example'
+    assert contact_readiness(prepared)['ok']
+    assert prepared.subject and prepared.body
+    assert not oa.OutreachSendAttempt.query.count()

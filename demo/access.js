@@ -60,8 +60,8 @@ window.renderResearchProgress=function(state){
     html+='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
     if(window.renderContactSummary)html+=window.renderContactSummary(row);
 
-    var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
-    if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
+    var contactMessage=row.provider_contact_research?'':window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
+    if(!row.provider_contact_research&&window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     var url=String(row.source_url||'');if(/^https?:\/\//.test(url))html+='<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(window.businessAction)html+=window.businessAction(row);
     html+='</div>';
@@ -141,8 +141,8 @@ window.renderBusinessCards=function(rows){
   return (window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(function(row){
     var html='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
     if(window.renderContactSummary)html+=window.renderContactSummary(row);
-    var contactMessage=window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
-    if(window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
+    var contactMessage=row.provider_contact_research?'':window.contactProgressMessage(row);if(contactMessage)html+='<p>'+esc(contactMessage)+'</p>';
+    if(!row.provider_contact_research&&window.renderProspectQuality)html+=window.renderProspectQuality(row.prospect_quality);
     if(/^https?:\/\//.test(String(row.source_url||'')))html+='<a href="'+esc(row.source_url)+'" target="_blank" rel="noopener noreferrer">Research source</a>';
     if(window.businessAction)html+=window.businessAction(row);
     return html+'</div>';
@@ -310,7 +310,7 @@ window.businessEmailValue=function(row){
     return domain===host||domain.endsWith('.'+host)||host.endsWith('.'+domain);
   })||'';
 };
-window.businessEmail=function(row){var email=window.businessEmailValue(row);return (email?'<p class="meta">Email: '+esc(email)+'</p>':'')+(row.contact_phone?'<p class="meta">Phone: '+esc(row.contact_phone)+'</p>':'');};
+window.businessEmail=function(row){if(row.provider_contact_research)return '';var email=window.businessEmailValue(row);return (email?'<p class="meta">Email: '+esc(email)+'</p>':'')+(row.contact_phone?'<p class="meta">Phone: '+esc(row.contact_phone)+'</p>':'');};
 window.bulkActivationControl=function(rows){
   if(!rows.length)return '';
   var refs=[],seen=new Set();
