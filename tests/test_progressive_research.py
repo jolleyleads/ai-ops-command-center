@@ -48,6 +48,13 @@ def test_prompt_only_count_is_not_silently_truncated(client):
     assert target_count_from_prompt('Find businesses along Route 17')==10
     assert target_count_from_prompt('Find businesses open 24 hours')==10
     assert target_count_from_prompt('Find 20 HVAC businesses')==20
+    assert target_count_from_prompt('Give me five electrical businesses only with their emails available')==5
+    assert target_count_from_prompt('Please show me up to TWO electrical companies')==2
+    assert target_count_from_prompt('Give me five electrical businesses',explicit=3)==3
+    from smart_search import _business_terms
+    from src.prospect_quality import request_spec
+    assert _business_terms('Give me five electrical businesses','Norfolk, VA')==['electrical']
+    assert request_spec('Give me five electrical businesses')['business_terms']==['electrical']
 
 
 def test_research_retry_resumes_same_owned_job(client):

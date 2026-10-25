@@ -65,6 +65,15 @@ def _web_companies(query, location, limit):
     return companies[:limit]
 
 
+def regional_discover_locations(location):
+    """Translate the supported region into cities, never a fictional city."""
+    if not re.fullmatch(r'\s*(?:hampton\s+roads|hrva)(?:\s*,?\s*(?:virginia|va))?\s*',location,re.I):
+        return []
+    from src.company_identity import HAMPTON_ROADS
+    return [{'city':city.title(),'country':'US','state':'VA'} for city in HAMPTON_ROADS
+            if city not in {'york county','isle of wight'}]
+
+
 def discover_companies(query, location, limit, get=None, post=None):
     """Research businesses first; Hunter Discover is the explicit fallback."""
     if get is None and post is None:
@@ -102,7 +111,9 @@ def discover_companies(query, location, limit, get=None, post=None):
                 mailbox.remaining_requests(usage.get('verifications')))
             # Natural language is interpreted by Hunter's own company filters.
             # The original prompt is kept for inspection; geography is explicit.
-            prompt=query+'\nCompany headquarters location: '+location if location else query
+            cities=regional_discover_locations(location)
+            geography=('any of these Virginia cities: '+', '.join(city['city'] for city in cities)) if cities else location
+            prompt=query+'\nCompany headquarters location: '+geography if geography else query
             response=(post or requests.post)('https://api.hunter.io/v2/discover',
                 headers={'X-API-KEY':key},json={'query':prompt,'limit':limit},
                 timeout=(2,30),allow_redirects=False)
@@ -112,6 +123,23 @@ def discover_companies(query, location, limit, get=None, post=None):
             elif response.status_code!=200 or len(response.content)>200000:receipt['reason_codes']=['HUNTER_DISCOVER_UNAVAILABLE']
             else:
                 body=response.json();data=body.get('data') if isinstance(body,dict) and not body.get('errors') else None
+                # Hunter may still interpret the regional name in the original
+                # request as a city. Reuse every other returned filter unchanged
+                # and correct only geography in one bounded, free retry.
+                filters=(body.get('meta') or {}).get('filters') if isinstance(body,dict) else None
+                if data==[] and cities and isinstance(filters,dict) and filters:
+                    checkpoint('discovering_businesses')
+                    corrected={**filters,'headquarters_location':{
+                        **(filters.get('headquarters_location') or {}),'include':cities}}
+                    retry=(post or requests.post)('https://api.hunter.io/v2/discover',
+                        headers={'X-API-KEY':key},json={**corrected,'limit':limit},
+                        timeout=(2,30),allow_redirects=False)
+                    receipt['regional_filter_retry']=True
+                    receipt['provider_http_status']=retry.status_code
+                    if retry.status_code!=200 or len(retry.content)>200000:
+                        receipt['reason_codes']=['HUNTER_DISCOVER_UNAVAILABLE']
+                        return receipt
+                    body=retry.json();data=body.get('data') if isinstance(body,dict) and not body.get('errors') else None
                 if not isinstance(data,list):receipt['reason_codes']=['HUNTER_DISCOVER_UNCONFIRMED']
                 else:
                     seen=set()
