@@ -272,3 +272,32 @@ def test_search_failure_distinguishes_empty_and_partial_results_and_connection_e
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_draft_send_is_explicit_revision_bound_and_never_retried_after_network_error():
+    import subprocess
+    script=r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const source=fs.readFileSync('demo/dashboard.js','utf8');
+const code=source.slice(source.indexOf('  function draft(d)'),source.indexOf('  function reason(code)'));
+let click,writes=0,reads=0,fail=false,last;
+const output={textContent:''},section={querySelector:()=>output,insertAdjacentHTML:()=>{}};
+const button={disabled:false,dataset:{sendDraft:'42',draftRevision:'reviewed-revision'},closest:()=>section};
+const context={Set,Number,JSON,e:String,API:'',document:{addEventListener:(event,fn)=>click=fn},
+window:{messagePreview:p=>p.body,sendMessage:()=> 'Check status',sendDetails:()=>'',activateOutreachPath:id=>'/send/'+id,emailSendStatus:s=>s.send_status==='sent'?'Sent':'Checking status'},
+workspaceMutation:(path,options)=>{writes++;last=JSON.parse(options.body);return fail?Promise.reject(Error('Network error')):Promise.resolve({outreach:{send_status:'sent'}});},
+requestJSON:()=>{reads++;return Promise.resolve({outreach:{send_status:'unknown'}});}};
+vm.runInNewContext(code,context);
+assert(context.draft({id:42,draft_preview:{body:'Reviewed email',revision:'reviewed-revision'},outreach:{can_activate:true}}).includes('>Send</button>'));
+assert(context.draft({id:42,draft_preview:{body:'Blocked',revision:'x'},outreach:{can_activate:false}}).includes(' disabled'));
+assert.equal(writes,0);
+(async()=>{
+ click({target:{closest:()=>button}});click({target:{closest:()=>button}});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(writes,1);assert.deepEqual(last,{activate:true,draft_revision:'reviewed-revision'});assert.equal(button.textContent,'Sent');
+ fail=true;button.disabled=false;click({target:{closest:()=>button}});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(writes,2);assert.equal(reads,1);assert.equal(button.disabled,true);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
