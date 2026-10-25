@@ -64,6 +64,9 @@ def test_count_parser_ignores_unrelated_numbers_and_preserves_large_requests():
     script=function+'\nconsole.log(JSON.stringify(["Find 10 HVAC businesses","Find 20 companies","Find 100 companies","Find businesses open 24 hours","Find companies along Route 17","Find 1 HVAC business"].map(requestedLeadCount)));'
     result=subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
     assert json.loads(result.stdout)==[10,20,100,10,10,1]
+    script=function+'\nconsole.log(JSON.stringify(["Give me five electrical businesses only with their emails available","Please show me up to TWO electrical companies"].map(requestedLeadCount)));'
+    result=subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+    assert json.loads(result.stdout)==[5,2]
 
 
 def test_saved_email_mode_cannot_override_signed_out_access():

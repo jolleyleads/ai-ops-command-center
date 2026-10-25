@@ -91,6 +91,50 @@ def test_free_discovery_rechecks_account_despite_cached_lookup_quota_pause(nativ
     assert not blocked
 
 
+def test_regional_search_retries_real_cities_without_losing_business_filters(native):
+    calls=[]
+    filters={'headquarters_location':{'include':[{'city':'Hampton Roads','country':'US','state':'VA'}],
+                                    'exclude':[{'city':'Suffolk','country':'US','state':'VA'}]},
+             'industry':{'include':['Specialty Trade Contractors']},
+             'keywords':{'include':['electrical contractor'],'match':'any'},
+             'headcount':['11-50']}
+    def post(url,**kw):
+        payload=kw['json'];calls.append(payload)
+        if len(calls)==1:
+            assert 'Norfolk' in payload['query'] and 'Chesapeake' in payload['query']
+            return SimpleNamespace(status_code=200,content=b'{}',json=lambda:{'data':[],'meta':{'filters':filters}})
+        assert 'query' not in payload and payload['limit']==5
+        assert payload['industry']==filters['industry'] and payload['keywords']==filters['keywords']
+        assert payload['headcount']==filters['headcount']
+        assert payload['headquarters_location']['exclude']==filters['headquarters_location']['exclude']
+        assert {'city':'Norfolk','country':'US','state':'VA'} in payload['headquarters_location']['include']
+        assert all(city['city']!='Hampton Roads' for city in payload['headquarters_location']['include'])
+        return response([{'organization':'Local Electrical','domain':'electrical.example'}])
+    receipt=research.discover_companies('Give me five electrical businesses with 11–50 employees',
+        'Hampton Roads, Virginia',5,get=transport,post=post)
+    assert len(calls)==2 and receipt['regional_filter_retry'] is True
+    assert receipt['companies'][0]['company']=='Local Electrical' and not receipt['reason_codes']
+    assert filters['headquarters_location']['include'][0]['city']=='Hampton Roads'
+
+
+@pytest.mark.parametrize('location',['Norfolk, VA','Hampton, VA','Charlotte, NC','Hampton Roads, North Carolina'])
+def test_city_or_other_territory_is_never_replaced_with_regional_cities(location):
+    assert research.regional_discover_locations(location)==[]
+
+
+def test_regional_retry_failure_is_not_reported_as_zero_matches(native):
+    calls=[]
+    def post(*args,**kw):
+        calls.append(kw)
+        if len(calls)==1:
+            return SimpleNamespace(status_code=200,content=b'{}',json=lambda:{'data':[],
+                'meta':{'filters':{'industry':{'include':['Construction']}}}})
+        return response({},status=503)
+    receipt=research.discover_companies('Find companies','HRVA',5,get=transport,post=post)
+    assert len(calls)==2 and receipt['companies']==[]
+    assert receipt['reason_codes']==['HUNTER_DISCOVER_UNAVAILABLE']
+
+
 @pytest.mark.parametrize('bucket,expected',[
     ({'remaining':46,'available':50,'used':4},46),
     ({'available':50,'used':4},46),

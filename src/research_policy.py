@@ -1,4 +1,7 @@
 """Shared, bounded policy for full background and campaign research."""
+COUNT_WORDS='one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty'.split()
+
+
 def research_target_count(value=10):
     return max(1, min(int(10 if value is None else value), 20))
 
@@ -24,5 +27,7 @@ def target_count_from_prompt(prompt, explicit=None):
     """Count business targets, not route numbers, dates, or operating hours."""
     import re
     if explicit is not None:return requested_target_count(explicit)
-    match=re.search(r'(?:^\s*|\b(?:find|research|get|show|list)\s+(?:me\s+)?(?:up to\s+)?)(\d+)\s+(?:[a-z][a-z-]*\s+){0,4}(?:companies|company|businesses|business|prospects?|leads?)\b',str(prompt or ''),re.I)
-    return requested_target_count(int(match.group(1)) if match else None)
+    words=COUNT_WORDS
+    match=re.search(r'(?:^\s*|\b(?:find|research|get|give|show|list)\s+(?:me\s+)?(?:up to\s+)?)(\d+|'+ '|'.join(words)+r')\s+(?:[a-z][a-z-]*\s+){0,4}(?:companies|company|businesses|business|prospects?|leads?)\b',str(prompt or ''),re.I)
+    value=match.group(1).lower() if match else None
+    return requested_target_count(words.index(value)+1 if value in words else int(value) if value else None)

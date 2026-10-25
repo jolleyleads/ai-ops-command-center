@@ -19,6 +19,8 @@ def request_spec(query, location='', offer='', business_type=''):
     # Preserve the original request; extracted terms are conservative search hints.
     target = business_type or re.split(r'\b(?:in|near|around|with|that|hiring|seeking)\b', query, 1, flags=re.I)[0]
     stop = set('find show get give list research me us up to companies company businesses business prospects leads ten twenty a an the please'.split())
+    from src.research_policy import COUNT_WORDS
+    stop.update(COUNT_WORDS)
     terms = [w for w in re.findall(r'[a-z][a-z-]+', target.lower()) if w not in stop]
     return {'query': text(query), 'location': text(location, 200), 'offer': text(offer),
             'business_type': text(business_type, 300), 'business_terms': list(dict.fromkeys(terms))[:8],
