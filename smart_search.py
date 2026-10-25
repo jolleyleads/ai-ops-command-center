@@ -245,6 +245,7 @@ def _plain_business_query(q):
 def _business_terms(q,location):
     stop=set("find show give list me us get current currently active operating real local nearby businesses business companies company firms firm contractors contractor clinics clinic agencies agency shops shop prospects prospect leads lead in near around at the a an and or of for with please email emails decision maker makers contact contacts information owner owners send them then to outreach".split())
     stop.update(re.findall(r"[a-z]+",location.lower()))
+    stop.update('use using hunter enrich enrichment verify verified verification decision makers names roles phone number numbers dates prepare only research'.split())
     return [t for t in re.findall(r"[a-z]+",q.lower()) if len(t)>2 and t not in stop]
 
 

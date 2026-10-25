@@ -41,8 +41,42 @@ def search_location(query, fallback=''):
     return explicit or fallback
 
 
+def allows_company_inbox(query):
+    """Only an explicit fallback request permits a shared company address."""
+    return bool(re.search(r'(?is)\b(?:fallback|otherwise|if\s+(?:unavailable|not\s+(?:found|available)))\b.{0,100}\bcompany\s+(?:email|inbox)\b', query))
+
+
+def _web_companies(query, location, limit):
+    from smart_search import _smart_search
+    # Keep every business constraint, including clauses after a Hunter request.
+    # The search relevance parser treats enrichment words as instructions.
+    result=_smart_search(query,location,runtime_budget=35,target_count=limit)
+    companies=[];seen=set()
+    for raw in result.get('results') or []:
+        if not isinstance(raw,dict) or raw.get('classification')=='Rejected':continue
+        website=raw.get('website') or raw.get('source_url') or raw.get('url') or ''
+        domain=host(website);name=raw.get('company') or raw.get('name') or raw.get('title')
+        if not domain or shared_host(domain) or domain in seen or not name:continue
+        seen.add(domain)
+        companies.append({**raw,'company':name,'title':name,'website':website,'source_url':website,
+            'location':raw.get('location') or location,'provider_contact_research':True,
+            'research_source':'Web research','business_status':('Business verified' if raw.get('classification')=='Verified Lead' else 'Business match unconfirmed'),
+            'contact_status':'Finding contact'})
+    return companies[:limit]
+
+
 def discover_companies(query, location, limit, get=None, post=None):
-    """One bounded Discover call, under the existing account/quota guard."""
+    """Research businesses first; Hunter Discover is the explicit fallback."""
+    if get is None and post is None:
+        try:
+            companies=_web_companies(query,location,limit)
+        except TimeoutError:
+            raise  # Cancellation/deadline must never launch another provider.
+        except Exception as exc:
+            app.logger.warning('BUSINESS_WEB_DISCOVERY_UNAVAILABLE type=%s',type(exc).__name__)
+            companies=[]
+        if companies:return {'provider':'web','companies':companies,'reason_codes':[]}
+        checkpoint('discovering_businesses')
     receipt={'provider':'hunter','companies':[],'reason_codes':[]}
     key=os.getenv('HUNTER_API_KEY','').strip()
     expected=os.getenv('HUNTER_ACCOUNT_EMAIL','').strip().lower()
@@ -92,7 +126,8 @@ def discover_companies(query, location, limit, get=None, post=None):
                         receipt['companies'].append({'company':name,'title':name,'website':'https://'+domain,
                             'source_url':'https://'+domain,'url':'https://'+domain,'source':'Hunter Discover',
                             'location':location,'classification':'Candidate','contact_status':'Finding contact',
-                            'provider_contact_research':True})
+                            'provider_contact_research':True,'research_source':'Hunter Discover fallback',
+                            'business_status':'Business match unconfirmed'})
                     receipt['filters']=(body.get('meta') or {}).get('filters') or {}
     except Exception as exc:
         receipt['diagnostic_error']=type(exc).__name__
@@ -105,7 +140,8 @@ def discover_companies(query, location, limit, get=None, post=None):
 
 def contact_view(lead):
     from customer_dashboard import evidence_parts
-    _,enrichment,_=evidence_parts(lead)
+    rows,enrichment,_=evidence_parts(lead)
+    research=next((r.get('business_research') or {} for r in reversed(rows) if r.get('business_research')), {})
     assessment=enrichment.get('contact_assessment') or {}
     check=assessment.get('mailbox_validation') or {}
     reasons=list(dict.fromkeys((assessment.get('hunter_discovery') or {}).get('reason_codes',[])+check.get('reason_codes',[])))
@@ -116,10 +152,11 @@ def contact_view(lead):
     person=(enrichment.get('fields') or {}).get('decision_maker') or {}
     valid=bool(lead.contact_email and check.get('email')==lead.contact_email
                and check.get('mailbox_status')=='provider_verified')
-    return {'company':lead.company,'title':lead.company,'website':lead.source_url,
+    return {**research,'company':lead.company,'title':lead.company,'website':lead.source_url,
         'source_url':lead.source_url,'location':lead.location,'lead_id':lead.id,
         'contact_name':lead.contact_name or '', 'contact_role':person.get('title') if lead.contact_name else '',
         'contact_email':lead.contact_email if valid else '',
+        'contact_type':'Decision-maker' if valid and lead.contact_name else 'Company inbox' if valid else '',
         'contact_issue':issue if not valid else '',
         'email_status':'Verified' if valid else 'Not verified',
         'email_verified_on':check.get('provider_verified_on') if valid else None,
@@ -151,7 +188,7 @@ def run_contact_research(campaign, *, save_contacts=True):
     for index,row in enumerate(rows):
         checkpoint('hunter_contact_lookup',businesses=views)
         context={'query':query,'offer':campaign.get('offer') or '', 'target_location':location,
-            'provider_contact_research':True,'require_decision_maker':True}
+            'provider_contact_research':True,'require_decision_maker':not allows_company_inbox(query)}
         row={**row,'contact_location':location,'query':query,'_campaign_context':context}
         with discovery_lock(row['company'],row['website']) as acquired:
             if not acquired:
@@ -170,11 +207,22 @@ def run_contact_research(campaign, *, save_contacts=True):
             enrichment={'company_name':row['company'],'identity_status':'provider_bound',
                 'fields':{'website':{'value':row['website'],'source_url':provider_source,'validated':True}},
                 'contact_assessment':{'company_status':'hunter_domain_association','reason_codes':[]},'validated':True}
-            enrich_contact(enrichment,row['website'],required_person=True,email_allowed=_purpose_mailbox_allowed,provider_people=True,research_only=True)
+            try:
+                enrich_contact(enrichment,row['website'],required_person=context['require_decision_maker'],email_allowed=_purpose_mailbox_allowed,provider_people=True,research_only=True)
+            except TimeoutError:
+                raise
+            except Exception as exc:
+                # A broken contact/provider response must not erase the business
+                # or prevent the next independent company's lookup.
+                db.session.rollback()
+                app.logger.warning('HUNTER_CONTACT_LOOKUP_FAILED type=%s',type(exc).__name__)
+                enrichment['contact_assessment']={'hunter_discovery':{'reason_codes':['HUNTER_PROVIDER_UNAVAILABLE']}}
             assessment=enrichment['contact_assessment'];field=enrichment['fields'].get('email') or {}
             check=assessment.get('mailbox_validation') or {}
             email=(field.get('value') if field.get('validated') and check.get('email')==field.get('value')
-                   and check.get('mailbox_status')=='provider_verified' and person_email_supported(assessment,field.get('value')) else '') or ''
+                   and check.get('mailbox_status')=='provider_verified'
+                   and (person_email_supported(assessment,field.get('value')) or
+                        (not context['require_decision_maker'] and assessment.get('email_person_status')=='shared_inbox')) else '') or ''
             if not email:
                 reasons=list(dict.fromkeys((assessment.get('hunter_discovery') or {}).get('reason_codes',[])+check.get('reason_codes',[])))
                 app.logger.warning('HUNTER_CONTACT_LOOKUP_HELD reasons=%s',reasons)
@@ -184,9 +232,11 @@ def run_contact_research(campaign, *, save_contacts=True):
                     status='needs_evidence',score=0,verification='CANDIDATE')
                 if save_contacts:
                     db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
+            if lead.contact_email!=email:lead.subject='';lead.body=''
             lead.contact_email=email;lead.contact_name=contact_name or ''
-            lead.location=location;lead.status='needs_evidence';lead.subject='';lead.body=''
+            lead.location=row.get('location') or location;lead.status='needs_evidence'
             lead.evidence_json=json.dumps([{'source':'hunter_contact_research','url':provider_source,
+                'business_research':{k:row[k] for k in ('research_source','business_status','supporting_urls') if k in row},
                 'enrichment':enrichment,'contact_assessment':assessment,'observed_at':check.get('checked_at')},
                 {'source':'campaign_context','context':context}])
             if save_contacts:
@@ -196,7 +246,7 @@ def run_contact_research(campaign, *, save_contacts=True):
     verified=sum(v.get('email_status')=='Verified' for v in views)
     return {'ok':True,'contact_research':True,'campaign':{**campaign,'territory':location},
         'discovery':{'results':views,'verified':verified,'count':len(views),'target_count':campaign['target_count'],
-                     'target_met':len(views)>=campaign['target_count'],'source':'Hunter Discover',
+                     'target_met':len(views)>=campaign['target_count'],'source':receipt.get('provider','hunter'),
                      'provider_filters':receipt.get('filters') or {}},
         'outreach':{'lead_ids':saved,'saved':len(saved),'qualified':0,'drafted':0,'sent':0},
         'business_progress':views},None,None

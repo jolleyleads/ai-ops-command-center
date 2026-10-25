@@ -26,7 +26,7 @@ def contact_readiness(lead):
         try:return timedelta(0)<=now-datetime.fromisoformat(str(value).replace('Z','+00:00'))<=timedelta(hours=1)
         except (TypeError,ValueError):return False
     source=validated.get('email_source_url')
-    require_person=any((x.get('context') or {}).get('require_decision_maker') is True for x in evidence if x.get('source')=='campaign_context')
+    require_person=oa._server_qualification_inputs(lead)[1].get('require_decision_maker') is True
     person_found=False
     proof_found=False;mailbox_found=False
     for row in evidence:
@@ -110,7 +110,8 @@ def prepare_contact(selected,existing,query,territory,offer):
     if existing and (existing.gmail_message_id or existing.sent_at or oa.OutreachSendAttempt.query.filter_by(lead_id=existing.id).first()):return existing
     lead=existing
     if lead and (lead.status in {'archived','unsubscribed','opted_out','completed_no_reply'} or oa._is_suppressed(lead.contact_email)):return lead
-    required_person=bool(re.search(r'(?i)\b(?:decision[ -]?makers?|named contacts?|owners?|founders?|ceos?)\b',query))
+    from src.hunter_research import allows_company_inbox
+    required_person=bool(re.search(r'(?i)\b(?:decision[ -]?makers?|named contacts?|owners?|founders?|ceos?)\b',query)) and not allows_company_inbox(query)
     prior_assessment=oa._server_qualification_inputs(lead)[0].get('contact_assessment') or {} if lead else {}
     person_ready=bool(lead and person_email_supported(prior_assessment,oa.normalize_email(lead.contact_email)))
     try:

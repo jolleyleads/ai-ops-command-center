@@ -201,11 +201,38 @@ def settings():
                    integrations={
                        'hunter':{'configured':bool(os.getenv('HUNTER_API_KEY','').strip() and os.getenv('HUNTER_ACCOUNT_EMAIL','').strip()
                            and os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'),
-                           'purpose':'Business discovery, contact enrichment and email verification'},
+                           'account':os.getenv('HUNTER_ACCOUNT_EMAIL','').strip(),
+                           'purpose':'Decision-maker enrichment and independent email verification'},
                        'web_research':{'configured':bool(os.getenv('EXA_API_KEY','').strip()),'purpose':'Current web sources and business research'},
+                       'places':{'configured':bool(os.getenv('GOOGLE_PLACES_API_KEY','').strip()),'purpose':'Local business discovery and company websites'},
                        'google':{'configured':bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),
                            'purpose':'Outreach, reply detection, follow-ups and Calendar booking'}},
                    first_followup_days=oa.FIRST_FOLLOWUP_DAYS, maximum_followups=oa.MAX_FOLLOWUPS)
+
+
+@app.post('/api/chat/dashboard/hunter/check')
+@protected
+def check_hunter_connection():
+    """An explicit account check, never a contact purchase or outreach launch."""
+    from src import hunter_mailbox as mailbox
+    import requests
+    if current_workspace()!=OWNER:return jsonify(ok=False,error='Open the connected owner workspace to check Hunter.'),403
+    expected=os.getenv('HUNTER_ACCOUNT_EMAIL','').strip().lower()
+    key=os.getenv('HUNTER_API_KEY','').strip()
+    result={'ok':False,'state':'Needs attention','account':expected}
+    if not mailbox.enabled() or not key or not expected:return jsonify(result)
+    try:
+        data,status=mailbox._request('account',key,{},requests.get)
+        if status!=200 or not isinstance(data,dict) or str(data.get('email') or '').lower()!=expected:
+            return jsonify(result)
+        if str(data.get('plan_name') or '').lower()!='free':return jsonify(result)
+        usage=data.get('requests') or {}
+        credits=mailbox.remaining_requests(usage.get('credits') or usage.get('searches') or {})
+        available=isinstance(credits,(int,float)) and not isinstance(credits,bool) and credits>=1
+        result.update(ok=True,state='Ready' if available else 'Email lookups paused',credits_remaining=credits)
+    except Exception:
+        result['state']='Connection unavailable'
+    return jsonify(result)
 
 
 @app.post('/api/chat/leads/<int:lead_id>/activate-outreach')
