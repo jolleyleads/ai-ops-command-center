@@ -202,7 +202,7 @@ def settings():
                        'hunter':{'configured':bool(os.getenv('HUNTER_API_KEY','').strip() and os.getenv('HUNTER_ACCOUNT_EMAIL','').strip()
                            and os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'),
                            'account':os.getenv('HUNTER_ACCOUNT_EMAIL','').strip(),
-                           'purpose':'Decision-maker enrichment and independent email verification'},
+                           'purpose':'Optional mailbox verification. Public contact collection uses AutoMake.'},
                        'web_research':{'configured':bool(os.getenv('EXA_API_KEY','').strip()),'purpose':'Current web sources and business research'},
                        'places':{'configured':bool(os.getenv('GOOGLE_PLACES_API_KEY','').strip()),'purpose':'Local business discovery and company websites'},
                        'google':{'configured':bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),

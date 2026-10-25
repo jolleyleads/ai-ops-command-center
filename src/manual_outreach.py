@@ -125,10 +125,15 @@ def prepare_contact(selected,existing,query,territory,offer):
     # real address on its own current source instead of pinning an unrelated one.
     if preferred and not oa.email_on_domain(preferred,website):preferred=''
     checkpoint('verifying_selected_email_source')
-    fetched=_public_contact_evidence({**selected,'location':territory,'target_location':territory,'query':query})
+    owned=selected.get('owned_contact_research') is True or bool(lead and oa._server_qualification_inputs(lead)[1].get('owned_contact_research'))
+    fetch_options={'use_provider':False} if owned else {}
+    fetched=_public_contact_evidence({**selected,'location':territory,'target_location':territory,'query':query},**fetch_options)
     rows=fetched[0] if isinstance(fetched,tuple) else fetched
     rows=[x for x in rows or [] if current_contact_source(x) and owned_host(x.get('url') or '',website)
           and name_key((x.get('company_identity') or {}).get('company_name'))==name_key(company)]
+    if owned:
+        rows=[{**row,'page_text':str(row.get('page_text') or '')+'\n'+' '.join(
+            e for e in row.get('validated_emails') or [] if e.lower() not in str(row.get('page_text') or '').lower())} for row in rows]
     choices=[]
     for row in rows:
         for email in EMAIL_SCAN_RE.findall(str(row.get('page_text') or row.get('text') or '')):
@@ -140,7 +145,7 @@ def prepare_contact(selected,existing,query,territory,offer):
         for r in oa._server_qualification_inputs(lead)[2]))
     options={'provider_people':True} if provider_people else {}
     allowed=lambda email:oa._recipient_mailbox_allowed(email) and (not preferred or oa.normalize_email(email)==preferred)
-    enrich_contact(enrichment,website,required_person=required_person,email_allowed=allowed,**options)
+    if not owned:enrich_contact(enrichment,website,required_person=required_person,email_allowed=allowed,**options)
     assessment=enrichment.get('contact_assessment') or {}
     candidate=(enrichment.get('fields') or {}).get('email') or {}
     named=person_email_supported(assessment,candidate.get('value'))

@@ -68,7 +68,7 @@ def _candidate_urls(result):
             u=_clean(e.get("url"),1800)
             if u.startswith(("http://","https://")):vals.append(u)
     return list(dict.fromkeys(vals))[:8]
-def _public_contact_evidence(result):
+def _public_contact_evidence(result, *, use_provider=True):
     """Fetch bounded candidate-owned pages and retain exact public contact evidence."""
     from src.execution_deadline import checkpoint
     checkpoint("contact_source_setup")
@@ -88,7 +88,7 @@ def _public_contact_evidence(result):
     # Multiple unbound domains indicate conflicting identities, not more contacts.
     roots=roots if len(roots)==1 else []
     hunter_sources=[]
-    if roots:
+    if roots and use_provider:
         from src.hunter_discovery import discover_contacts
         checkpoint("contact_source_provider")
         hunter=discover_contacts(website or roots[0])
