@@ -762,6 +762,42 @@ def test_one_click_manual_sends_verified_contact_without_business_qualification_
     assert not manual.permitted(lead,'followup')
 
 
+def test_selected_verified_email_sends_even_when_search_requested_a_named_buyer(env,monkeypatch):
+    lead,headers=manual_contact(env,monkeypatch)
+    evidence=json.loads(lead.evidence_json)
+    for row in evidence:
+        if row.get('source')=='campaign_context':
+            row['context'].update(query='Find HVAC businesses with decision-maker emails',require_decision_maker=True)
+    lead.contact_name='';lead.evidence_json=json.dumps(evidence);oa.db.session.commit()
+    sent=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:sent.append(a) or {'ok':True,'message_id':'chosen-email','thread_id':'chosen-thread'})
+    launch=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    assert launch.status_code==202
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['outreach']['send_status']=='sent',result
+    assert len(sent)==1 and sent[0][0]==lead.contact_email
+
+
+def test_selected_email_cannot_be_replaced_by_another_verified_hunter_person(env,monkeypatch):
+    import v1_orchestration as orchestration
+    from src.manual_outreach import prepare_contact,contact_readiness
+    from src import hunter_discovery
+    from src.company_identity import identity_proof
+    page=company_page();page['company_identity']=identity_proof('Acme',page,page['url'])
+    monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
+    def alternate(enrichment,website,**kw):
+        assert not kw['email_allowed']('other@acme.example')
+        enrichment['fields']['email']={'value':'other@acme.example','validated':True,'source_url':page['url']}
+        enrichment['contact_assessment']={'person_name':'Other Person','person_email':'other@acme.example',
+            'email_person_status':'same_source_card','decision_maker_status':'source_supported'}
+    monkeypatch.setattr(hunter_discovery,'enrich_contact',alternate)
+    lead=prepare_contact({'company':'Acme','website':page['url'],'contact_email':'selected@acme.example'},
+        None,'Find businesses','Norfolk, Virginia','Automation')
+    assert lead.contact_email=='selected@acme.example'
+    assert not contact_readiness(lead)['ok'] and not oa.OutreachSendAttempt.query.count()
+
+
 @pytest.mark.parametrize('problem',['mailbox','source','suppression'])
 def test_manual_activation_still_requires_email_proof_and_respects_optout(env,monkeypatch,problem):
     import v1_orchestration as orchestration
@@ -853,8 +889,9 @@ def test_directory_website_selection_uses_only_unique_saved_primary_source(env,a
     assert not email_on_domain(directory['email'],directory['website'])
 
 
+@pytest.mark.parametrize('displayed_email',['hello@acme.example',''])
 @pytest.mark.parametrize('primary_buyer',[True,False])
-def test_manual_hunter_enriches_only_source_supported_decision_maker(active,env,monkeypatch,primary_buyer):
+def test_manual_hunter_preserves_selected_email_or_finds_supported_person(active,env,monkeypatch,primary_buyer,displayed_email):
     import v1_orchestration as orchestration
     from workspace_security import claim,OWNER
     from background_research import ResearchJob
@@ -867,7 +904,7 @@ def test_manual_hunter_enriches_only_source_supported_decision_maker(active,env,
         page['page_text']+=' Jane Smith | Owner. Norfolk, Virginia.'
         page['contact_sections']=['Jane Smith | Owner. Norfolk, Virginia.']
     page['company_identity']=identity_proof('Acme',page,page['url'])
-    row={'company':'Acme','website':page['url'],'email':'hello@acme.example'}
+    row={'company':'Acme','website':page['url'],'email':displayed_email}
     research=ResearchJob(id='hunter-manual-buyer',prompt_text='Find decision makers at HVAC businesses',location='Norfolk, Virginia',status='completed',result_json=json.dumps({'results':[row]}))
     oa.db.session.add(research);claim('research',research.id,OWNER);oa.db.session.commit()
     monkeypatch.setattr(orchestration,'_public_contact_evidence',lambda *a:([page],{}))
@@ -879,12 +916,16 @@ def test_manual_hunter_enriches_only_source_supported_decision_maker(active,env,
     assert jobs.process_next_execution_job()['ok']
     result=env.get(launch.json['poll_url'],headers=headers).json['result']
     lead=oa.OutreachLead.query.one()
-    if primary_buyer:
+    if displayed_email:
+        assert result['outreach']['sent']==1,result
+        assert len(sent)==1 and sent[0][0]==displayed_email
+        assert lead.contact_name==''
+    elif primary_buyer:
         assert result['outreach']['sent']==1,result
         assert len(sent)==1 and sent[0][0]=='jane@acme.example'
         assert lead.contact_name=='Jane Smith'
         assert person_email_supported(oa._server_qualification_inputs(lead)[0]['contact_assessment'],lead.contact_email)
     else:
         assert not sent and result['outreach']['sent']==0
-        assert 'NAMED_DECISION_MAKER_EMAIL_REQUIRED' in result['workflow']['reason_codes']
+        assert not lead.contact_email and 'VERIFIED_MAILBOX_REQUIRED' in result['workflow']['reason_codes']
         assert not lead.contact_name

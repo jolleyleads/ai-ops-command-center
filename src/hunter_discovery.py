@@ -166,3 +166,20 @@ def current_person_association(assessment,email):
             if receipt.get("domain")!=association.get("domain"):return False
             return any(c.get("email")==email and c.get("type")=="personal" and name_key(c.get("name"))==name_key(association.get("name")) for c in receipt.get("contacts") or [])
     except Exception:return False
+
+
+def current_company_inbox_association(assessment,email):
+    """Require the durable Hunter domain receipt for a selected shared inbox."""
+    if not has_app_context() or not email or assessment.get('email_person_status')!='shared_inbox':return False
+    if not is_shared_email(email):return False
+    discovery=assessment.get('hunter_discovery') or {}
+    try:
+        with Session(db.engine) as session:
+            row=session.get(mailbox.HunterMailboxCheck,discovery.get('cache_key',''))
+            if not row or row.state!='complete':return False
+            receipt=json.loads(row.receipt_json)
+            checked=datetime.fromisoformat(receipt['checked_at'])
+            if not 0<=(datetime.now(timezone.utc)-checked).total_seconds()<=7*86400:return False
+            if str(email).rsplit('@',1)[-1].lower()!=receipt.get('domain'):return False
+            return any(c.get('email')==email and c.get('type')=='generic' for c in receipt.get('contacts') or [])
+    except Exception:return False

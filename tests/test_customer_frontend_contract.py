@@ -109,7 +109,7 @@ const source=fs.readFileSync('demo/access.js','utf8');
 const context={window:{},esc:String,Set,Number,document:{addEventListener:()=>{}},sessionStorage:{getItem:()=>null}};
 vm.runInNewContext(source.slice(source.indexOf('window.outreachPending=new Set();')),context);
 const w=context.window,ref={kind:'lead',lead_id:42},id=w.selectionId(ref);
-function render(status,workflow){w.selectedWorkflows[id]={job:{activation_policy:'selected-contact-v1'},state:{status,result:{workflow}}};return w.selectionControl(ref);}
+function render(status,workflow){w.selectedWorkflows[id]={job:{activation_policy:'selected-email-v2'},state:{status,result:{workflow}}};return w.selectionControl(ref);}
 let html=render('completed',{state:'held',reason:'Mailbox not verified'});
 assert(html.includes('<b>Not sent</b>'));assert(html.includes('Mailbox not verified'));assert(html.includes('Try again'));assert(!html.includes('Retry workflow'));
 html=render('completed',{state:'active',outreach:{initial:'Send confirmed',followups:'Scheduled',booking:'Waiting for an agreed meeting time'}});
