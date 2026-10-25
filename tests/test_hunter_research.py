@@ -191,3 +191,142 @@ def test_research_contact_can_be_prepared_by_existing_workflow_after_company_che
     assert contact_readiness(prepared)['ok']
     assert prepared.subject and prepared.body
     assert not oa.OutreachSendAttempt.query.count()
+
+
+def test_web_businesses_precede_hunter_and_keep_requested_sector_and_city(native,monkeypatch):
+    import smart_search
+    seen=[]
+    def web(query,location,**kw):
+        seen.append((query,location,kw['target_count']))
+        return {'results':[{'company':'Acme Plumbing','website':'https://acme.example',
+            'classification':'Verified Lead','location':'Charlotte, NC'}]}
+    monkeypatch.setattr(smart_search,'_smart_search',web)
+    monkeypatch.setattr(mailbox,'_request',lambda *a,**k:pytest.fail('Web discovery must not require Hunter'))
+    monkeypatch.delenv('HUNTER_API_KEY')
+    receipt=research.discover_companies('Find 2 plumbing businesses in Charlotte, NC. Then use Hunter to verify decision-makers.', 'Charlotte, NC',2)
+    assert seen==[('Find 2 plumbing businesses in Charlotte, NC. Then use Hunter to verify decision-makers.','Charlotte, NC',2)]
+    assert receipt['provider']=='web' and not receipt['reason_codes']
+    assert receipt['companies'][0]['research_source']=='Web research'
+    assert receipt['companies'][0]['business_status']=='Business verified'
+    terms=smart_search._business_terms('Find plumbing businesses using Hunter with revenue over 1 million','Charlotte, NC')
+    assert 'plumbing' in terms and 'revenue' in terms and 'million' in terms
+    assert not {'hunter','using','verify','verified'}.intersection(terms)
+
+
+def test_failed_lookup_keeps_business_and_continues_with_next_contact(native,monkeypatch):
+    rows=[{'company':name,'website':'https://'+domain,'url':'https://'+domain}
+          for name,domain in [('Broken','broken.example'),('Acme','acme.example')]]
+    wire(monkeypatch)
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':rows,'reason_codes':[]})
+    original=discovery.enrich_contact
+    def enrich(data,website,**kw):
+        if 'broken.example' in website:raise ValueError('malformed provider response')
+        return original(data,website,**kw)
+    monkeypatch.setattr(discovery,'enrich_contact',enrich)
+    result,stage,error=research.run_contact_research({'query':'Find businesses in Charlotte, NC',
+        'territory':'Charlotte, NC','target_count':2,'offer':'AI automation'})
+    assert not stage and not error
+    broken,ready=result['discovery']['results']
+    assert broken['company']=='Broken' and broken['contact_email']=='' and broken['contact_issue']
+    assert ready['contact_email']=='jane@acme.example' and ready['email_status']=='Verified'
+    assert oa.OutreachLead.query.count()==2 and result['outreach']['sent']==0
+
+
+def test_explicit_verified_company_inbox_fallback_does_not_inherit_person(native,monkeypatch):
+    wire(monkeypatch)
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':[
+        {'company':'Acme','website':'https://acme.example'}],'reason_codes':[]})
+    def shared(enrichment,website,**kw):
+        assert kw['required_person'] is False
+        enrichment['fields']['email']={'value':'hello@acme.example','validated':True}
+        enrichment['contact_assessment']={'email_person_status':'shared_inbox',
+            'mailbox_validation':{'email':'hello@acme.example','mailbox_status':'provider_verified',
+                'provider_verified_on':datetime.now(timezone.utc).date().isoformat()}}
+    monkeypatch.setattr(discovery,'enrich_contact',shared)
+    query='Find businesses in Charlotte, NC with decision-maker emails; if unavailable provide a verified company email.'
+    result,_,_=research.run_contact_research({'query':query,'territory':'Charlotte, NC','target_count':1,'offer':''})
+    row=result['discovery']['results'][0]
+    assert row['contact_type']=='Company inbox' and row['contact_name']==''
+    assert row['contact_email']=='hello@acme.example' and row['email_status']=='Verified'
+    assert not research.allows_company_inbox('Find decision-maker emails for companies')
+
+
+@pytest.mark.parametrize('personal_result',['missing','invalid'])
+def test_company_fallback_uses_unfiltered_lookup_after_named_contacts_fail(native,monkeypatch,personal_result):
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':[
+        {'company':'Acme','website':'https://acme.example'}],'reason_codes':[]})
+    queries=[]
+    def get(url,**kw):
+        if url.endswith('/domain-search'):
+            named=kw['params'].get('decision_maker')=='true';queries.append(named)
+            if named:
+                return response({'domain':'acme.example','emails':[]}) if personal_result=='missing' else transport(url,**kw)
+            return response({'domain':'acme.example','emails':[{'value':'hello@acme.example','type':'generic'}]})
+        if url.endswith('/email-verifier'):
+            email=kw['params']['email']
+            if email=='jane@acme.example':return response({'email':email,'status':'invalid'})
+            return response({'email':email,'status':'valid','smtp_check':True,'accept_all':False,
+                'block':False,'disposable':False,'verification':{'date':datetime.now(timezone.utc).date().isoformat(),'status':'valid'}})
+        return transport(url,**kw)
+    original_discover=discovery.discover_contacts
+    monkeypatch.setattr(discovery,'discover_contacts',lambda website,**kw:original_discover(website,get,**kw))
+    original_verify=mailbox.verify_mailbox
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email,**kw:original_verify(email,get,**kw))
+    query='Find businesses in Charlotte, NC with decision-maker emails; if unavailable provide a verified company email.'
+    result,_,_=research.run_contact_research({'query':query,'territory':'Charlotte, NC','target_count':1,'offer':''})
+    row=result['discovery']['results'][0]
+    assert queries==[True,False]
+    assert row['contact_email']=='hello@acme.example' and row['contact_name']==''
+    assert row['contact_type']=='Company inbox' and row['email_status']=='Verified'
+
+
+def test_cancellation_during_web_research_does_not_start_hunter(native,monkeypatch):
+    monkeypatch.setattr(research,'_web_companies',lambda *a:(_ for _ in ()).throw(TimeoutError()))
+    monkeypatch.setattr(mailbox,'_request',lambda *a,**k:pytest.fail('Cancelled work reached Hunter'))
+    with pytest.raises(TimeoutError):research.discover_companies('Find businesses','Charlotte, NC',2)
+
+
+def test_hunter_connection_check_reports_account_and_credits_without_secrets(native,monkeypatch):
+    monkeypatch.setenv('OPERATOR_CONTROL_TOKEN','check-test')
+    monkeypatch.setattr(mailbox,'_request',lambda *a:({'email':'owner@example.com','plan_name':'Free',
+        'requests':{'credits':{'remaining':46}}},200))
+    client=app.test_client()
+    assert client.post('/api/chat/dashboard/hunter/check').status_code in {401,403}
+    response=client.post('/api/chat/dashboard/hunter/check',headers={'X-Operator-Token':'check-test'})
+    assert response.json=={'ok':True,'state':'Ready','account':'owner@example.com','credits_remaining':46}
+    assert 'unit-test-secret' not in response.text
+
+
+def test_researched_hunter_recipient_reaches_bulk_send_and_followup_once(native,monkeypatch):
+    import campaign_jobs as jobs
+    from src.manual_outreach import permitted
+    wire(monkeypatch)
+    monkeypatch.setenv('OPERATOR_CONTROL_TOKEN','hunter-handoff-test')
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEY_VERSION','v1')
+    monkeypatch.setenv('QUALIFICATION_SIGNING_KEYS','v1=hunter-handoff-signing-test')
+    monkeypatch.setattr(jobs,'kick_execution_worker',lambda:None)
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:'test-only-access')
+    monkeypatch.setattr(oa,'run_ai',lambda **kw:{'ok':False})
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':[
+        {'company':'Acme','website':'https://acme.example','research_source':'Web research',
+         'business_status':'Business verified'}],'reason_codes':[]})
+    found,_,_=research.run_contact_research({'query':'Find businesses in Charlotte, NC with decision-maker emails',
+        'territory':'Norfolk, VA','target_count':1,'offer':'Inquiry follow-up automation'})
+    row=found['discovery']['results'][0]
+    assert row['contact_email']=='jane@acme.example'
+    sends=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:sends.append(a) or {'ok':True,'message_id':'handoff-sent','thread_id':'handoff-thread'})
+    client=app.test_client();headers={'X-Operator-Token':'hunter-handoff-test'}
+    body={'activate':True,'offer':'Inquiry follow-up automation',
+          'selections':[{'kind':'lead','lead_id':row['lead_id']}]}
+    response=client.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
+    assert response.status_code==202,response.json
+    assert jobs.process_next_execution_job()['ok']
+    result=client.get(response.json['poll_url'],headers=headers).json['result']
+    assert result['batch']['sent']==1,result
+    lead=oa.db.session.get(oa.OutreachLead,row['lead_id'])
+    assert len(sends)==1 and sends[0][0]=='jane@acme.example'
+    assert lead.location=='Charlotte, NC' and lead.follow_up_due_at and permitted(lead,'followup')
+    repeated=client.post('/api/chat/workflows/activate-bulk',json=body,headers=headers)
+    assert repeated.json['job_id']==response.json['job_id']
+    assert not jobs.process_next_execution_job()['processed'] and len(sends)==1
