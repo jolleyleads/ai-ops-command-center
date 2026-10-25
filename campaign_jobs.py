@@ -89,7 +89,8 @@ def execute_claimed_job(job_id):
         def report_stage(progress):
             now=datetime.utcnow()
             previous=json.loads(db.session.get(CampaignExecutionJob,job_id).result_json or "{}").get("progress") or {}
-            progress={**previous,**progress}
+            from src.work_activity import with_activity
+            progress=with_activity(previous,progress,now.isoformat()+"Z")
             changed=CampaignExecutionJob.query.filter_by(id=job_id,status="running",started_at=claim_started_at).update(
                 {"result_json":json.dumps({"progress":{**progress,"updated_at":now.isoformat()+"Z"}})},synchronize_session=False)
             db.session.commit()
@@ -120,6 +121,7 @@ def execute_claimed_job(job_id):
         db.session.refresh(job)
         if job.status != "running":
             return {"processed":1,"job_id":job_id,"ok":False}
+        result['progress']=json.loads(job.result_json or '{}').get('progress') or {}
         job.result_json = json.dumps(result)
         job.result_http_status = code
         job.status = "completed" if code == 200 and result.get("ok") is True else "failed"

@@ -70,7 +70,8 @@ def process_next_research_job():
         from src.execution_deadline import execution_scope
         def progress(details):
             previous=json.loads(db.session.get(ResearchJob,job_id).result_json or '{}').get('progress') or {}
-            details={**previous,**details,'requested':job.target_count,'updated_at':datetime.utcnow().isoformat()+'Z'}
+            from src.work_activity import with_activity
+            details=with_activity(previous,{**details,'requested':job.target_count},datetime.utcnow().isoformat()+'Z')
             changed=ResearchJob.query.filter_by(id=job_id,status='running',started_at=now).update(
                 {'result_json':json.dumps({'progress':details})},synchronize_session=False)
             db.session.commit()

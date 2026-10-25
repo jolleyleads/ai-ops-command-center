@@ -87,6 +87,8 @@ def activate_prepared_contact(lead):
     # Fail before a provider attempt if the pinned résumé cannot be attached.
     from email.message import EmailMessage
     from src.outreach_copy import add_resume_attachment, RESUME_LINE
+    from src.execution_deadline import checkpoint
+    checkpoint('checking_resume_attachment')
     try:add_resume_attachment(EmailMessage(),RESUME_LINE)
     except (OSError,ValueError):return jsonify(ok=False,error='The approved résumé attachment requires attention. No email was sent.'),409
     # Check OAuth before creating a provider attempt: an expired grant should

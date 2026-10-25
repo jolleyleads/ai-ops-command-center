@@ -1275,7 +1275,8 @@ def send_outreach(lead_id: int):
         evidence = []
     refresh_initial = untouched and not has_attempt and not matches_initial_email(lead, evidence, lead.subject, lead.body)
     if not lead.subject or not lead.body or refresh_initial:
-        drafted = _draft_email(lead)
+        from src.outreach_copy import approved_initial
+        drafted = {'ok': True, **approved_initial(lead, evidence)}
         if not drafted.get("ok"):
             lead.last_error = drafted.get("error") or "OpenAI drafting failed"
             db.session.commit()

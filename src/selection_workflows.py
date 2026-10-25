@@ -70,6 +70,35 @@ def resolve_selection(ref):
     return selected,query,location,None
 
 
+@app.get('/api/chat/workflows/preview')
+def preview_selected_workflow():
+    """Read only: never creates a lead, grants sending, or calls a provider."""
+    from types import SimpleNamespace
+    from src.outreach_copy import approved_initial, RESUME_PATH
+    try:
+        ref=json.loads(request.args.get('selection', '{}'))
+    except (ValueError,TypeError):
+        return jsonify(ok=False,error='Invalid business selection.'),400
+    if not isinstance(ref,dict):return jsonify(ok=False,error='Invalid business selection.'),400
+    selected=resolve_selection(ref)
+    if not selected:return jsonify(ok=False,error='Business not found.'),404
+    row,_,_,lead_id=selected
+    lead=db.session.get(oa.OutreachLead,lead_id) if lead_id else None
+    history=bool(lead and (lead.sent_at or lead.gmail_message_id or lead.gmail_thread_id or lead.follow_up_count
+                 or oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id).first()))
+    if history:
+        return jsonify(ok=True,preview={'subject':lead.subject,'body':lead.body,'recipient':lead.contact_email,
+            'attachment':'See the sent email for attachment details.','note':'Saved message. An earlier send or attempt exists; this preview does not start another send.'})
+    candidate=lead or SimpleNamespace(company=row.get('company') or row.get('name') or row.get('title') or row.get('business_name'),
+        contact_name='',source_url=row.get('website') or row.get('source_url') or '')
+    evidence=_unpack(lead.evidence_json) if lead else []
+    draft=approved_initial(candidate,evidence)
+    response=jsonify(ok=True,preview={**draft,'recipient':_email_for_selection(selected) or 'Contact lookup pending',
+        'attachment':RESUME_PATH.name,'note':'First email. The greeting and recipient update if contact verification finds a named decision-maker. Nothing is sent until you activate.'})
+    response.headers['Cache-Control']='no-store'
+    return response
+
+
 @app.post('/api/chat/workflows/activate')
 def activate_selected_workflow():
     # Workspace middleware enforces authentication, owner mailbox access and CSRF.

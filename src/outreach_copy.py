@@ -74,3 +74,11 @@ def matches_initial_email(lead, evidence, subject, body):
         quote = match.group(1)
     expected = initial_email(lead, evidence, quote)
     return subject == expected['subject'] and body == expected['body']
+
+
+def approved_initial(lead, evidence):
+    """One source of truth for unsent previews and the first send."""
+    subject, body = getattr(lead, 'subject', ''), getattr(lead, 'body', '')
+    if matches_initial_email(lead, evidence, subject, body):
+        return {'subject': subject, 'body': body}
+    return initial_email(lead, evidence)
