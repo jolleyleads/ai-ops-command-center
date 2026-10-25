@@ -65,13 +65,14 @@ window.renderWorkingActivity=function(state){
   Object.assign(labels,{configuration:'Checking workflow setup',researching:'Researching businesses',verifying_sources:'Reviewing company sources',qualifying_contacts:'Reviewing business and contact evidence',enriching_contact:'Enriching the business contact',checking_business_need:'Reviewing business needs',business_need_available:'Business evidence review finished',fetching_contact_sources:'Opening contact sources',extracting_contacts:'Reading contact details',verifying_mailbox:'Verifying the email address',drafting:'Preparing your outreach message',sending:'Sending your email through Gmail',contact_source_setup:'Preparing contact research',contact_source_provider:'Looking up contact sources',contact_page_fetch:'Opening the company contact page',contact_page_metadata:'Checking company page details',contact_page_addresses:'Reviewing email addresses',contact_page_people:'Reviewing decision-makers'});
   Object.assign(labels,{collecting_public_contacts:'AutoHunt is collecting published contacts',public_contacts_collected:'AutoHunt contact collection finished',reviewing_company_source:'Reviewing the company website'});
   var workflow=(state.result||{}).workflow||{},outreach=workflow.outreach||{};
-  var heading=running?'Working…':state.status==='failed'||state.status==='cancelled'||workflow.state==='held'?'Needs attention':'Finished';
+  var verificationMessage=window.mailboxDateMessage(state.error||workflow.reason,workflow.reason_codes);
+  var heading=running?'Working…':verificationMessage&&outreach.send_status!=='sent'?'Email not sent':state.status==='failed'||state.status==='cancelled'||workflow.state==='held'?'Needs attention':'Finished';
   if(!events.length&&p.stage)events=[{stage:p.stage,at:p.updated_at}];
   var html='<section class="working-activity" aria-label="Workflow activity"><p role="status"><b>'+heading+'</b></p><ol>';
   events.forEach(function(event,index){html+='<li'+(running&&index===events.length-1?' aria-current="step"':'')+'>'+esc(labels[event.stage]||'Processing your request')+(event.at?' <time class="meta">'+esc(new Date(event.at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}))+'</time>':'')+'</li>';});
   if(!events.length)html+='<li>Waiting to start</li>';
   if(outreach.send_status==='sent')html+='<li><b>Email sent</b></li>';
-  if(!running&&(state.error||workflow.reason))html+='<li>'+esc(state.error||workflow.reason)+'</li>';
+  if(!running&&(state.error||workflow.reason))html+='<li>'+esc(verificationMessage&&outreach.send_status!=='sent'?verificationMessage:state.error||workflow.reason)+'</li>';
   return html+'</ol></section>';
 };
 window.renderResearchProgress=function(state){
@@ -188,12 +189,18 @@ window.emailSendStatus=function(outreach,checking){
   if(checking)return 'Sending…';
   return 'Not sent';
 };
+window.mailboxDateMessage=function(reason,codes){
+  var detail=String(reason||'')+' '+(Array.isArray(codes)?codes.join(' '):'');
+  return /HUNTER_RESULT_DATE_UNCONFIRMED_OR_STALE|VERIFIED_MAILBOX_REQUIRED/.test(detail)?'Email not sent: recent mailbox verification required.':'';
+};
 window.sendMessage=function(status,state,reason){
-  if(!reason&&status==='Not sent')return 'Sends your message and résumé. No extra confirmation.';
   if(status==='Sent')return state&&state.state==='stopped'?'Your email was sent. Further emails are stopped.':'Your email was sent.';
   if(status==='Sending…')return 'Sending your message and résumé…';
   if(status==='Checking status')return 'We’re checking whether your email was sent. Please don’t send it again yet.';
   reason=String(reason||'');
+  var verificationMessage=window.mailboxDateMessage(reason,(state||{}).reason_codes);
+  if(verificationMessage)return verificationMessage;
+  if(!reason&&status==='Not sent')return 'Sends your message and résumé. No extra confirmation.';
   if(/reconnect google|google connection|expired.*grant/i.test(reason))return 'Connect Google in Settings to send your email.';
   if(/suppressed|opt.out|unsubscribed/i.test(reason))return 'This contact has opted out. No email was sent.';
   if(/mailbox|email.*verif|contact.*verif|company.*source/i.test(reason))return 'We couldn’t verify this email yet.';
