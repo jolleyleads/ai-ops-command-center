@@ -125,7 +125,18 @@ def enrich_contact(enrichment, website, *, required_person=False, email_allowed=
         options=[(None,c) for c in receipt["contacts"] if c["type"]=="generic" and is_shared_email(c["email"]) and (not email_allowed or email_allowed(c["email"]))]
     # Prefer a named contact, otherwise keep a valid published email already found.
     if options and options[0][0] is None and enrichment.get("fields",{}).get("email",{}).get("validated"):return enrichment
-    for person,contact in options[:3]:
+    def candidates():
+        nonlocal receipt
+        yield from options[:3]
+        # Fetch shared inboxes only after named contacts are unavailable or
+        # fail mailbox verification. The personal-only query excludes them.
+        if provider_people and not required_person:
+            receipt=discover_contacts(website)
+            assessment['hunter_discovery']={k:v for k,v in receipt.items() if k!='contacts'}
+            shared=[c for c in receipt['contacts'] if c.get('type')=='generic'
+                    and is_shared_email(c['email']) and (not email_allowed or email_allowed(c['email']))]
+            for contact in shared[:3]:yield None,contact
+    for person,contact in candidates():
         check=mailbox.verify_mailbox(contact['email'],research_only=True) if research_only else mailbox.verify_mailbox(contact['email'])
         if check.get("mailbox_status")!="provider_verified":
             assessment["mailbox_validation"]=check

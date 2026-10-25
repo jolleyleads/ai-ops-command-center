@@ -251,6 +251,35 @@ def test_explicit_verified_company_inbox_fallback_does_not_inherit_person(native
     assert not research.allows_company_inbox('Find decision-maker emails for companies')
 
 
+@pytest.mark.parametrize('personal_result',['missing','invalid'])
+def test_company_fallback_uses_unfiltered_lookup_after_named_contacts_fail(native,monkeypatch,personal_result):
+    monkeypatch.setattr(research,'discover_companies',lambda *a,**kw:{'companies':[
+        {'company':'Acme','website':'https://acme.example'}],'reason_codes':[]})
+    queries=[]
+    def get(url,**kw):
+        if url.endswith('/domain-search'):
+            named=kw['params'].get('decision_maker')=='true';queries.append(named)
+            if named:
+                return response({'domain':'acme.example','emails':[]}) if personal_result=='missing' else transport(url,**kw)
+            return response({'domain':'acme.example','emails':[{'value':'hello@acme.example','type':'generic'}]})
+        if url.endswith('/email-verifier'):
+            email=kw['params']['email']
+            if email=='jane@acme.example':return response({'email':email,'status':'invalid'})
+            return response({'email':email,'status':'valid','smtp_check':True,'accept_all':False,
+                'block':False,'disposable':False,'verification':{'date':datetime.now(timezone.utc).date().isoformat(),'status':'valid'}})
+        return transport(url,**kw)
+    original_discover=discovery.discover_contacts
+    monkeypatch.setattr(discovery,'discover_contacts',lambda website,**kw:original_discover(website,get,**kw))
+    original_verify=mailbox.verify_mailbox
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email,**kw:original_verify(email,get,**kw))
+    query='Find businesses in Charlotte, NC with decision-maker emails; if unavailable provide a verified company email.'
+    result,_,_=research.run_contact_research({'query':query,'territory':'Charlotte, NC','target_count':1,'offer':''})
+    row=result['discovery']['results'][0]
+    assert queries==[True,False]
+    assert row['contact_email']=='hello@acme.example' and row['contact_name']==''
+    assert row['contact_type']=='Company inbox' and row['email_status']=='Verified'
+
+
 def test_cancellation_during_web_research_does_not_start_hunter(native,monkeypatch):
     monkeypatch.setattr(research,'_web_companies',lambda *a:(_ for _ in ()).throw(TimeoutError()))
     monkeypatch.setattr(mailbox,'_request',lambda *a,**k:pytest.fail('Cancelled work reached Hunter'))
