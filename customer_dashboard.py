@@ -199,10 +199,11 @@ def settings():
                    sender_email=(connection.email if connection else '') or os.getenv('GMAIL_FROM_EMAIL') or '',
                    google_configured=bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),
                    integrations={
+                       'autohunt':{'configured':True,'purpose':'Business discovery, filtering and public contact collection. Mailbox verification is separate.'},
                        'hunter':{'configured':bool(os.getenv('HUNTER_API_KEY','').strip() and os.getenv('HUNTER_ACCOUNT_EMAIL','').strip()
                            and os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'),
                            'account':os.getenv('HUNTER_ACCOUNT_EMAIL','').strip(),
-                           'purpose':'Optional mailbox verification. Public contact collection uses AutoMake.'},
+                           'purpose':'Optional mailbox verification. Public contact collection uses AutoHunt.'},
                        'web_research':{'configured':bool(os.getenv('EXA_API_KEY','').strip()),'purpose':'Current web sources and business research'},
                        'places':{'configured':bool(os.getenv('GOOGLE_PLACES_API_KEY','').strip()),'purpose':'Local business discovery and company websites'},
                        'google':{'configured':bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),

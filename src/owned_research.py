@@ -1,4 +1,4 @@
-"""AutoMake-owned discovery and source collection. Never purchases email data.
+"""AutoHunt discovery and public contact collection. Never purchases email data.
 
 Search providers supply hints, current company pages supply contact evidence,
 and DNS supplies routing information only. Mailbox checks are a separate action.
@@ -121,7 +121,7 @@ def view(lead, record=None):
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
          'website':lead.source_url,'source_url':lead.source_url,'location':lead.location,
          'provider_contact_research':True,'owned_contact_research':True,'classification':'Business found',
-         'research_source':'AutoMake public sources','contact_email':address or '',
+         'research_source':'AutoHunt','contact_email':address or '',
          'contact_name':person.get('value') or '', 'contact_role':person.get('title') or '',
          'contact_phone':(fields.get('phone') or {}).get('value') or '',
          'contact_type':'Company inbox' if address and is_shared_email(address) else 'Published contact' if address else '',
@@ -190,7 +190,7 @@ def collect(company, filters, cached=None):
         'cache_hit':cache_hit,'observed_at':datetime.now(timezone.utc).isoformat(),
         'business_research':{'business_status':'Industry and location matched' if fit else 'Business filters need review',
             'filter_status':'matched' if fit else 'unconfirmed','requested_filters':filters,
-            'research_source':'AutoMake public sources','supporting_urls':[r['url'] for r in rows],
+            'research_source':'AutoHunt','supporting_urls':[r['url'] for r in rows],
             'discovery_source':company.get('discovery_source'),'discovery_url':company.get('discovery_url'),
             'listing_location':company.get('listing_location') or ''},'excluded':excluded,
         'contact_issue':'' if rows else 'Company identity or public contact pages could not be confirmed.'}
@@ -214,7 +214,7 @@ def run(campaign, *, save_contacts=True):
                     snapshots[host(lead.source_url)]=record
     companies,diagnostics=discover(filters,limit,cached)
     checkpoint('business_results_ready',businesses=[{**c,'owned_contact_research':True,'provider_contact_research':True,
-        'research_source':'AutoMake public sources','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit)
+        'research_source':'AutoHunt','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit)
     for company in companies:
         if len(views)>=limit:break
         checkpoint('collecting_public_contacts',businesses=views,requested=limit)
