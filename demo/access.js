@@ -46,6 +46,20 @@ window.researchResultHeading=function(result){
   return additional?(matched?matched+' hiring matches confirmed. ':'No hiring matches confirmed. ')+
     'Contact research saved for '+additional+' additional '+(additional===1?'business.':'businesses.'):'Found '+matched+' businesses.';
 };
+window.renderWorkingActivity=function(state){
+  var p=state.progress||{},events=p.activity||[],running=state.status==='running'||state.status==='queued';
+  var labels={starting:'Starting your workflow',planning:'Understanding your request',discovering_businesses:'Researching businesses',verifying_candidates:'Reviewing business sources',checking_evidence:'Checking source evidence',researching_more_sources:'Reviewing additional sources',checking_contacts:'Looking for contact details',business_results_ready:'Business results ready',hunter_contact_lookup:'Finding contacts with Hunter',hunter_contact_checked:'Hunter contact check finished',enriching_individual_contacts:'Verifying contacts and preparing messages',checking_selection_grant:'Reviewing your selected business',verifying_selected_business:'Reviewing the selected business sources',verifying_selected_email_source:'Checking the email belongs to this business',verifying_selected_mailbox:'Verifying the email address',preparing_approved_message:'Preparing your two-emoji outreach message',checking_resume_attachment:'Checking your résumé attachment',checking_selected_send_authorization:'Checking your workflow activation',checking_send_authorization:'Checking your workflow activation',sending_selected_contact:'Sending your email through Gmail',activating_email_batch:'Processing your selected businesses'};
+  Object.assign(labels,{configuration:'Checking workflow setup',researching:'Researching businesses',verifying_sources:'Reviewing company sources',qualifying_contacts:'Reviewing business and contact evidence',enriching_contact:'Enriching the business contact',checking_business_need:'Reviewing business needs',business_need_available:'Business evidence review finished',fetching_contact_sources:'Opening contact sources',extracting_contacts:'Reading contact details',verifying_mailbox:'Verifying the email address',drafting:'Preparing your outreach message',sending:'Sending your email through Gmail',contact_source_setup:'Preparing contact research',contact_source_provider:'Looking up contact sources',contact_page_fetch:'Opening the company contact page',contact_page_metadata:'Checking company page details',contact_page_addresses:'Reviewing email addresses',contact_page_people:'Reviewing decision-makers'});
+  var workflow=(state.result||{}).workflow||{},outreach=workflow.outreach||{};
+  var heading=running?'Working…':state.status==='failed'||state.status==='cancelled'||workflow.state==='held'?'Needs attention':'Finished';
+  if(!events.length&&p.stage)events=[{stage:p.stage,at:p.updated_at}];
+  var html='<section class="working-activity" aria-label="Workflow activity"><p role="status"><b>'+heading+'</b></p><ol>';
+  events.forEach(function(event,index){html+='<li'+(running&&index===events.length-1?' aria-current="step"':'')+'>'+esc(labels[event.stage]||'Processing your request')+(event.at?' <time class="meta">'+esc(new Date(event.at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}))+'</time>':'')+'</li>';});
+  if(!events.length)html+='<li>Waiting to start</li>';
+  if(outreach.send_status==='sent')html+='<li><b>Email sent</b></li>';
+  if(!running&&(state.error||workflow.reason))html+='<li>'+esc(state.error||workflow.reason)+'</li>';
+  return html+'</ol></section>';
+};
 window.renderResearchProgress=function(state){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var p=state.progress||{},rows=p.businesses||p.candidates||[];
@@ -54,7 +68,7 @@ window.renderResearchProgress=function(state){
   var html='<b>AutoMake AI</b><p>'+esc(state.status==='queued'?'Starting your search…':state.status==='cancelled'?'Search stopped.':native?'Finding and verifying contacts with Hunter…':'Finding businesses…')+'</p><p class="meta">'+esc(p.discovered||rows.length)+' found'+(native?' · '+esc(p.contacts_verified||0)+' verified emails':'')+'</p><details class="research-details"><summary>Search details</summary><p>'+esc(stages[p.stage]||'Checking sources')+'</p>';
   html+='<p class="meta">Requested '+esc(p.requested||state.target_count||'')+' · Discovered '+esc(p.discovered||rows.length)+' · Qualified '+esc(p.qualified||0)+' · Drafts ready '+esc(p.drafted||0)+'.</p>';
   if(p.updated_at)html+='<p class="meta">Last update: '+esc(p.updated_at)+'</p>';
-  html+='</details>';
+  html+='</details>'+window.renderWorkingActivity(state);
   if(window.bulkActivationControl)html+=window.bulkActivationControl(rows);
   rows.forEach(function(row){
     html+='<div class="lead"><b>'+esc(row.company)+'</b>'+(window.businessMatchNote?window.businessMatchNote(row):'');
@@ -79,12 +93,14 @@ window.showRequestInterpretation=function(query,location,count,sending){
   if(window.syncComposerState)window.syncComposerState();
   var bubble=window.activeResearchBubble;if(!bubble)return;
   bubble.innerHTML='<b>AutoMake AI</b><p>Finding '+esc(count)+' businesses'+(location?' in '+esc(location):'')+'…</p><p class="meta">Results will appear here as I find them.</p>';
+  bubble.innerHTML+=window.renderWorkingActivity({status:'queued'});
   var offer=document.getElementById('customer-offer');if(offer&&offer.value)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Offer: '+esc(offer.value)+'</p></details>';
 };
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
   bubble.innerHTML='<b>Your results</b><p>'+esc(window.researchResultHeading?window.researchResultHeading(result):'Found '+rows.length+' businesses.')+'</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
+  if(result.progress)bubble.innerHTML+=window.renderWorkingActivity({status:'completed',progress:result.progress});
   if(result.outreach)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p></details>';
   var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<details class="research-details"><summary>Result details</summary><p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p></details>';
 };
@@ -215,6 +231,20 @@ document.addEventListener('click',function(event){var button=event.target.closes
 
 // Selected-business workflows: rendering and reloads only observe persisted work.
 window.selectedWorkflows={};
+window.messagePreview=function(preview){
+  if(!preview)return '';
+  return '<section class="message-preview"><p><b>To:</b> '+esc(preview.recipient)+'</p><p><b>Subject:</b> '+esc(preview.subject)+'</p><p class="email-copy" style="white-space:pre-wrap">'+esc(preview.body)+'</p><p><b>Attachment:</b> '+esc(preview.attachment)+'</p><p class="meta">'+esc(preview.note||'')+'</p></section>';
+};
+window.previewSelection=function(ref){
+  var id=window.selectionId(ref),entry=window.selectedWorkflows[id]||(window.selectedWorkflows[id]={ref:ref});
+  if(entry.previewLoading)return;
+  entry.previewLoading=true;entry.previewError='';window.refreshSelectionCards(id);
+  return requestJSON(API+'/api/chat/workflows/preview?selection='+encodeURIComponent(JSON.stringify(ref)),{cache:'no-store'})
+    .then(function(result){entry.preview=result.preview;})
+    .catch(function(error){entry.previewError=error.message;})
+    .finally(function(){entry.previewLoading=false;window.refreshSelectionCards(id);});
+};
+document.addEventListener('click',function(event){var button=event.target.closest('[data-preview-selection]');if(button&&!button.disabled)window.previewSelection(JSON.parse(button.dataset.previewSelection));});
 window.selectionId=function(ref){return ref.kind+':'+(ref.lead_id||ref.job_id||'')+':'+(ref.key||'');};
 window.selectionControl=function(ref){
   if(!ref)return '';
@@ -231,6 +261,8 @@ window.selectionControl=function(ref){
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
   var html='<div class="outreach-workflow selection-workflow" data-selection-card="'+esc(id)+'"><p class="email-send-status" role="status"><b>'+esc(sendStatus)+'</b></p>'+window.recipientLine(workflow.outreach)+'<button class="ghost" type="button" data-select-workflow="'+esc(JSON.stringify(ref))+'"'+(disabled?' disabled':'')+'>'+esc(label)+'</button><p>'+esc(window.sendMessage(sendStatus,workflow.outreach,entry.error||workflow.reason)||(reason))+'</p>';
+  html+='<button class="ghost" type="button" data-preview-selection="'+esc(JSON.stringify(ref))+'"'+(entry.previewLoading?' disabled':'')+'>'+(entry.previewLoading?'Loading email…':'View email &amp; résumé')+'</button>'+window.messagePreview(entry.preview)+(entry.previewError?'<p>'+esc(entry.previewError)+'</p>':'');
+  if(window.renderWorkingActivity&&entry.job)html+=window.renderWorkingActivity(state);
   html+=window.sendDetails(sent?reason:entry.error||workflow.reason,workflow.reason_codes);
   if(entry.error&&!(window.workspaceAccess||{}).signed_in)html+='<p><a href="/login">Sign in to activate this business</a>. Your research will be restored when you return.</p>';
   if(workflow.outreach&&(active||sent))html+='<details class="send-details"><summary>Follow-ups &amp; booking</summary><ol><li>Initial email: '+esc(workflow.outreach.initial)+'</li><li>Follow-ups: '+esc(workflow.outreach.followups)+'</li><li>Calendar: '+esc(workflow.outreach.booking)+'</li></ol></details>';

@@ -92,7 +92,7 @@ def authorize(lead,job_id):
 def prepare_contact(selected,existing,query,territory,offer):
     """Reuse a current verified address; otherwise verify the selected source email."""
     import outreach_automation as oa
-    from src.outreach_copy import initial_email
+    from src.outreach_copy import initial_email, approved_initial
     from src.execution_deadline import checkpoint
     from workspace_security import claim
     from v1_orchestration import _public_contact_evidence,EMAIL_SCAN_RE
@@ -116,8 +116,9 @@ def prepare_contact(selected,existing,query,territory,offer):
         hunter_checked=timedelta(0)<=datetime.now(timezone.utc)-checked<=timedelta(hours=1)
     except (ValueError,TypeError):hunter_checked=False
     if lead and (not selected_email or selected_email==oa.normalize_email(lead.contact_email)) and contact_readiness(lead)['ok'] and (not required_person or person_ready) and (person_ready or not enabled() or hunter_checked):
-        if not lead.subject or not lead.body:
-            draft=initial_email(lead,json.loads(lead.evidence_json or '[]'));lead.subject=draft['subject'];lead.body=draft['body'];db.session.commit()
+        checkpoint('preparing_approved_message')
+        draft=approved_initial(lead,json.loads(lead.evidence_json or '[]'))
+        lead.subject=draft['subject'];lead.body=draft['body'];db.session.commit()
         return lead
     company=selected['company'];website=selected['website']
     # Directory/support addresses are not this company's contact. Discover a
@@ -184,5 +185,6 @@ def prepare_contact(selected,existing,query,territory,offer):
     # database session (also important for SQLite's shared connection).
     db.session.commit()
     if contact and contact_readiness(lead)['ok']:
-        draft=initial_email(lead,evidence);lead.subject=draft['subject'];lead.body=draft['body'];lead.last_error=''
+        checkpoint('preparing_approved_message')
+        draft=approved_initial(lead,evidence);lead.subject=draft['subject'];lead.body=draft['body'];lead.last_error=''
     db.session.commit();return lead

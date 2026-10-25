@@ -2,6 +2,36 @@ from pathlib import Path
 from scripts.smart_search_smoke import validate_frontend
 
 
+def test_selection_preview_reads_only_and_activity_uses_observed_stages():
+    import subprocess
+    script=r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const source=fs.readFileSync('demo/access.js','utf8');
+const activity=source.slice(source.indexOf('window.renderWorkingActivity='),source.indexOf('window.renderResearchProgress='));
+const helpers=source.slice(source.indexOf('window.emailSendStatus='),source.indexOf('window.outreachControl='));
+let reads=0,writes=0;
+const context={window:{},esc:s=>String(s||'').replaceAll('<','&lt;'),Date,JSON,Number,Set,Promise,
+document:{addEventListener:()=>{},querySelectorAll:()=>[]},API:'',sessionStorage:{getItem:()=>null},
+requestJSON:(path,opts)=>{reads++;assert(path.startsWith('/api/chat/workflows/preview?selection='));assert.equal(opts.method,undefined);return Promise.resolve({preview:{subject:'Approved',body:'Hey team 👋\nRésumé 🙂 <script>',attachment:'resume.docx'}});},
+workspaceMutation:()=>{writes++;throw Error('Preview must not send');}};
+vm.runInNewContext(activity+helpers+source.slice(source.indexOf('// Selected-business workflows:')),context);
+const w=context.window,ref={kind:'lead',lead_id:42};
+assert(w.selectionControl(ref).includes('View email &amp; résumé'));
+(async()=>{
+ await w.previewSelection(ref);
+ const html=w.selectionControl(ref);
+ assert(html.includes('👋')&&html.includes('🙂')&&html.includes('&lt;script>'));
+ assert.equal(reads,1);assert.equal(writes,0);
+ const working=w.renderWorkingActivity({status:'running',progress:{activity:[{stage:'hunter_contact_lookup',at:'2026-10-25T09:00:00Z'}]}});
+ assert(working.includes('Working…')&&working.includes('Finding contacts with Hunter')&&working.includes('aria-current="step"'));
+ assert(!working.includes('Email sent'));
+ const held=w.renderWorkingActivity({status:'completed',result:{workflow:{state:'held',reason:'Reconnect Google'}}});
+ assert(held.includes('Needs attention')&&held.includes('Reconnect Google')&&!held.includes('Email sent'));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
 def test_restored_customer_interface_matches_deployment_smoke():
     html=Path('demo/index.html').read_text()
     script=Path('demo/dashboard.js').read_text()

@@ -449,6 +449,45 @@ def selected_body(ref):
     return {'selection':ref,'offer':'Inquiry follow-up and appointment scheduling automation','activate':True}
 
 
+def test_message_preview_is_owned_read_only_and_matches_initial_send(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    lead.subject='Old subject';lead.body='Old saved copy';oa.db.session.commit()
+    monkeypatch.setattr(oa,'run_ai',lambda **kw:pytest.fail('Preview called AI'))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:pytest.fail('Preview sent email'))
+    ref={'kind':'lead','lead_id':lead.id}
+    job_count=jobs.CampaignExecutionJob.query.count()
+    response=env.get('/api/chat/workflows/preview',query_string={'selection':json.dumps(ref)},headers=headers)
+    assert response.status_code==200
+    preview=response.json['preview']
+    assert '👋' in preview['body'] and '🙂' in preview['body']
+    assert preview['attachment']=='Matthew_Jolley_AI_Automation_Resume.docx'
+    assert preview['recipient']==lead.contact_email
+    assert lead.body=='Old saved copy'
+    assert jobs.CampaignExecutionJob.query.count()==job_count and oa.OutreachSendAttempt.query.count()==0
+    captured=[]
+    monkeypatch.setattr(oa,'_safe_send',lambda row,**kw:captured.append(kw) or {'ok':False,'stage':'blocked','gate':{'reasons':['TEST_NO_SEND']}})
+    env.post(f'/api/outreach/leads/{lead.id}/send',headers=headers)
+    assert captured[0]['subject']==preview['subject'] and captured[0]['body']==preview['body']
+    from workspace_security import OWNER,ResourceOwnership
+    oa.db.session.merge(ResourceOwnership(kind='lead',resource_id=str(lead.id),workspace_id='another-workspace'))
+    oa.db.session.commit()
+    assert env.get('/api/chat/workflows/preview',query_string={'selection':json.dumps(ref)},headers=headers).status_code==404
+
+
+def test_selected_workflow_retains_observed_activity_after_completion(env,monkeypatch):
+    lead,headers=prepared_activation_lead(env,monkeypatch)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:{'ok':True,'message_id':'activity-message','thread_id':'activity-thread'})
+    response=env.post('/api/chat/workflows/activate',json=selected_body({'kind':'lead','lead_id':lead.id}),headers=headers)
+    jobs.process_next_execution_job()
+    result=env.get(response.json['poll_url'],headers=headers).json
+    stages=[event['stage'] for event in result['progress']['activity']]
+    assert 'checking_selection_grant' in stages
+    assert 'preparing_approved_message' in stages
+    assert 'checking_resume_attachment' in stages
+    assert 'sending_selected_contact' in stages
+    assert result['result']['workflow']['outreach']['send_status']=='sent'
+
+
 def test_selection_prepares_missing_draft_then_sends_only_chosen_contact_once(env,monkeypatch):
     lead,headers=prepared_activation_lead(env,monkeypatch)
     lead.subject='';lead.body='';lead.status='needs_evidence';oa.db.session.commit()

@@ -93,6 +93,8 @@ def protect_workspace_routes():
             return _deny('Search not found.',404)
         return None
     if endpoint=='gmail_oauth_callback' and isinstance(session.get('google_login'),dict):return None
+    if endpoint=='preview_selected_workflow':
+        return None  # Read-only resolver checks lead ownership or this browser's research session.
     if endpoint in PUBLIC:return None
     if endpoint in {'process_followups','process_inbound_replies'}:
         return None  # Both routes independently require the canonical cron token.
