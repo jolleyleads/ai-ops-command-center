@@ -24,7 +24,7 @@ class ContactResearchUnavailable(RuntimeError):
 
 def is_contact_list_query(query):
     from src.job_evidence import is_hiring_query
-    return bool(re.search(r'\b(?:businesses|companies|prospects|leads)\b',query,re.I)
+    return bool(re.search(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,re.I)
                 and not is_hiring_query(query)
                 and not re.search(r'\b(?:permits?|licenses?|needing|needs?|seeking|looking for|buying|struggling)\b',query,re.I))
 
@@ -167,6 +167,8 @@ def discover_companies(query, location, limit, get=None, post=None):
 
 
 def contact_view(lead):
+    from src.owned_research import snapshot,view
+    if snapshot(lead):return view(lead)
     from customer_dashboard import evidence_parts
     rows,enrichment,_=evidence_parts(lead)
     research=next((r.get('business_research') or {} for r in reversed(rows) if r.get('business_research')), {})

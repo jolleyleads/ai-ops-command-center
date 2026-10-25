@@ -26,7 +26,9 @@ def resolve_selection(ref):
         lead=db.session.get(oa.OutreachLead,key)
         if not lead:return None
         context=oa._server_qualification_inputs(lead)[1]
-        return {'company':lead.company,'website':lead.source_url,'source_url':lead.source_url,'location':lead.location},context.get('query') or 'Find businesses',context.get('target_location') or lead.location,lead.id
+        from src.owned_research import snapshot,view
+        selected=view(lead) if snapshot(lead) else {'company':lead.company,'website':lead.source_url,'source_url':lead.source_url,'location':lead.location}
+        return selected,context.get('query') or 'Find businesses',context.get('target_location') or lead.location,lead.id
     job_id=ref.get('job_id');key=ref.get('key')
     if not isinstance(job_id,str) or not isinstance(key,str):return None
     if kind=='research':

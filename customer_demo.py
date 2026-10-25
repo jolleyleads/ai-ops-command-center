@@ -26,7 +26,9 @@ def _lead_view(lead):
         for item in evidence[:5]:
             if isinstance(item,dict):safe.append({"source":item.get("source") or item.get("title") or "Public source","url":item.get("url") or "","observed_at":item.get("observed_at") or ""})
     status=(lead.status or "new").lower()
-    return {"id":lead.id,"company":lead.company or "Unknown company","location":lead.location or "","why_qualified":"Verified public evidence met the V1 qualification gate" if status not in {"needs_evidence","rejected"} else "Additional evidence required","supporting_evidence":safe,"contact_status":"Verified contact available" if lead.contact_email else "Contact research pending","pipeline_stage":status.replace("_"," ").title(),"score":lead.score}
+    from src.owned_research import snapshot,view
+    owned_contact=view(lead) if snapshot(lead) else None
+    return {"id":lead.id,"company":lead.company or "Unknown company","location":lead.location or "","why_qualified":"Verified public evidence met the V1 qualification gate" if status not in {"needs_evidence","rejected"} else "Additional evidence required","supporting_evidence":safe,"contact_status":owned_contact['email_status'] if owned_contact else "Verified contact available" if lead.contact_email else "Contact research pending","pipeline_stage":status.replace("_"," ").title(),"score":lead.score}
 def _campaign_payload(data):
     target=_text(data.get("target_customer"),500);territory=_text(data.get("territory"),200);offer=_text(data.get("offer"),1200)
     try:send_limit=int(data.get("sending_limit") or 25)
@@ -63,6 +65,9 @@ def _run_campaign(data):
     # This bit exists only in the server-created authenticated job payload.
     campaign["send_authorized"]=data.get("send_authorized") is True
     campaign["require_decision_maker"]=data.get("require_decision_maker") is True
+    from src.owned_research import accepts as owned_request, run as run_owned_research
+    if data.get('draft_only') is True and owned_request(campaign['query']):
+        return run_owned_research(campaign)
     # A contact-list request has a direct Hunter path. It does not need an
     # automation-buying signal, an LLM research plan or a draft before showing
     # verified addresses. Sending continues through the existing workflow.

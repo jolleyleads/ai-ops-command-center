@@ -77,8 +77,13 @@ def process_next_research_job():
             db.session.commit()
             if not changed:raise TimeoutError('Research cancelled or claim lost')
         with execution_scope(budget+30,progress):
+            from src.owned_research import accepts as owned_request, run as run_owned_research
             from src.hunter_research import use_native_contact_search, run_contact_research, ContactResearchUnavailable
-            if use_native_contact_search(job.prompt_text):
+            if owned_request(job.prompt_text):
+                result,stage,error=run_owned_research({'query':job.prompt_text,'territory':job.location,
+                    'target_count':job.target_count,'offer':''},save_contacts=False)
+                if error:raise ContactResearchUnavailable(error)
+            elif use_native_contact_search(job.prompt_text):
                 result,stage,error=run_contact_research({'query':job.prompt_text,'territory':job.location,
                     'target_count':job.target_count,'offer':''},save_contacts=False)
                 if error:raise ContactResearchUnavailable(error)
