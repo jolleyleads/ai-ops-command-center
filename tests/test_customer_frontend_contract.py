@@ -27,6 +27,13 @@ assert(w.selectionControl(ref).includes('View email &amp; résumé'));
  assert(!working.includes('Email sent'));
  const held=w.renderWorkingActivity({status:'completed',result:{workflow:{state:'held',reason:'Reconnect Google'}}});
  assert(held.includes('Needs attention')&&held.includes('Reconnect Google')&&!held.includes('Email sent'));
+ const stale='No email sent: HUNTER_RESULT_DATE_UNCONFIRMED_OR_STALE';
+ const explanation='Email not sent: recent mailbox verification required.';
+ assert.equal(w.sendMessage('Not sent',{},stale),explanation);
+ const blocked=w.renderWorkingActivity({status:'completed',result:{workflow:{state:'held',reason:stale}}});
+ assert(blocked.includes(explanation)&&!blocked.includes('HUNTER_RESULT_DATE_UNCONFIRMED_OR_STALE'));
+ assert.equal(w.sendMessage('Sent',{},stale),'Your email was sent.');
+ assert.equal(w.sendMessage('Checking status',{},stale),'We’re checking whether your email was sent. Please don’t send it again yet.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
