@@ -1,9 +1,9 @@
-/* Read-only workspace views beside the existing AutoMake AI chat. */
+/* Workspace views and explicit reviewed-draft sending. */
 (function () {
   'use strict';
   var panel=document.getElementById('workspace-panel'), menu=document.getElementById('workspace-menu');
   var data=null, view='chat', requestVersion=0, leadOffset=0, campaignOffset=0;
-  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',appointments:'Appointments',settings:'Settings'};
+  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings'};
   var statuses={needs_evidence:'Checking contact details',review:'Ready for review',rejected:'Not a match',qualified:'Ready to prepare',drafted:'Draft ready',sent:'Email sent · Waiting for reply',replied:'Reply received',interested:'Interested',booked:'Appointment booked',unsubscribed:'Contact stopped',opted_out:'Contact stopped',queued:'Queued',running:'In progress',completed:'Complete',failed:'Needs attention'};
   var checks={verified_identity:'Business identity confirmed',validated_website:'Company website found',validated_contact:'Contact information checked',source_evidence:'Research sources recorded',geographic_fit:'Location matches',business_type_fit:'Business type matches',intent_signal:'Requested business need supported',evidence_freshness:'Current evidence',named_decision_maker_email:'Named contact and email matched'};
   function e(value){return window.esc(value);}
@@ -12,10 +12,11 @@
   function link(url,text){return /^https?:\/\//i.test(String(url||''))?'<a href="'+e(url)+'" target="_blank" rel="noopener noreferrer">'+e(text)+'</a>':e(text||'Not available');}
   function score(n){return typeof n==='number'&&Number.isFinite(n)?Math.max(0,Math.min(100,n)):null;}
   function badge(n){n=score(n);return n===null?'Score pending':n+'/100 · '+(n>=80?'Strong match':n>=60?'Potential match':'Needs more research');}
-  function load(){return requestJSON(API+'/api/chat/dashboard?lead_offset='+leadOffset+'&campaign_offset='+campaignOffset,{cache:'no-store'}).then(function(result){data=result;return result;});}
+  function load(){return requestJSON(API+'/api/chat/dashboard?lead_offset='+leadOffset+'&campaign_offset='+campaignOffset+'&folder='+(['sent','drafts'].includes(view)?view:''),{cache:'no-store'}).then(function(result){data=result;return result;});}
   function heading(title,subtitle){return '<div class="workspace-heading"><div><h1>'+e(title)+'</h1><p class="meta">'+e(subtitle)+'</p></div><button type="button" class="ghost" data-refresh>Refresh</button></div>';}
   function error(err){panel.innerHTML=heading(labels[view],'Your workspace')+'<div class="workspace-empty"><p>'+e(err.message)+'</p><a href="/login">Sign in to your workspace</a></div>';}
   function open(name){
+    if(name!==view)leadOffset=0;
     view=labels[name]?name:'chat';var version=++requestVersion;
     if(window.closeWorkspaceMenu)window.closeWorkspaceMenu(false);else menu.open=false;
     document.getElementById('feed').hidden=view!=='chat';panel.hidden=view==='chat';
@@ -29,8 +30,8 @@
     load().then(function(){if(version!==requestVersion)return;if(view==='campaigns')campaigns();else leads();}).catch(function(err){if(version===requestVersion)error(err);});
   }
   function leads(){
-    var title=view==='conversations'?'Conversations':'My Leads';
-    panel.innerHTML=heading(title,view==='conversations'?'Sent messages, replies, and upcoming follow ups.':'Your saved prospects, ranked by research fit.')+
+    var title=labels[view]||'My Leads';
+    panel.innerHTML=heading(title,view==='sent'?'Emails with a confirmed Gmail send record.':view==='drafts'?'Review your message and résumé, then choose Send.':view==='conversations'?'Sent messages, replies, and upcoming follow ups.':'Your saved prospects, ranked by research fit.')+
       '<div class="workspace-filters"><label>Search businesses<input id="lead-search" type="search" placeholder="Search by name or location"></label><label>Campaign<select id="lead-campaign"><option value="">All campaigns</option><option value="unassigned">Other saved leads</option>'+data.campaigns.map(function(c){return '<option value="'+e(c.id)+'">'+e(c.name)+'</option>';}).join('')+'</select></label>'+
       '<label>Status<select id="lead-status"><option value="">All statuses</option>'+Object.keys(statuses).filter(function(s){return !['queued','running','completed','failed'].includes(s);}).map(function(s){return '<option value="'+s+'">'+e(status(s))+'</option>';}).join('')+'</select></label><label>Sort by<select id="lead-sort"><option value="score">Best fit &amp; need</option><option value="recent">Recently updated</option><option value="name">Business name</option></select></label></div><p class="meta" id="lead-count" aria-live="polite"></p><div id="lead-list"></div><p class="meta">Showing up to '+e(data.lead_limit)+' recently updated saved leads (total '+e(data.lead_total)+'). Scores describe research fit, not a guarantee of a sale.</p>';
     panel.innerHTML+=pagination('leads',data.lead_offset,data.lead_limit,data.lead_total);
@@ -41,23 +42,52 @@
     var items=data.leads.filter(function(l){return (!term||(l.company+' '+l.location).toLowerCase().includes(term))&&(!chosen||l.status===chosen)&&(!campaign||(campaign==='unassigned'?!l.campaign_ids.length:l.campaign_ids.includes(campaign)))&&(view!=='conversations'||l.has_sent_message||l.replied_at||l.status==='drafted');});
     items.sort(function(a,b){return sortBy==='name'?a.company.localeCompare(b.company):sortBy==='recent'?String(b.updated_at).localeCompare(String(a.updated_at)):((b.prospect_quality||{}).rank||0)-((a.prospect_quality||{}).rank||0)||(score(b.score)||0)-(score(a.score)||0)||a.company.localeCompare(b.company);});
     document.getElementById('lead-count').textContent=items.length+' '+(items.length===1?'business':'businesses');
-    document.getElementById('lead-list').innerHTML=items.length?(window.bulkActivationControl?window.bulkActivationControl(items.map(function(l){return Object.assign({},l,{lead_id:l.id});})):'' )+items.map(function(l){return '<article class="lead workspace-lead"><div class="leadtop"><b>'+e(l.company)+'</b><span class="tag score-badge">'+e(badge(l.score))+'</span></div><p class="meta">'+e([l.business_type,l.location].filter(Boolean).join(' · ')||'Location not recorded')+'</p><p class="workspace-status">'+e(status(l.status))+'</p>'+((l.has_sent_message&&!l.replied_at&&l.follow_up_due_at)?'<p class="meta">Next follow up: '+e(date(l.follow_up_due_at))+'</p>':'')+(window.renderProspectQuality?window.renderProspectQuality(l.prospect_quality):'')+(window.businessAction?window.businessAction({lead_id:l.id,contact_email:l.contact_email,selection:l.selection||{kind:'lead',lead_id:l.id},outreach:l.outreach}):'')+'<details data-lead-id="'+l.id+'"><summary>View details</summary><div class="lead-detail"></div></details></article>';}).join(''):'<div class="workspace-empty"><b>No matching leads yet</b><p>Try another filter, or start a new request in Chat.</p><button class="ghost" data-view="chat">Back to chat</button></div>';
+    document.getElementById('lead-list').innerHTML=items.length?(view!=='drafts'&&view!=='sent'&&window.bulkActivationControl?window.bulkActivationControl(items.map(function(l){return Object.assign({},l,{lead_id:l.id});})):'' )+items.map(function(l){return '<article class="lead workspace-lead"><div class="leadtop"><b>'+e(l.company)+'</b><span class="tag score-badge">'+e(badge(l.score))+'</span></div><p class="meta">'+e([l.business_type,l.location].filter(Boolean).join(' · ')||'Location not recorded')+'</p><p class="workspace-status">'+e(status(l.status))+'</p>'+((l.has_sent_message&&!l.replied_at&&l.follow_up_due_at)?'<p class="meta">Next follow up: '+e(date(l.follow_up_due_at))+'</p>':'')+(window.renderProspectQuality?window.renderProspectQuality(l.prospect_quality):'')+(view!=='drafts'&&view!=='sent'&&window.businessAction?window.businessAction({lead_id:l.id,contact_email:l.contact_email,selection:l.selection||{kind:'lead',lead_id:l.id},outreach:l.outreach}):'')+'<details data-lead-id="'+l.id+'"><summary>'+(view==='drafts'?'Review draft':view==='sent'?'View sent message':'View details')+'</summary><div class="lead-detail"></div></details></article>';}).join(''):'<div class="workspace-empty"><b>'+e(view==='sent'?'No sent emails yet':view==='drafts'?'No saved drafts yet':'No matching leads yet')+'</b><p>Try another filter, or start a new request in Chat.</p><button class="ghost" data-view="chat">Back to chat</button></div>';
     document.querySelectorAll('details[data-lead-id]').forEach(function(details){details.addEventListener('toggle',function(){if(!details.open||details.dataset.loaded)return;details.dataset.loaded='loading';var content=details.querySelector('.lead-detail');content.textContent='Loading contact details…';requestJSON(API+'/api/chat/dashboard/leads/'+details.dataset.leadId,{cache:'no-store'}).then(function(d){content.innerHTML=detail(d);details.dataset.loaded='yes';}).catch(function(err){content.textContent=err.message;delete details.dataset.loaded;});});});
   }
   function detail(d){
-    var c=d.contact||{}, html='<dl class="contact-grid"><div><dt>Contact</dt><dd>'+e(c.name||c.type)+'</dd></div><div><dt>Role</dt><dd>'+e(c.role||'Not confirmed')+'</dd></div><div><dt>Email</dt><dd>'+e(c.email||'Still researching')+'<small>'+e(c.email_label)+' · '+e(c.type)+(c.checked_at?' · Checked '+e(date(c.checked_at)):'')+'</small></dd></div><div><dt>Phone</dt><dd>'+e(c.phone||'Not confirmed')+'</dd></div></dl>';
+    var c=d.contact||{}, html=(view==='drafts'?draft(d):'')+'<dl class="contact-grid"><div><dt>Contact</dt><dd>'+e(c.name||c.type)+'</dd></div><div><dt>Role</dt><dd>'+e(c.role||'Not confirmed')+'</dd></div><div><dt>Email</dt><dd>'+e(c.email||'Still researching')+'<small>'+e(c.email_label)+' · '+e(c.type)+(c.checked_at?' · Checked '+e(date(c.checked_at)):'')+'</small></dd></div><div><dt>Phone</dt><dd>'+e(c.phone||'Not confirmed')+'</dd></div></dl>';
     if(window.renderProspectQuality)html+=window.renderProspectQuality(d.prospect_quality);
     html+='<h3>Why this score?</h3><p>'+e(d.score_description)+'</p><ul>'+(d.score_checks||[]).map(function(x){return '<li>'+e(checks[x]||x.replace(/_/g,' '))+'</li>';}).join('')+'</ul>';
     if(!(d.score_checks||[]).length)html+='<p class="meta">Detailed score breakdown is not recorded for this lead.</p>';
     if((d.reasons||[]).length)html+='<p class="meta">Still checking: '+d.reasons.map(function(r){return e(reason(r));}).join(' · ')+'</p>';
     html+='<h3>Business website & research</h3>'+(d.sources||[]).map(function(s){return '<p>'+link(s.url,s.title)+(s.observed_at?'<span class="meta"> · Checked '+e(date(s.observed_at))+'</span>':'')+(s.summary?'<small>'+e(s.summary)+'</small>':'')+'</p>';}).join('');
-    html+='<h3>Email & reply history</h3>'+(d.timeline.length?'<ol class="workspace-timeline">'+d.timeline.slice().sort(function(a,b){return String(a.at).localeCompare(String(b.at));}).map(function(t){return '<li><b>'+e(t.type==='reply'?'Reply received':t.confirmed?kind(t.kind)+' sent':kind(t.kind)+' · '+status(t.status))+'</b><small>'+e(date(t.at))+'</small>'+(t.text?'<p class="email-copy">'+e(t.text)+'</p>':'')+'</li>';}).join('')+'</ol>':'<p class="meta">No sent message or reply recorded yet.</p>');
-    if(d.body)html+='<details><summary>'+(d.timeline.some(function(t){return t.confirmed;})?'Saved outreach message':'Prepared draft')+'</summary><p><b>'+e(d.subject)+'</b></p><p class="email-copy">'+e(d.body)+'</p></details>';
+    html+='<h3>Email & reply history</h3>'+(d.timeline.length?'<ol class="workspace-timeline">'+d.timeline.slice().sort(function(a,b){return String(a.at).localeCompare(String(b.at));}).map(function(t){return '<li><b>'+e(t.type==='reply'?'Reply received':t.confirmed?kind(t.kind)+' sent':kind(t.kind)+' · '+status(t.status))+'</b><small>'+e(date(t.at))+'</small>'+(t.recipient?'<p>To: '+e(t.recipient)+'</p>':'')+(t.subject?'<p><b>'+e(t.subject)+'</b></p>':'')+(t.text?'<p class="email-copy">'+e(t.text)+'</p>':'')+'</li>';}).join('')+'</ol>':'<p class="meta">No sent message or reply recorded yet.</p>');
+    if(d.body&&view!=='drafts')html+='<details><summary>'+(d.timeline.some(function(t){return t.confirmed;})?'Saved outreach message':'Prepared draft')+'</summary><p><b>'+e(d.subject)+'</b></p><p class="email-copy">'+e(d.body)+'</p></details>';
     html+='<h3>Appointments</h3>'+(d.bookings.some(function(b){return b.confirmed;})?d.bookings.filter(function(b){return b.confirmed;}).map(function(b){return '<p>'+e(date(b.start))+' · '+e(b.timezone)+' '+link(b.url,'Open in Calendar')+'</p>';}).join(''):'<p class="meta">No confirmed appointment recorded.</p>');
-    if(window.businessAction)html+=window.businessAction({selection:{kind:'lead',lead_id:d.id},outreach:d.outreach});
+    if(view!=='drafts'&&window.businessAction)html+=window.businessAction({selection:{kind:'lead',lead_id:d.id},outreach:d.outreach});
     html+='<p><b>Next action:</b> '+e(d.status==='booked'?'Appointment booked':d.status==='sent'&&d.follow_up_due_at?'Follow up on '+date(d.follow_up_due_at):d.status==='drafted'?'Draft prepared. Sending has not been confirmed.':d.status==='needs_evidence'?'Continue contact research':status(d.status))+'</p>';
     return html;
   }
+  function draft(d){
+    var preview=d.draft_preview, state=d.outreach||{};
+    if(!preview)return '<p role="status">This draft already has a send attempt or is no longer available. Refresh to check its status.</p>';
+    return '<section class="draft-review"><h2>Review email</h2>'+window.messagePreview(preview)+
+      '<button type="button" class="ghost" data-send-draft="'+d.id+'" data-draft-revision="'+e(preview.revision)+'"'+(!state.can_activate?' disabled':'')+'>Send</button>'+
+      '<p class="draft-send-status" role="status">'+e(state.can_activate?'Send this email and activate scheduled follow-ups.':window.sendMessage('Not sent',state,state.reason))+'</p>'+window.sendDetails(state.reason,state.reason_codes)+'</section>';
+  }
+  var sendingDrafts=new Set();
+  document.addEventListener('click',function(event){
+    var button=event.target.closest('[data-send-draft]');
+    if(!button||button.disabled)return;
+    var id=Number(button.dataset.sendDraft), revision=button.dataset.draftRevision, section=button.closest('.draft-review');
+    if(sendingDrafts.has(id))return;
+    sendingDrafts.add(id);button.disabled=true;button.textContent='Sending…';
+    var output=section.querySelector('.draft-send-status');output.textContent='Checking and sending your reviewed email…';
+    workspaceMutation(window.activateOutreachPath(id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activate:true,draft_revision:revision})})
+      .then(function(result){
+        var sent=window.emailSendStatus(result.outreach)==='Sent';
+        button.textContent=sent?'Sent':'Not sent';output.textContent=window.sendMessage(window.emailSendStatus(result.outreach),result.outreach);
+        if(sent)section.insertAdjacentHTML('beforeend','<button type="button" class="ghost" data-view="sent">Open Sent</button>');
+      }).catch(function(err){
+        // Observe after errors. Never automatically replay a send request.
+        return requestJSON(API+'/api/chat/dashboard/leads/'+id,{cache:'no-store'}).then(function(result){
+          var state=result.outreach||{}, label=window.emailSendStatus(state);
+          button.textContent=label;output.textContent=window.sendMessage(label,state,err.message);
+          section.insertAdjacentHTML('beforeend',window.sendDetails(err.message));
+        }).catch(function(){button.textContent='Check status';output.textContent='Refresh to check whether this email was sent before trying again.';});
+      }).finally(function(){sendingDrafts.delete(id);});
+  });
   function reason(code){var meanings={MISSING_VALIDATED_CONTACT:'Contact details need verification',NAMED_DECISION_MAKER_EMAIL_REQUIRED:'Named contact email needs confirmation',EVIDENCE_RECENCY_UNPROVEN:'Research date needs confirmation',INTENT_SIGNAL_UNPROVEN:'Business need needs confirmation',BUSINESS_TYPE_FIT_UNPROVEN:'Business type needs confirmation',GEOGRAPHIC_FIT_UNPROVEN:'Location needs confirmation'};return meanings[code]||String(code).toLowerCase().replace(/_/g,' ');}
   function kind(value){return {initial:'Outreach email',followup:'Follow up',automatic_reply:'Reply',booking_confirmation:'Booking confirmation'}[value]||'Email';}
   function liveOutcomes(c){

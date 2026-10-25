@@ -1,5 +1,6 @@
 """Owned workspace views and explicit per-contact outreach activation."""
 import json
+import hashlib
 import os
 from datetime import datetime
 from functools import wraps
@@ -58,6 +59,21 @@ def evidence_parts(lead):
     return rows, enrichment, context
 
 
+def draft_preview(lead):
+    """Read the same approved copy used by the initial send, without saving it."""
+    if (not lead.subject or not lead.body or lead.gmail_message_id or lead.gmail_thread_id
+            or lead.sent_at or lead.follow_up_count
+            or lead.status in {'archived','unsubscribed','opted_out','completed_no_reply'}
+            or oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id).first()):
+        return None
+    from src.outreach_copy import approved_initial, RESUME_PATH
+    preview={'recipient':lead.contact_email or '', **{k:v for k,v in approved_initial(lead,unpack(lead.evidence_json,[])).items() if k in {'subject','body'}},
+             'attachment':RESUME_PATH.name,
+             'note':'Sending also activates scheduled follow-ups. Replies and opt-outs control further outreach.'}
+    preview['revision']=hashlib.sha256(json.dumps(preview,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    return preview
+
+
 def campaign_view(job,outcome_data=None):
     payload, result = unpack(job.payload_json), unpack(job.result_json)
     outreach, discovery = result.get('outreach') or {}, result.get('discovery') or {}
@@ -88,7 +104,27 @@ def dashboard():
     except (TypeError,ValueError):return jsonify(ok=False,error='Invalid pagination offset.'),400
     lead_query=oa.OutreachLead.query.filter(oa.OutreachLead.status!='archived',scope(oa.OutreachLead,'lead'))
     campaign_query=CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign'))
-    leads = oa.OutreachLead.query.filter(oa.OutreachLead.status != 'archived',scope(oa.OutreachLead,'lead')).order_by(oa.OutreachLead.updated_at.desc()).offset(lead_offset).limit(500).all()
+    folder=request.args.get('folder','')
+    if folder not in {'','sent','drafts'}:
+        return jsonify(ok=False,error='Unknown email folder.'),400
+    confirmed=oa.OutreachSendAttempt.query.filter(
+        oa.OutreachSendAttempt.lead_id==oa.OutreachLead.id,
+        oa.OutreachSendAttempt.kind=='initial',oa.OutreachSendAttempt.status=='sent',
+        oa.OutreachSendAttempt.message_id.isnot(None),oa.OutreachSendAttempt.message_id!='',
+        oa.OutreachSendAttempt.thread_id.isnot(None),oa.OutreachSendAttempt.thread_id!='').exists()
+    if folder=='sent':
+        lead_query=lead_query.filter(db.or_(confirmed,db.and_(
+            oa.OutreachLead.gmail_message_id.isnot(None),oa.OutreachLead.gmail_message_id!='',
+            oa.OutreachLead.gmail_thread_id.isnot(None),oa.OutreachLead.gmail_thread_id!='',oa.OutreachLead.sent_at.isnot(None))))
+    elif folder=='drafts':
+        lead_query=lead_query.filter(
+            oa.OutreachLead.subject.isnot(None),oa.OutreachLead.subject!='',oa.OutreachLead.body.isnot(None),oa.OutreachLead.body!='',
+            db.or_(oa.OutreachLead.gmail_message_id.is_(None),oa.OutreachLead.gmail_message_id==''),
+            db.or_(oa.OutreachLead.gmail_thread_id.is_(None),oa.OutreachLead.gmail_thread_id==''),
+            oa.OutreachLead.sent_at.is_(None),oa.OutreachLead.follow_up_count==0,
+            oa.OutreachLead.status.notin_(['unsubscribed','opted_out','completed_no_reply']),
+            ~oa.OutreachSendAttempt.query.filter(oa.OutreachSendAttempt.lead_id==oa.OutreachLead.id).exists())
+    leads = lead_query.order_by(oa.OutreachLead.updated_at.desc()).offset(lead_offset).limit(500).all()
     jobs = CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign')).order_by(CampaignExecutionJob.created_at.desc()).offset(campaign_offset).limit(100).all()
     outcome_data=load_outcome_data([job.id for job in jobs])
     campaigns = [campaign_view(job,outcome_data) for job in jobs]
@@ -149,6 +185,7 @@ def lead_details(lead_id):
         timeline.append({'type':'email', 'kind':attempt.kind, 'status':attempt.status,
                          'confirmed':attempt.status == 'sent' and bool(attempt.message_id),
                          'at':iso(attempt.created_at), 'message_id':attempt.message_id,
+                         'recipient':attempt.recipient,
                          'subject':messages.get(attempt.idempotency_key, {}).get('subject') or '',
                          'text':messages.get(attempt.idempotency_key, {}).get('body') or ''})
     for reply in oa.OutreachReplyEvidence.query.filter_by(lead_id=lead.id).order_by(oa.OutreachReplyEvidence.created_at).all():
@@ -168,7 +205,7 @@ def lead_details(lead_id):
                             'checked_at':mailbox.get('checked_at') if email_verified else None,
                             'type':'Named contact' if lead.contact_name else ('Company inbox' if (lead.contact_email or '').split('@')[0].lower() in {'info','hello','contact','support','customersupport','sales','office','admin','service','customerservice','general'} else 'Company contact · Person not confirmed') if lead.contact_email else 'No contact yet',
                             'phone':phone.get('value') if phone.get('validated') is True else ''},
-                   sources=sources, subject=lead.subject, body=lead.body, timeline=timeline, bookings=bookings,
+                   sources=sources, subject=lead.subject, body=lead.body, draft_preview=draft_preview(lead), timeline=timeline, bookings=bookings,
                    outreach=activation_view(lead),prospect_quality=for_lead(lead),
                    follow_up_due_at=iso(lead.follow_up_due_at), follow_up_count=lead.follow_up_count,
                    business_type=context.get('business_type') or context.get('candidate_type') or '')
@@ -247,5 +284,10 @@ def activate_contact_outreach(lead_id):
         return jsonify(ok=False,error='This lead was not found.'),404
     if (request.get_json(silent=True) or {}).get('activate') is not True:
         return jsonify(ok=False,error='Explicit outreach activation is required.'),400
+    payload=request.get_json(silent=True) or {}
+    if 'draft_revision' in payload:
+        preview=draft_preview(lead)
+        if not preview or payload['draft_revision']!=preview['revision']:
+            return jsonify(ok=False,error='This draft changed or already has a send attempt. Refresh and review it before sending.'),409
     from src.outreach_activation import activate_prepared_contact
     return activate_prepared_contact(lead)

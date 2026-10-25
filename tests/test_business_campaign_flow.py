@@ -356,13 +356,15 @@ def test_explicit_activation_sends_approved_copy_once_and_schedules_followup(env
     assert detail['outreach']['send_status']=='not_sent'
     url=f'/api/chat/leads/{lead.id}/activate-outreach'
     assert env.post(url,json={},headers=headers).status_code==400
-    first=env.post(url,json={'activate':True},headers=headers)
+    preview=detail['draft_preview']
+    first=env.post(url,json={'activate':True,'draft_revision':preview['revision']},headers=headers)
     assert first.status_code==200 and first.json['outreach']['state']=='active'
     assert first.json['outreach']['send_status']=='sent' and first.json['outreach']['label']=='Sent'
     assert first.json['outreach']['sent_at']
     due=lead.follow_up_due_at
     assert lead.status=='sent' and due and lead.gmail_thread_id=='confirmed-thread'
     assert len(captured)==1 and captured[0][0]==lead.contact_email
+    assert captured[0][1:3]==(preview['subject'],preview['body'])
     assert matches_initial_email(lead,json.loads(lead.evidence_json),captured[0][1],captured[0][2])
     assert captured[0][2].count('👋')==captured[0][2].count('🙂')==1
     assert len(captured[0][3])==1 and captured[0][3][0].get_filename()==RESUME_PATH.name

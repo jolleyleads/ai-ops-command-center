@@ -106,3 +106,36 @@ def test_dashboard_script_is_served_and_chat_stays_the_home_screen(workspace):
     script=workspace.get('/chat-operator/dashboard.js')
     assert script.status_code==200 and 'javascript' in script.content_type
     assert b'/api/chat/dashboard' in script.data
+
+
+def test_email_folders_filter_before_pagination_and_require_confirmed_sends(workspace):
+    draft=saved_lead(status='drafted',subject='Saved',body='Draft')
+    sent=saved_lead(status='replied',subject='Saved',body='Sent',gmail_message_id='m',gmail_thread_id='t',sent_at=datetime.utcnow())
+    unknown=saved_lead(status='drafted',subject='Saved',body='Uncertain')
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=unknown.id,kind='initial',sequence=0,recipient=unknown.contact_email,idempotency_key='unknown-send',status='uncertain'))
+    recovered=saved_lead(status='review',subject='Saved',body='Sent receipt')
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=recovered.id,kind='initial',sequence=0,recipient=recovered.contact_email,idempotency_key='confirmed-send',status='sent',message_id='receipt-m',thread_id='receipt-t'))
+    saved_lead(status='qualified')
+    oa.db.session.commit()
+    result=workspace.get('/api/chat/dashboard?folder=drafts',headers=AUTH).json
+    assert [r['id'] for r in result['leads']]==[draft.id]
+    assert result['lead_total']==1
+    result=workspace.get('/api/chat/dashboard?folder=sent',headers=AUTH).json
+    assert {r['id'] for r in result['leads']}=={sent.id,recovered.id}
+    assert result['lead_total']==2
+    page=workspace.get('/api/chat/dashboard?folder=sent&lead_offset=1',headers=AUTH).json
+    assert len(page['leads'])==1 and page['lead_total']==2
+    assert workspace.get('/api/chat/dashboard?folder=invalid',headers=AUTH).status_code==400
+
+
+def test_draft_preview_is_read_only_and_changed_preview_cannot_send(workspace,monkeypatch):
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**kw:pytest.fail('Changed preview must not send'))
+    lead=saved_lead(status='drafted',subject='Old draft',body='Legacy copy')
+    preview=workspace.get(f'/api/chat/dashboard/leads/{lead.id}',headers=AUTH).json['draft_preview']
+    assert preview['recipient']==lead.contact_email
+    assert preview['body'].count('👋')==preview['body'].count('🙂')==1
+    assert preview['attachment'].endswith('.docx')
+    assert lead.body=='Legacy copy' and oa.OutreachSendAttempt.query.count()==0
+    lead.contact_email='changed@acme.example';oa.db.session.commit()
+    response=workspace.post(f'/api/chat/leads/{lead.id}/activate-outreach',headers=AUTH,json={'activate':True,'draft_revision':preview['revision']})
+    assert response.status_code==409 and 'Refresh and review' in response.json['error']
