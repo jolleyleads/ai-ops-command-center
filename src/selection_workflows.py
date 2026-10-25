@@ -88,7 +88,7 @@ def activate_selected_workflow():
     # The same explicit selection and offer always resolve to one job, even if
     # the result's verification snapshot later changes or the browser retries.
     binding=json.dumps([current_workspace(),ref,offer],sort_keys=True)
-    request_key='selection-manual-v1:'+hashlib.sha256(binding.encode()).hexdigest()
+    request_key='selection-manual-v2:'+hashlib.sha256(binding.encode()).hexdigest()
     base_key=request_key
     retry=data.get('retry_from')
     if retry:
@@ -115,7 +115,7 @@ def activate_selected_workflow():
              '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
              'target_customer':query,'query':query,'territory':territory,'offer':offer,
              'target_count':1,'sending_limit':1,'send_authorized':False,'draft_only':True,
-             '_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True}
+             '_manual_selected_send':'selected-email-v2','_selection_send_authorized':True}
     return enqueue_execution('campaign',payload,request_key)
 
 
@@ -157,19 +157,19 @@ def activate_bulk_workflow():
         seen.add(canonical)
         row,query,territory,lead_id=selected
         items.append({'selection':ref,'company':row.get('company') or row.get('title') or row.get('name') or '',
-                      'payload':{'_selected_workflow':True,'_selected_workspace':OWNER,'_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True,
+                      'payload':{'_selected_workflow':True,'_selected_workspace':OWNER,'_manual_selected_send':'selected-email-v2','_selection_send_authorized':True,
                                  '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
                                  'query':query,'target_customer':query,'territory':territory,'offer':offer,
                                  'target_count':1,'sending_limit':1,'draft_only':True,'send_authorized':False}})
     binding=json.dumps([OWNER,sorted(seen),offer],sort_keys=True)
-    key='selection-bulk-manual-v1:'+hashlib.sha256(binding.encode()).hexdigest()
+    key='selection-bulk-manual-v2:'+hashlib.sha256(binding.encode()).hexdigest()
     existing=CampaignExecutionJob.query.filter_by(request_key=key).first()
     if existing:
         if not owns('campaign',existing.id):return jsonify(ok=False,error='Batch not found.'),404
         return jsonify(_view(existing)),202
     if missing_email:return jsonify(ok=False,error='A selected business has no company-domain email. Activate that business individually to find and verify its contact.'),409
     return enqueue_execution('campaign',{'_selected_bulk':True,'_selected_workspace':OWNER,
-        '_manual_selected_send':'selected-contact-v1','_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
+        '_manual_selected_send':'selected-email-v2','_selection_send_authorized':True,'items':items,'offer':offer,'target_customer':'Selected businesses with email',
         'target_count':len(items),'sending_limit':len(items),'draft_only':True,'send_authorized':False},key)
 
 

@@ -279,6 +279,21 @@ def test_company_fallback_uses_unfiltered_lookup_after_named_contacts_fail(nativ
     assert row['contact_email']=='hello@acme.example' and row['contact_name']==''
     assert row['contact_type']=='Company inbox' and row['email_status']=='Verified'
 
+    # The displayed Hunter inbox need not be printed on the company page:
+    # its durable provider association and current company identity bind it.
+    page={'url':'https://acme.example','candidate_name':'Acme','title':'Acme',
+        'page_text':'Acme business services in Charlotte, NC.', 'directly_fetched':True,
+        'http_status':200,'observed_at':datetime.now(timezone.utc).isoformat()}
+    page['company_identity']=identity_proof('Acme',page,page['url'])
+    monkeypatch.setattr(workflow,'_public_contact_evidence',lambda *a:([page],{}))
+    monkeypatch.setattr(oa,'run_ai',lambda **kw:{'ok':False})
+    import src.email_validation as dns_check
+    monkeypatch.setattr(dns_check,'check_email_domain',lambda *a,**kw:{'domain_status':'mx_published'})
+    from src.manual_outreach import prepare_contact,contact_readiness
+    lead=prepare_contact(row,oa.OutreachLead.query.one(),query,'Charlotte, NC','Automation')
+    assert lead.contact_email=='hello@acme.example' and lead.contact_name==''
+    assert contact_readiness(lead)['ok'] and lead.subject and lead.body
+
 
 def test_cancellation_during_web_research_does_not_start_hunter(native,monkeypatch):
     monkeypatch.setattr(research,'_web_companies',lambda *a:(_ for _ in ()).throw(TimeoutError()))
