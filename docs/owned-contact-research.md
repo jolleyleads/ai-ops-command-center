@@ -1,7 +1,7 @@
-# AutoMake public contact research
+# AutoHunt public contact research
 
 Contact-list requests (businesses/companies plus emails, contacts, enrichment, or
-Hunter) use AutoMake's discovery and source collection before any mailbox check.
+Hunter) use AutoHunt, AutoMake’s discovery and source collection before any mailbox check.
 Hiring, permit, and buying-signal workflows keep their separate evidence rules.
 
 ## Collection
