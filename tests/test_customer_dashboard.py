@@ -60,15 +60,15 @@ def test_details_keep_contact_type_mailbox_proof_and_actual_email_history(worksp
         'contact_assessment':{'mailbox_validation':{'email':'hello@acme.example','mailbox_status':'provider_verified','checked_at':(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()}}}}])
     oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='send-key',status='sent',message_id='gmail-message'))
     oa.db.session.add(oa.ExternalSideEffectCommand(lead_id=lead.id,kind='gmail_send',idempotency_key='command-key',payload_json=json.dumps({'send_key':'send-key','subject':'Actual sent subject','body':'Actual sent body'})))
-    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id='reply-message',from_email=lead.contact_email,body_text='Could we talk tomorrow?'))
+    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id='reply-message',from_email=lead.contact_email,body_text='Could we talk tomorrow?',received_at=datetime.utcnow()+timedelta(minutes=1)))
     oa.db.session.commit()
     result=workspace.get(f'/api/chat/dashboard/leads/{lead.id}',headers=AUTH).json
     assert result['contact']['type']=='Company inbox'
     assert result['contact']['email_label']=='Verified'
     assert result['contact']['phone']=='757 555 0100'
-    assert result['timeline'][0]['confirmed'] is True
-    assert result['timeline'][0]['text']=='Actual sent body'
-    assert result['timeline'][1]['text']=='Could we talk tomorrow?'
+    assert result['timeline'][1]['confirmed'] is True
+    assert result['timeline'][1]['text']=='Actual sent body'
+    assert result['timeline'][0]['text']=='Could we talk tomorrow?'
     lead.contact_email='new@acme.example';oa.db.session.commit()
     result=workspace.get(f'/api/chat/dashboard/leads/{lead.id}',headers=AUTH).json
     assert result['contact']['email_label']!='Verified'
@@ -139,3 +139,31 @@ def test_draft_preview_is_read_only_and_changed_preview_cannot_send(workspace,mo
     lead.contact_email='changed@acme.example';oa.db.session.commit()
     response=workspace.post(f'/api/chat/leads/{lead.id}/activate-outreach',headers=AUTH,json={'activate':True,'draft_revision':preview['revision']})
     assert response.status_code==409 and 'Refresh and review' in response.json['error']
+
+
+def test_outreach_folders_order_by_event_before_pagination(workspace):
+    old=datetime(2026,1,1);new=old+timedelta(days=1)
+    first=saved_lead(status='sent',gmail_message_id='first',gmail_thread_id='first',sent_at=old,updated_at=new+timedelta(days=5))
+    second=saved_lead(status='sent',gmail_message_id='second',gmail_thread_id='second',sent_at=new,updated_at=old)
+    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=first.id,message_id='new-reply',received_at=new+timedelta(days=2),created_at=old))
+    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=second.id,message_id='old-reply',received_at=new,created_at=new+timedelta(days=3)))
+    oa.db.session.commit()
+    rows=workspace.get('/api/chat/dashboard?folder=sent',headers=AUTH).json['leads']
+    assert [r['id'] for r in rows]==[second.id,first.id]
+    page=workspace.get('/api/chat/dashboard?folder=sent&lead_offset=1',headers=AUTH).json
+    assert [r['id'] for r in page['leads']]==[first.id]
+    rows=workspace.get('/api/chat/dashboard?folder=conversations',headers=AUTH).json['leads']
+    assert [r['id'] for r in rows]==[first.id,second.id]
+    assert rows[0]['activity_at'].startswith('2026-01-04')
+
+
+def test_drafts_and_campaigns_have_stable_newest_first_order(workspace):
+    stamp=datetime(2026,1,1)
+    first=saved_lead(status='drafted',subject='Draft',body='First',updated_at=stamp)
+    second=saved_lead(status='drafted',subject='Draft',body='Second',updated_at=stamp)
+    for name,at in [('old',stamp),('new',stamp+timedelta(days=1))]:
+        oa.db.session.add(jobs.CampaignExecutionJob(id=name,kind='campaign',status='completed',payload_json='{}',created_at=at))
+    oa.db.session.commit()
+    result=workspace.get('/api/chat/dashboard?folder=drafts',headers=AUTH).json
+    assert [r['id'] for r in result['leads']]==[second.id,first.id]
+    assert [r['id'] for r in result['campaigns']]==['new','old']
