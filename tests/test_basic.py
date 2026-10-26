@@ -25,6 +25,9 @@ def test_main_domain_opens_marketing_homepage_and_preserves_app():
     assert b'info@automakeai.live' in response.data
     assert b'Illustrative reviews, not customer testimonials.' in response.data
     assert b'href="/chat-operator"' in response.data
+    assert b'href="/login"' in response.data
+    assert b'mailto:jolleyleads@gmail.com' in response.data
+    assert client.get('/login').status_code == 200
     assert client.get('/chat-operator').status_code == 200
     assert client.get('/static/home.css').status_code == 200
     assert client.get('/static/home.js').status_code == 200

@@ -1,5 +1,10 @@
 (function(){
   'use strict';
+  // Keep the existing signed-in dashboard shortcut on the public homepage.
+  fetch('/auth/session',{credentials:'same-origin',cache:'no-store'})
+    .then(function(response){return response.ok?response.json():null;})
+    .then(function(state){if(state&&state.signed_in===true)document.querySelectorAll('[data-login]').forEach(function(link){link.textContent='Open Dashboard';link.href='/chat-operator';});})
+    .catch(function(){});
   var form=document.getElementById('demo-form');
   try{form.elements.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'America/New_York';}catch(ignore){}
   form.addEventListener('submit',function(event){
