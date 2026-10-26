@@ -106,14 +106,27 @@ def dashboard():
     lead_query=oa.OutreachLead.query.filter(oa.OutreachLead.status!='archived',scope(oa.OutreachLead,'lead'))
     campaign_query=CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign'))
     folder=request.args.get('folder','')
-    if folder not in {'','sent','drafts'}:
+    if folder not in {'','sent','drafts','conversations'}:
         return jsonify(ok=False,error='Unknown email folder.'),400
     confirmed=oa.OutreachSendAttempt.query.filter(
         oa.OutreachSendAttempt.lead_id==oa.OutreachLead.id,
         oa.OutreachSendAttempt.kind=='initial',oa.OutreachSendAttempt.status=='sent',
         oa.OutreachSendAttempt.message_id.isnot(None),oa.OutreachSendAttempt.message_id!='',
         oa.OutreachSendAttempt.thread_id.isnot(None),oa.OutreachSendAttempt.thread_id!='').exists()
+    # Sort each folder by its own event before applying pagination.
+    sent_time = db.session.query(db.func.max(oa.OutreachSendAttempt.updated_at)).filter(
+        oa.OutreachSendAttempt.lead_id==oa.OutreachLead.id,
+        oa.OutreachSendAttempt.status=='sent',
+        oa.OutreachSendAttempt.message_id.isnot(None),oa.OutreachSendAttempt.message_id!='').correlate(oa.OutreachLead).scalar_subquery()
+    reply_time = db.session.query(db.func.max(db.func.coalesce(
+        oa.OutreachReplyEvidence.received_at,oa.OutreachReplyEvidence.created_at))).filter(
+        oa.OutreachReplyEvidence.lead_id==oa.OutreachLead.id).correlate(oa.OutreachLead).scalar_subquery()
+    last_sent = db.func.coalesce(sent_time,oa.OutreachLead.sent_at,oa.OutreachLead.created_at)
+    last_reply = db.func.coalesce(reply_time,oa.OutreachLead.replied_at,oa.OutreachLead.created_at)
+    activity_time = db.case((last_reply>last_sent,last_reply),else_=last_sent)
+    order_time = oa.OutreachLead.updated_at
     if folder=='sent':
+        order_time = last_sent
         lead_query=lead_query.filter(db.or_(confirmed,db.and_(
             oa.OutreachLead.gmail_message_id.isnot(None),oa.OutreachLead.gmail_message_id!='',
             oa.OutreachLead.gmail_thread_id.isnot(None),oa.OutreachLead.gmail_thread_id!='',oa.OutreachLead.sent_at.isnot(None))))
@@ -125,8 +138,13 @@ def dashboard():
             oa.OutreachLead.sent_at.is_(None),oa.OutreachLead.follow_up_count==0,
             oa.OutreachLead.status.notin_(['unsubscribed','opted_out','completed_no_reply']),
             ~oa.OutreachSendAttempt.query.filter(oa.OutreachSendAttempt.lead_id==oa.OutreachLead.id).exists())
-    leads = lead_query.order_by(oa.OutreachLead.updated_at.desc()).offset(lead_offset).limit(500).all()
-    jobs = CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign')).order_by(CampaignExecutionJob.created_at.desc()).offset(campaign_offset).limit(100).all()
+    elif folder=='conversations':
+        lead_query=lead_query.filter(db.or_(oa.OutreachLead.gmail_message_id!='',
+            oa.OutreachLead.replied_at.isnot(None),oa.OutreachLead.status=='drafted'))
+        order_time=db.case((db.or_(oa.OutreachLead.gmail_message_id!='',
+            oa.OutreachLead.replied_at.isnot(None)),activity_time),else_=oa.OutreachLead.updated_at)
+    leads = lead_query.add_columns(order_time.label('activity_at')).order_by(order_time.desc(),oa.OutreachLead.id.desc()).offset(lead_offset).limit(500).all()
+    jobs = CampaignExecutionJob.query.filter(CampaignExecutionJob.kind=='campaign',scope(CampaignExecutionJob,'campaign')).order_by(CampaignExecutionJob.created_at.desc(),CampaignExecutionJob.id.desc()).offset(campaign_offset).limit(100).all()
     outcome_data=load_outcome_data([job.id for job in jobs])
     campaigns = [campaign_view(job,outcome_data) for job in jobs]
     memberships = {}
@@ -136,7 +154,7 @@ def dashboard():
     from src.outreach_activation import activation_view
     from src.prospect_quality import for_lead
     records = []
-    for lead in leads:
+    for lead, activity_at in leads:
         _, _, context = evidence_parts(lead)
         records.append({'id':lead.id, 'company':lead.company, 'location':lead.location,
                         'business_type':context.get('business_type') or context.get('candidate_type') or '',
@@ -144,6 +162,7 @@ def dashboard():
                         'has_sent_message':bool(lead.gmail_message_id), 'replied_at':iso(lead.replied_at),
                         'contact_name':lead.contact_name or '', 'contact_email':lead.contact_email or '', 'has_email':bool(lead.contact_email),
                         'follow_up_due_at':iso(lead.follow_up_due_at), 'updated_at':iso(lead.updated_at),
+                        'created_at':iso(lead.created_at), 'activity_at':iso(activity_at),
                         'campaign_ids':memberships.get(lead.id, []),'outreach':activation_view(lead), 'prospect_quality':for_lead(lead),'selection':{'kind':'lead','lead_id':lead.id}})
     return jsonify(ok=True, leads=records, campaigns=campaigns, lead_limit=500, campaign_limit=100,lead_offset=lead_offset,campaign_offset=campaign_offset,lead_total=lead_query.count(),campaign_total=campaign_query.count(),
                    generated_at=iso(datetime.utcnow()), scope='customer_workspace')
@@ -195,7 +214,8 @@ def lead_details(lead_id):
                          'from':reply.from_email, 'text':reply.body_text, 'opted_out':reply.opted_out})
     bookings = [{'status':b.status, 'confirmed':b.status == 'confirmed' and bool(b.event_id),
                  'start':b.start, 'end':b.end, 'timezone':b.timezone, 'url':safe_url(b.event_url)}
-                for b in oa.OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(oa.OutreachBookingAttempt.created_at.desc()).all()]
+                for b in oa.OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(oa.OutreachBookingAttempt.start.desc(),oa.OutreachBookingAttempt.id.desc()).all()]
+    timeline.sort(key=lambda row: row.get('at') or '', reverse=True)
     phone = fields.get('phone') or {}
     person = fields.get('decision_maker') or {}
     preview=draft_preview(lead)
@@ -218,7 +238,7 @@ def lead_details(lead_id):
 @app.route('/api/chat/dashboard/appointments', methods=['GET'])
 @protected
 def appointments():
-    bookings = oa.OutreachBookingAttempt.query.filter_by(status='confirmed').order_by(oa.OutreachBookingAttempt.start).limit(500).all()
+    bookings = oa.OutreachBookingAttempt.query.filter_by(status='confirmed').order_by(oa.OutreachBookingAttempt.start.desc(),oa.OutreachBookingAttempt.id.desc()).limit(500).all()
     rows = []
     for booking in bookings:
         if not booking.event_id:continue
