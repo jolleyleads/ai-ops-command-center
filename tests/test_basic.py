@@ -15,18 +15,22 @@ def test_chat_operator_route_serves_connected_ui():
     assert "verification and safe-send checks" in body
 
 
-def test_main_domain_opens_existing_customer_chat():
+def test_main_domain_opens_public_homepage():
     import commercial_app
     client = commercial_app.app.test_client()
-    response = client.get('/')
-    assert response.status_code == 302
-    assert response.location == '/chat-operator'
-    page = client.get('/', follow_redirects=True)
+    page = client.get('/')
     assert page.status_code == 200
-    assert b'id="workspace-menu"' in page.data
-    assert b'Message AutoMake AI' in page.data
-    assert b'public-demo-note' not in page.data
-    assert b'Book a Demo' not in page.data
-    assert b'account-login' not in page.data
-    assert b'account-logout' not in page.data
-    assert b'/auth/session' not in page.data
+    assert b'Less busywork.' in page.data
+    assert b'Book a Demo' in page.data
+    assert b'href="/login"' in page.data
+    assert b'id="book-demo"' in page.data
+    assert b'mailto:jolleyleads@gmail.com' in page.data
+    assert b'not a real customer review' not in page.data
+    assert client.get('/static/home.css').status_code == 200
+    assert client.get('/static/home.js').status_code == 200
+    assert client.get('/chat-operator/automake-logo.svg').status_code == 200
+    assert client.get('/login').status_code == 200
+    chat = client.get('/chat-operator')
+    assert chat.status_code == 200
+    assert b'id="workspace-menu"' in chat.data
+    assert b'Message AutoMake AI' in chat.data
