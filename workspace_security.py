@@ -112,7 +112,7 @@ def protect_workspace_routes():
     workspace=current_workspace()
     if not workspace:return _deny('Sign in to access this workspace.')
     customer_read=endpoint in {'dashboard','lead_details','appointments','campaign_execution_status'}
-    if workspace!=OWNER and not customer_read:
+    if workspace!=OWNER and not customer_read and endpoint not in {'salesforce_connect','salesforce_callback','salesforce_contacts'}:
         return _deny('This account has an isolated workspace. Sending and integrations require a separately connected mailbox.',403)
     import outreach_automation as oa
     if request.method not in {'GET','HEAD','OPTIONS'} and not oa._operator_authorized() and not oa._csrf_ok():
