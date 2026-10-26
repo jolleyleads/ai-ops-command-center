@@ -144,11 +144,10 @@ def for_lead(lead, now=None):
     validated, context, evidence = _server_qualification_inputs(lead)
     assessment = validated.get('contact_assessment') or {}
     mailbox = assessment.get('mailbox_validation') or {}
-    checked = mailbox.get('checked_at')
-    try:
-        stamp = datetime.fromisoformat(str(checked).replace('Z', '+00:00'))
-        fresh = timedelta(0) <= (now or datetime.now(timezone.utc))-stamp <= timedelta(hours=1)
-    except (TypeError, ValueError):fresh = False
+    from src.mailbox_verification import lead_status
+    verification=lead_status(lead,now=now)
+    mailbox=verification['receipt']
+    fresh=verification['verified']
     contact = {'person_supported': person_email_supported(assessment, lead.contact_email),
                'mailbox_verified': fresh and mailbox.get('mailbox_status')=='provider_verified' and mailbox.get('email')==lead.contact_email,
                'mailbox_status': mailbox.get('mailbox_status'), 'email_present': bool(lead.contact_email), 'name': lead.contact_name}

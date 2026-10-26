@@ -14,6 +14,7 @@ POLICY='selected-email-v2'
 
 def contact_readiness(lead):
     import outreach_automation as oa
+    from src.mailbox_verification import lead_status
     reasons=[]
     if not owns('lead',lead.id,OWNER):reasons.append('CONTACT_OWNERSHIP_REQUIRED')
     address=oa.normalize_email(lead.contact_email)
@@ -26,7 +27,7 @@ def contact_readiness(lead):
         try:return timedelta(0)<=now-datetime.fromisoformat(str(value).replace('Z','+00:00'))<=timedelta(hours=1)
         except (TypeError,ValueError):return False
     source=validated.get('email_source_url')
-    proof_found=False;mailbox_found=False
+    proof_found=False;mailbox_found=lead_status(lead)['verified']
     for row in evidence:
         if oa.normalize_email(row.get('email'))!=address:continue
         proof=row.get('company_identity') or {}
@@ -34,8 +35,6 @@ def contact_readiness(lead):
             and name_key(proof.get('company_name'))==name_key(lead.company)
             and owned_host(proof.get('source_url') or '',lead.source_url)
             and re.fullmatch(r'[a-f0-9]{64}',str(proof.get('content_sha256') or '')) and fresh(row.get('observed_at'))):proof_found=True
-        mailbox=(row.get('contact_assessment') or {}).get('mailbox_validation') or {}
-        if mailbox.get('mailbox_status')=='provider_verified' and oa.normalize_email(mailbox.get('email'))==address and fresh(mailbox.get('checked_at')):mailbox_found=True
     if not proof_found:reasons.append('CURRENT_COMPANY_EMAIL_SOURCE_REQUIRED')
     if not mailbox_found:reasons.append('VERIFIED_MAILBOX_REQUIRED')
     return {'ok':not reasons,'reason_codes':reasons}
@@ -97,7 +96,7 @@ def prepare_contact(selected,existing,query,territory,offer):
     from workspace_security import claim
     from v1_orchestration import _public_contact_evidence,EMAIL_SCAN_RE
     from src.company_identity import current_contact_source
-    from src.hunter_mailbox import verify_mailbox,enabled
+    from src.mailbox_verification import verify_mailbox,enabled
     from src.enrichment import enrich_lead
     from src.hunter_discovery import enrich_contact
     from src.contact_assessment import person_email_supported
@@ -108,9 +107,10 @@ def prepare_contact(selected,existing,query,territory,offer):
     from src.hunter_research import allows_company_inbox
     selected_email=oa.normalize_email(selected.get('contact_email') or selected.get('email') or next((x.get('email') for x in selected.get('contacts') or [] if isinstance(x,dict) and x.get('email')),''))
     preferred=selected_email or oa.normalize_email(lead.contact_email if lead else '')
-    required_person=not preferred and bool(re.search(r'(?i)\b(?:decision[ -]?makers?|named contacts?|owners?|founders?|ceos?)\b',query)) and not allows_company_inbox(query)
+    required_person=bool(re.search(r'(?i)\b(?:decision[ -]?makers?|named contacts?|owners?|founders?|ceos?)\b',query)) and not allows_company_inbox(query)
     prior_assessment=oa._server_qualification_inputs(lead)[0].get('contact_assessment') or {} if lead else {}
     person_ready=bool(lead and person_email_supported(prior_assessment,oa.normalize_email(lead.contact_email)))
+    if required_person and not person_ready:preferred=''
     try:
         checked=datetime.fromisoformat(str((prior_assessment.get('hunter_discovery') or {}).get('checked_at') or '').replace('Z','+00:00'))
         hunter_checked=timedelta(0)<=datetime.now(timezone.utc)-checked<=timedelta(hours=1)
@@ -139,7 +139,7 @@ def prepare_contact(selected,existing,query,territory,offer):
         for email in EMAIL_SCAN_RE.findall(str(row.get('page_text') or row.get('text') or '')):
             email=oa.normalize_email(email)
             if (not preferred or email==preferred) and oa._recipient_mailbox_allowed(email) and oa.email_on_domain(email,website) and email not in [x[0] for x in choices]:choices.append((email,row))
-    checkpoint('hunter_contact_lookup')
+    checkpoint('checking_contacts' if owned else 'hunter_contact_lookup')
     enrichment=enrich_lead({'company':company,'website':website,'target_location':territory,'query':query+' '+offer},rows,email_allowed=oa._recipient_mailbox_allowed)
     provider_people=selected.get('provider_contact_research') is True or bool(lead and any((r.get('context') or {}).get('provider_contact_research') is True
         for r in oa._server_qualification_inputs(lead)[2]))

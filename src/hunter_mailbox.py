@@ -146,8 +146,8 @@ def verify_mailbox(email,get=None,*,research_only=False):
     if not key or key=='test-api-key':return base_receipt(email,'HUNTER_REAL_CREDENTIAL_REQUIRED')
     if not expected:return base_receipt(email,'HUNTER_ACCOUNT_EMAIL_REQUIRED')
     if not has_app_context():return base_receipt(email,'HUNTER_CACHE_UNAVAILABLE')
-    max_age_days=30 if research_only else 7
-    cache_key=hashlib.sha256(('hunter:'+hashlib.sha256(key.encode()).hexdigest()+':'+expected+':'+email+(':research-30' if research_only else '')).encode()).hexdigest()
+    max_age_days=7
+    cache_key=hashlib.sha256(('hunter:'+hashlib.sha256(key.encode()).hexdigest()+':'+expected+':'+email).encode()).hexdigest()
     now=time.time()
     token=uuid.uuid4().hex
     # Separate transaction: never commit/roll back the caller's lead workflow.
@@ -201,7 +201,7 @@ def verify_mailbox(email,get=None,*,research_only=False):
         verified=datetime.fromisoformat(receipt['provider_verified_on'].replace('Z','+00:00'))
         verified=verified.replace(tzinfo=timezone.utc) if verified.tzinfo is None else verified.astimezone(timezone.utc)
         ttl=max(0,min(86400,(verified+timedelta(days=max_age_days)).timestamp()-time.time()))
-    receipt['verification_policy']='research-last-known-30-days' if research_only else 'send-current-7-days'
+    receipt['verification_policy']='current-7-days'
     try:
         with Session(db.engine) as session:
             completed=session.execute(update(HunterMailboxCheck).where(HunterMailboxCheck.key==cache_key,HunterMailboxCheck.state=='reserved',HunterMailboxCheck.lease_token==token).values(state='complete',expires_at=time.time()+ttl,receipt_json=json.dumps(receipt))).rowcount

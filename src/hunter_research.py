@@ -180,16 +180,17 @@ def contact_view(lead):
            'Your Hunter connection needs attention.' if any(code in reasons for code in ['HUNTER_ACCOUNT_MISMATCH','HUNTER_ACCOUNT_EMAIL_REQUIRED','HUNTER_REAL_CREDENTIAL_REQUIRED','HUNTER_FREE_PLAN_REQUIRED','HUNTER_NOT_ENABLED']) else
            'Hunter could not verify this contact yet.' if reasons and 'HUNTER_NO_DOMAIN_CONTACTS' not in reasons else '')
     person=(enrichment.get('fields') or {}).get('decision_maker') or {}
-    valid=bool(lead.contact_email and check.get('email')==lead.contact_email
-               and check.get('mailbox_status')=='provider_verified')
+    from src.mailbox_verification import lead_status
+    status=lead_status(lead)
+    valid=status['verified']
     return {**research,'company':lead.company,'title':lead.company,'website':lead.source_url,
         'source_url':lead.source_url,'location':lead.location,'lead_id':lead.id,
         'contact_name':lead.contact_name or '', 'contact_role':person.get('title') if lead.contact_name else '',
         'contact_email':lead.contact_email if valid else '',
         'contact_type':'Decision-maker' if valid and lead.contact_name else 'Company inbox' if valid else '',
         'contact_issue':issue if not valid else '',
-        'email_status':'Verified' if valid else 'Not verified',
-        'email_verified_on':check.get('provider_verified_on') if valid else None,
+        'email_status':status['label'],'mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
+        'email_verified_on':status['verified_on'] if valid else None,
         'contact_status':'Verified email' if valid else 'No verified email found',
         'classification':'Business found','provider_contact_research':True,
         'contact_check':{'mailbox_verified':valid,'named_contact':bool(valid and lead.contact_name)}}
