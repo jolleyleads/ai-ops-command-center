@@ -40,13 +40,11 @@ can replace those identity checks.
 Official reference: https://hunter.io/api-documentation/v2#email-verifier
 Account/credit reference: https://hunter.io/api-documentation/v2#account
 
-Direct contact-list research uses a separate `research_only` verifier policy and
-cache namespace: it can show Hunter's last reported valid result from up to 30
-days ago, with the actual verification date, matching Hunter's documented API
-response window. This is not send eligibility. The existing send-time verifier
-still uses the seven-day policy and cannot reuse the research cache. Company
-source proof, suppression and the displayed recipient are checked again during
-activation.
+Research and sending now share the same seven-day mailbox policy and cache. The
+`research_only` argument remains compatible but never relaxes freshness. Public
+company source proof is refreshed separately before activation. When Verifalia
+is connected, the shared verifier uses its free allowance without falling back
+to Hunter verification. Hunter contact discovery remains a separate integration.
 
 Free account/Discover requests may reclaim a cached quota pause so that a restored
 balance can be checked. Active leases and identity/plan blocks are never reclaimed

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytest
 import commercial_app
 import outreach_automation as oa
@@ -57,21 +57,21 @@ def test_details_keep_contact_type_mailbox_proof_and_actual_email_history(worksp
     lead.subject='Your business';lead.body='Saved initial message'
     lead.evidence_json=json.dumps([{'url':'https://acme.example/contact','enrichment':{
         'fields':{'phone':{'value':'757 555 0100','validated':True}},
-        'contact_assessment':{'mailbox_validation':{'email':'hello@acme.example','mailbox_status':'provider_verified','checked_at':'2026-10-17T05:00:00Z'}}}}])
+        'contact_assessment':{'mailbox_validation':{'email':'hello@acme.example','mailbox_status':'provider_verified','checked_at':(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()}}}}])
     oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,kind='initial',sequence=0,recipient=lead.contact_email,idempotency_key='send-key',status='sent',message_id='gmail-message'))
     oa.db.session.add(oa.ExternalSideEffectCommand(lead_id=lead.id,kind='gmail_send',idempotency_key='command-key',payload_json=json.dumps({'send_key':'send-key','subject':'Actual sent subject','body':'Actual sent body'})))
     oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id='reply-message',from_email=lead.contact_email,body_text='Could we talk tomorrow?'))
     oa.db.session.commit()
     result=workspace.get(f'/api/chat/dashboard/leads/{lead.id}',headers=AUTH).json
     assert result['contact']['type']=='Company inbox'
-    assert result['contact']['email_label']=='Hunter verified'
+    assert result['contact']['email_label']=='Verified'
     assert result['contact']['phone']=='757 555 0100'
     assert result['timeline'][0]['confirmed'] is True
     assert result['timeline'][0]['text']=='Actual sent body'
     assert result['timeline'][1]['text']=='Could we talk tomorrow?'
     lead.contact_email='new@acme.example';oa.db.session.commit()
     result=workspace.get(f'/api/chat/dashboard/leads/{lead.id}',headers=AUTH).json
-    assert result['contact']['email_label']!='Hunter verified'
+    assert result['contact']['email_label']!='Verified'
     assert result['contact']['type']!='Named contact'
 
 

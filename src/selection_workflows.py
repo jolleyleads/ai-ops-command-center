@@ -103,9 +103,13 @@ def preview_selected_workflow():
 
 @app.post('/api/chat/workflows/activate')
 def activate_selected_workflow():
+    return enqueue_selected_workflow(request.get_json(silent=True) or {})
+
+
+def enqueue_selected_workflow(data):
     # Workspace middleware enforces authentication, owner mailbox access and CSRF.
     if current_workspace()!=OWNER:return jsonify(ok=False,error='Sign in to the connected workspace to activate a workflow.'),403
-    data=request.get_json(silent=True) or {}
+    if not isinstance(data,dict):return jsonify(ok=False,error='Invalid workflow.'),400
     if data.get('activate') is not True:return jsonify(ok=False,error='Explicit workflow activation is required.'),400
     ref=data.get('selection') or {}
     if not isinstance(ref,dict):return jsonify(ok=False,error='Invalid business selection.'),400
@@ -116,12 +120,23 @@ def activate_selected_workflow():
     offer=str(data.get('offer') or '').strip()[:1200]
     if not offer:return jsonify(ok=False,error='Describe your offer in Task options before activating this workflow.'),400
     row,query,territory,lead_id=selected
+    reviewed=None
+    if data.get('draft_revision') is not None:
+        from customer_dashboard import draft_preview
+        lead=db.session.get(oa.OutreachLead,lead_id) if lead_id else None
+        reviewed=draft_preview(lead) if lead else None
+        if not reviewed or reviewed['revision']!=data['draft_revision']:
+            return jsonify(ok=False,error='This draft changed. Refresh and review it before sending.'),409
     # The same explicit selection and offer always resolve to one job, even if
     # the result's verification snapshot later changes or the browser retries.
-    binding=json.dumps([current_workspace(),ref,offer],sort_keys=True)
+    binding=json.dumps([current_workspace(),ref,offer]+([reviewed['revision']] if reviewed else []),sort_keys=True)
     request_key='selection-manual-v2:'+hashlib.sha256(binding.encode()).hexdigest()
     base_key=request_key
     retry=data.get('retry_from')
+    if reviewed and not retry:
+        latest=CampaignExecutionJob.query.filter(CampaignExecutionJob.request_key.like(base_key+'%')).order_by(CampaignExecutionJob.created_at.desc()).first()
+        if latest and latest.status in {'queued','running'}:return jsonify(_view(latest)),202
+        if latest and latest.status=='completed' and (_unpack(latest.result_json).get('workflow') or {}).get('state')=='held':retry=latest.id
     if retry:
         prior=db.session.get(CampaignExecutionJob,retry) if isinstance(retry,str) else None
         if not prior or not owns('campaign',prior.id) or _unpack(prior.payload_json).get('_selection_base')!=base_key:
@@ -146,7 +161,7 @@ def activate_selected_workflow():
              '_selected_business':row,'_selected_lead_id':lead_id,'_selection_reference':ref,
              'target_customer':query,'query':query,'territory':territory,'offer':offer,
              'target_count':1,'sending_limit':1,'send_authorized':False,'draft_only':True,
-             '_manual_selected_send':'selected-email-v2','_selection_send_authorized':True}
+             '_manual_selected_send':'selected-email-v2','_selection_send_authorized':True,'_reviewed_draft':reviewed}
     return enqueue_execution('campaign',payload,request_key)
 
 
@@ -296,7 +311,13 @@ def run_selected_workflow(data,job_id):
                     scope(oa.OutreachLead,'lead',OWNER),oa.OutreachSendAttempt.lead_id!=lead.id,
                     oa.OutreachSendAttempt.recipient==oa.normalize_email(lead.contact_email),
                     oa.OutreachSendAttempt.kind=='initial').first() if lead.contact_email else None
-                if duplicate:
+                reviewed=data.get('_reviewed_draft')
+                from src.outreach_copy import approved_initial
+                copy=approved_initial(lead,oa._server_qualification_inputs(lead)[2])
+                changed=reviewed and any(reviewed.get(k)!=(lead.contact_email if k=='recipient' else copy.get(k)) for k in ('recipient','subject','body'))
+                if changed:
+                    outcome={'ok':False,'error':'The draft recipient or message changed during contact research. Refresh and review it before sending.','reason_codes':['DRAFT_REVIEW_REQUIRED']}
+                elif duplicate:
                     outcome={'ok':False,'error':'This recipient already has an initial send or attempt on another saved lead. Review it before sending again.',
                              'reason_codes':['DUPLICATE_RECIPIENT_SEND_REVIEW_REQUIRED']}
                 elif manual and activation_view(lead)['state']!='active':

@@ -308,9 +308,10 @@ def _orchestrate_discovery_serial(payload, *, authorized_send=False, draft_only=
             assessment=(result.get('_contact_enrichment') or {}).get('contact_assessment') or {}
             mailbox=assessment.get('mailbox_validation') or {}
             from src.contact_assessment import person_email_supported
+            from src.mailbox_verification import current
             summary['contact_checks'].append({
                 'company':company,'identity_status':(result.get('_contact_enrichment') or {}).get('identity_status','unproven'),
-                'mailbox_verified':bool(email and mailbox.get('mailbox_status')=='provider_verified' and str(mailbox.get('email') or '').casefold()==email.casefold()),
+                'mailbox_verified':bool(email and current(mailbox,email)),
                 'named_contact':bool(email and person_email_supported(assessment,email)),
                 'checked_at':mailbox.get('checked_at'),
                 'provider_reason_codes':list(dict.fromkeys(((assessment.get('hunter_discovery') or {}).get('reason_codes') or [])+(mailbox.get('reason_codes') or [])))})

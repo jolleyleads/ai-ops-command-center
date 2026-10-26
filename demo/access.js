@@ -29,25 +29,31 @@
 
 window.contactProgressMessage=function(row){
   var check=row.contact_check;
-  if(check&&check.mailbox_verified)return (check.named_contact?'Decision-maker email verified.':'Company email verified.')+(row.qualification_status==='Not qualified'?' Business qualification still needs evidence.':'');
+  if(check&&check.mailbox_verified&&(!row.email_status||!window.mailboxStatus||window.mailboxStatus(row)==='Verified'))return (check.named_contact?'Decision-maker email verified.':'Company email verified.')+(row.qualification_status==='Not qualified'?' Business qualification still needs evidence.':'');
   return row.error?'Contact verification needs review. Business research is preserved.':'';
+};
+window.mailboxStatus=function(row){
+  var label=row.email_status||row.contact_status||'Finding contact',proof=row.mailbox_verification||{};
+  if(label!=='Verified')return label;
+  var checked=Date.parse(proof.checked_at||row.email_verified_on||''),verified=Date.parse(proof.verified_on||row.email_verified_on||proof.checked_at||''),now=Date.now(),week=7*86400000;
+  return Number.isFinite(checked)&&Number.isFinite(verified)&&checked<=now&&verified<=now&&now-checked<=week&&now-verified<=week?'Verified':'Verification expired';
 };
 window.renderContactSummary=function(row){
   if(!row.provider_contact_research)return '';
   var name=row.contact_name||(row.contact_type==='Company inbox'?'Company inbox':row.contact_issue?'Contact lookup paused':row.email_status?'Contact not found':'Finding contact…'),role=row.contact_role||'';
-  var email=row.contact_email||'',status=row.email_status||row.contact_status||'Finding contact';
+  var email=row.contact_email||'',status=window.mailboxStatus?window.mailboxStatus(row):row.email_status||row.contact_status||'Finding contact';
   var owned=row.owned_contact_research===true;
   var sources=owned&&/^https?:\/\//.test(row.email_source_url||'')?'<p><a href="'+esc(row.email_source_url)+'" target="_blank" rel="noopener noreferrer">Email source</a>'+(row.email_observed_at?' · Found '+esc(new Date(row.email_observed_at).toLocaleDateString()):'')+'</p>':'';
   if(owned&&row.contact_phone)sources+='<p>Phone: '+esc(row.contact_phone)+(/^https?:\/\//.test(row.phone_source_url||'')?' · <a href="'+esc(row.phone_source_url)+'" target="_blank" rel="noopener noreferrer">Phone source</a>':'')+'</p>';
   var additional=(row.public_contacts||[]).filter(function(c){return c.email&&c.email!==email;});
   if(owned&&additional.length)sources+='<details><summary>Other published emails ('+additional.length+')</summary>'+additional.slice(0,8).map(function(c){return '<p>'+esc(c.email)+' · Mailbox not verified'+(/^https?:\/\//.test(c.source_url||'')?' · <a href="'+esc(c.source_url)+'" target="_blank" rel="noopener noreferrer">Source</a>':'')+'</p>';}).join('')+'</details>';
-  var verify=owned&&email&&row.lead_id&&status!=='Verified'?'<button type="button" class="ghost" data-verify-mailbox="'+esc(row.lead_id)+'">Verify mailbox with Hunter</button><p class="meta">Optional · Uses verification credits · Does not send email</p>':'';
+  var verify=owned&&email&&row.lead_id&&status!=='Verified'?'<button type="button" class="ghost" data-verify-mailbox="'+esc(row.lead_id)+'">Verify email</button><p class="meta">Uses your connected verifier · Free daily allowance with Verifalia · Does not send email</p>':'';
   return '<div class="contact-summary" data-mailbox-verified="'+(status==='Verified'?'true':'false')+'"'+(owned&&row.lead_id?' data-owned-contact="'+esc(row.lead_id)+'"':'')+'>'+(row.business_status?'<p class="meta">'+esc(row.business_status)+'</p>':'')+'<dl class="contact-grid"><div><dt>Contact</dt><dd>'+esc(name)+(role?'<small>'+esc(role)+'</small>':'')+'</dd></div><div><dt>Email</dt><dd>'+(email?esc(email):owned?'No published email found':'No verified email yet')+'<small>'+esc(status)+(row.email_verified_on?' · Last verified '+esc(row.email_verified_on):'')+'</small></dd></div></dl>'+(row.research_source?'<p class="meta">Found with '+esc(owned?'AutoHunt':row.research_source)+(owned?' · Mailbox verification separate':' · Contact checked with Hunter')+'</p>':'')+sources+verify+(row.contact_issue?'<p class="meta">'+esc(row.contact_issue)+'</p>':'')+'</div>';
 };
 window.businessMatchNote=function(row){return row.request_match_status==='unconfirmed'?'<p class="meta">Hiring not confirmed. Contact research only.</p>':'';};
 window.researchResultHeading=function(result){
   var research=result.discovery||result,matched=(research.results||[]).length;
-  if(result.contact_research){var verified=(research.results||[]).filter(function(r){return r.email_status==='Verified';}).length;if(result.owned_contact_research){var found=(research.results||[]).filter(function(r){return r.contact_email;}).length;return 'Found '+matched+' businesses · '+found+' emails found · '+verified+' mailboxes verified.';}return 'Found '+matched+' businesses · '+verified+' verified emails.';}
+  if(result.contact_research){var verified=(research.results||[]).filter(function(r){return (window.mailboxStatus?window.mailboxStatus(r):r.email_status)==='Verified';}).length;if(result.owned_contact_research){var found=(research.results||[]).filter(function(r){return r.contact_email;}).length;return 'Found '+matched+' businesses · '+found+' emails found · '+verified+' mailboxes verified.';}return 'Found '+matched+' businesses · '+verified+' verified emails.';}
   var additional=(research.contact_research_candidates||[]).length;
   return additional?(matched?matched+' hiring matches confirmed. ':'No hiring matches confirmed. ')+
     'Contact research saved for '+additional+' additional '+(additional===1?'business.':'businesses.'):'Found '+matched+' businesses.';
@@ -57,7 +63,7 @@ window.verifyOwnedMailbox=function(button){
   var leadId=Number(button.dataset.verifyMailbox);button.disabled=true;button.textContent='Checking mailbox…';
   workspaceMutation('/api/chat/contacts/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lead_id:leadId})})
     .then(function(result){document.querySelectorAll('[data-owned-contact="'+leadId+'"]').forEach(function(container){var bubble=container.closest('.bubble'),box=document.createElement('div');box.innerHTML=window.renderContactSummary(result.contact);container.replaceWith(box.firstElementChild);if(bubble){var heading=Array.from(bubble.querySelectorAll('p')).find(function(p){return /^Found \d+ businesses · \d+ emails found · \d+ mailboxes verified\.$/.test(p.textContent);});if(heading)heading.textContent=heading.textContent.replace(/\d+ mailboxes verified\.$/,bubble.querySelectorAll('[data-mailbox-verified="true"]').length+' mailboxes verified.');}});})
-    .catch(function(error){button.disabled=false;button.textContent='Verify mailbox with Hunter';var note=document.createElement('p');note.className='meta';note.setAttribute('role','status');note.textContent=error.message;button.after(note);});
+    .catch(function(error){button.disabled=false;button.textContent='Verify email';var note=document.createElement('p');note.className='meta';note.setAttribute('role','status');note.textContent=error.message;button.after(note);});
 };
 window.renderWorkingActivity=function(state){
   var p=state.progress||{},events=p.activity||[],running=state.status==='running'||state.status==='queued';
@@ -191,17 +197,22 @@ window.emailSendStatus=function(outreach,checking){
 };
 window.mailboxDateMessage=function(reason,codes){
   var detail=String(reason||'')+' '+(Array.isArray(codes)?codes.join(' '):'');
-  return /HUNTER_RESULT_DATE_UNCONFIRMED_OR_STALE|VERIFIED_MAILBOX_REQUIRED/.test(detail)?'Email not sent: recent mailbox verification required.':'';
+  if(/VERIFALIA_FREE_QUOTA_EXHAUSTED/.test(detail))return 'Daily free verification allowance used. Try again after it resets. No email sent.';
+  if(/VERIFALIA_NOT_CONNECTED|VERIFALIA_ACCOUNT_CHECK_FAILED/.test(detail))return 'Connect free email verification in Settings. No email sent.';
+  if(/VERIFALIA_RESULT_PENDING|VERIFALIA_CHECK_IN_PROGRESS/.test(detail))return 'Email verification is still running. No email sent.';
+  if(/VERIFALIA_SUBMISSION_UNCONFIRMED/.test(detail))return 'Verification status could not be confirmed. No email sent. Check Verifalia before retrying.';
+  return /HUNTER_RESULT_DATE_UNCONFIRMED_OR_STALE|VERIFIED_MAILBOX_REQUIRED|MAILBOX_VERIFICATION_EXPIRED/.test(detail)?'Email not sent: recent mailbox verification required.':'';
 };
 window.sendMessage=function(status,state,reason){
   if(status==='Sent')return state&&state.state==='stopped'?'Your email was sent. Further emails are stopped.':'Your email was sent.';
   if(status==='Sending…')return 'Sending your message and résumé…';
   if(status==='Checking status')return 'We’re checking whether your email was sent. Please don’t send it again yet.';
   reason=String(reason||'');
+  if(!reason&&status==='Not sent'&&!((state||{}).reason_codes||[]).length)return 'Sends your message and résumé. No extra confirmation.';
+  if(/reconnect google|google connection|expired.*grant/i.test(reason))return 'Connect Google in Settings to send your email.';
   var verificationMessage=window.mailboxDateMessage(reason,(state||{}).reason_codes);
   if(verificationMessage)return verificationMessage;
-  if(!reason&&status==='Not sent')return 'Sends your message and résumé. No extra confirmation.';
-  if(/reconnect google|google connection|expired.*grant/i.test(reason))return 'Connect Google in Settings to send your email.';
+  if(/draft.*changed|draft.*review|reviewed.*message/i.test(reason))return 'This draft changed. Refresh and review it before sending.';
   if(/suppressed|opt.out|unsubscribed/i.test(reason))return 'This contact has opted out. No email was sent.';
   if(/mailbox|email.*verif|contact.*verif|company.*source/i.test(reason))return 'We couldn’t verify this email yet.';
   return reason?'This email needs attention. Open Details to see why.':'Sends your message and résumé.';
@@ -277,7 +288,7 @@ window.selectionControl=function(ref){
   var statusView=workflow.outreach||((stopped||active)?{send_status:'unknown'}:{});
   var sendStatus=window.emailSendStatus(statusView,running),sent=sendStatus==='Sent';
   var disabled=running||active||review||stopped||sent;
-  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':'Activate workflow';
+  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':entry.actionLabel||'Activate workflow';
   var reason=entry.error||workflow.reason||(running?'Checking the email and sending your message…':'Sends your message and résumé. No extra confirmation.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
@@ -301,7 +312,7 @@ window.refreshSelectionCards=function(id){
   document.querySelectorAll('[data-selection-card]').forEach(function(card){if(card.dataset.selectionCard===id)card.outerHTML=window.selectionControl(entry.ref);});
 };
 window.saveSelectedWorkflows=function(){
-  var jobs={};Object.keys(window.selectedWorkflows).forEach(function(id){var e=window.selectedWorkflows[id];if(e.job)jobs[id]={ref:e.ref,job:e.job,offer:e.offer};});
+  var jobs={};Object.keys(window.selectedWorkflows).forEach(function(id){var e=window.selectedWorkflows[id];if(e.job)jobs[id]={ref:e.ref,job:e.job,offer:e.offer,actionLabel:e.actionLabel,draftRevision:e.draftRevision};});
   try{sessionStorage.setItem('automake-selected-workflows',JSON.stringify(jobs));}catch(e){}
 };
 window.observeSelectedWorkflow=function(id){
@@ -331,8 +342,9 @@ window.activateSelection=function(ref){
   var id=window.selectionId(ref),entry=window.selectedWorkflows[id]||{ref:ref};
   if(entry.pending)return;
   window.selectedWorkflows[id]=entry;entry.pending=true;entry.error='';window.refreshSelectionCards(id);
-  var offer=document.getElementById('customer-offer').value;
+  var offer=entry.draftRevision?entry.offer:document.getElementById('customer-offer').value;
   var body={selection:ref,offer:offer,activate:true};
+  if(entry.draftRevision)body.draft_revision=entry.draftRevision;
   if(entry.job&&entry.job.activation_policy==='selected-email-v2'&&!entry.job.bulk&&entry.offer===offer&&(entry.state||{}).status==='completed'&&((entry.state.result||{}).workflow||{}).state==='held')body.retry_from=entry.job.job_id;
   return workspaceMutation('/api/chat/workflows/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(job){
@@ -425,6 +437,6 @@ document.addEventListener('click',function(event){var button=event.target.closes
 (function restoreSelectedWorkflows(){
   var saved;try{saved=JSON.parse(sessionStorage.getItem('automake-selected-workflows')||'{}');}catch(e){return;}
   Object.keys(saved).slice(0,50).forEach(function(id){var entry=saved[id];if(!entry||!entry.ref||!entry.job||!/^\/api\/demo\/campaigns\/jobs\/[A-Za-z0-9_-]+$/.test(entry.job.poll_url||''))return;
-    window.selectedWorkflows[id]={ref:entry.ref,job:entry.job,offer:entry.offer};if(entry.job.bulk)window.observeBulkWorkflow(entry.job);else window.observeSelectedWorkflow(id);
+    window.selectedWorkflows[id]={ref:entry.ref,job:entry.job,offer:entry.offer,actionLabel:entry.actionLabel,draftRevision:entry.draftRevision};if(entry.job.bulk)window.observeBulkWorkflow(entry.job);else window.observeSelectedWorkflow(id);
   });
 })();

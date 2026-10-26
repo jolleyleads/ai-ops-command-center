@@ -211,7 +211,11 @@ def kick_execution_worker():
 
 def _view(job):
     result = {"job_id":job.id, "status":job.status, "poll_url":"/api/demo/campaigns/jobs/"+job.id, "error":job.error}
-    result["activation_policy"]=json.loads(job.payload_json or "{}").get("_manual_selected_send")
+    payload=json.loads(job.payload_json or "{}")
+    result["activation_policy"]=payload.get("_manual_selected_send")
+    if payload.get("_reviewed_draft"):
+        result["reviewed_draft_revision"]=payload["_reviewed_draft"]["revision"]
+        result["reviewed_offer"]=payload.get("offer")
     result["progress"] = json.loads(job.result_json or "{}").get("progress") or {}
     from src.progressive_campaign import task_views
     businesses=task_views(job.id)

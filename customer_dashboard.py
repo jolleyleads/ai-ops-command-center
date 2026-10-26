@@ -12,6 +12,7 @@ import outreach_automation as oa
 from campaign_jobs import CampaignExecutionJob
 from workspace_security import scope, owns, current_workspace, OWNER
 from src.campaign_reporting import campaign_outcomes, load_outcome_data
+from src import verifalia_mailbox
 
 
 def unpack(value, default=None):
@@ -161,9 +162,10 @@ def lead_details(lead_id):
     qualification = oa.OutreachQualificationReceipt.query.filter_by(lead_id=lead.id).first()
     q = unpack(qualification.receipt_json) if qualification else {}
     assessment = enrichment.get('contact_assessment') or {}
-    mailbox_row = oa.OperatorAuditEvent.query.filter_by(lead_id=lead.id, action='mailbox_verification').order_by(oa.OperatorAuditEvent.id.desc()).first()
-    mailbox = unpack(mailbox_row.result_json) if mailbox_row else assessment.get('mailbox_validation') or {}
-    email_verified = mailbox.get('email', '').casefold() == (lead.contact_email or '').casefold() and mailbox.get('mailbox_status') == 'provider_verified'
+    from src.mailbox_verification import lead_status
+    verification=lead_status(lead)
+    mailbox=verification['receipt']
+    email_verified=verification['verified']
     sources = []
     for row in rows:
         if not isinstance(row, dict):
@@ -196,17 +198,19 @@ def lead_details(lead_id):
                 for b in oa.OutreachBookingAttempt.query.filter_by(lead_id=lead.id).order_by(oa.OutreachBookingAttempt.created_at.desc()).all()]
     phone = fields.get('phone') or {}
     person = fields.get('decision_maker') or {}
+    preview=draft_preview(lead)
+    draft_send_allowed=bool(preview and current_workspace()==OWNER and oa._recipient_matches_source_domain(lead) and oa._recipient_mailbox_allowed(lead.contact_email) and not oa._is_suppressed(lead.contact_email))
     return jsonify(ok=True, id=lead.id, company=lead.company, location=lead.location,
                    score=lead.score, score_description='Discovery evidence score from the source result or evidence-status fallback. Not a purchase probability or mailbox verification.',score_method='discovery_evidence_v1',
                    score_checks=q.get('passed_checks') or q.get('passed') or [],
                    reasons=q.get('reason_codes') or [], status=lead.status,
                    contact={'name':lead.contact_name or '', 'role':person.get('title') if lead.contact_name else '',
-                            'email':lead.contact_email or '', 'email_label':'Hunter verified' if email_verified else 'Company contact found' if lead.contact_email else 'Contact research pending',
+                            'email':lead.contact_email or '', 'email_label':verification['label'],
                             'checked_at':mailbox.get('checked_at') if email_verified else None,
                             'type':'Named contact' if lead.contact_name else ('Company inbox' if (lead.contact_email or '').split('@')[0].lower() in {'info','hello','contact','support','customersupport','sales','office','admin','service','customerservice','general'} else 'Company contact · Person not confirmed') if lead.contact_email else 'No contact yet',
                             'phone':phone.get('value') if phone.get('validated') is True else ''},
-                   sources=sources, subject=lead.subject, body=lead.body, draft_preview=draft_preview(lead), timeline=timeline, bookings=bookings,
-                   outreach=activation_view(lead),prospect_quality=for_lead(lead),
+                   sources=sources, subject=lead.subject, body=lead.body, draft_preview=preview,draft_send_allowed=draft_send_allowed, timeline=timeline, bookings=bookings,
+                   outreach=activation_view(lead),mailbox_verification={k:v for k,v in verification.items() if k!='receipt'},prospect_quality=for_lead(lead),
                    follow_up_due_at=iso(lead.follow_up_due_at), follow_up_count=lead.follow_up_count,
                    business_type=context.get('business_type') or context.get('candidate_type') or '')
 
@@ -237,6 +241,7 @@ def settings():
                    google_configured=bool((connection and connection.refresh_token) or os.getenv('GOOGLE_REFRESH_TOKEN')),
                    integrations={
                        'autohunt':{'configured':True,'purpose':'Business discovery, filtering and public contact collection. Mailbox verification is separate.'},
+                       'verifalia':{'configured':verifalia_mailbox.configured(),'purpose':'Free daily mailbox verification. No paid fallback.'},
                        'hunter':{'configured':bool(os.getenv('HUNTER_API_KEY','').strip() and os.getenv('HUNTER_ACCOUNT_EMAIL','').strip()
                            and os.getenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false').lower()=='true'),
                            'account':os.getenv('HUNTER_ACCOUNT_EMAIL','').strip(),
@@ -282,12 +287,45 @@ def activate_contact_outreach(lead_id):
     lead=db.session.get(oa.OutreachLead,lead_id)
     if not lead or not owns('lead',lead_id) or lead.status=='archived':
         return jsonify(ok=False,error='This lead was not found.'),404
-    if (request.get_json(silent=True) or {}).get('activate') is not True:
-        return jsonify(ok=False,error='Explicit outreach activation is required.'),400
     payload=request.get_json(silent=True) or {}
+    if not isinstance(payload,dict) or payload.get('activate') is not True:
+        return jsonify(ok=False,error='Explicit outreach activation is required.'),400
     if 'draft_revision' in payload:
         preview=draft_preview(lead)
         if not preview or payload['draft_revision']!=preview['revision']:
             return jsonify(ok=False,error='This draft changed or already has a send attempt. Refresh and review it before sending.'),409
+    if 'draft_revision' in payload:
+        from src.selection_workflows import enqueue_selected_workflow
+        context=oa._server_qualification_inputs(lead)[1]
+        return enqueue_selected_workflow({'activate':True,'selection':{'kind':'lead','lead_id':lead.id},
+            'offer':context.get('offer') or 'Inquiry follow-up and appointment scheduling automation',
+            'draft_revision':payload['draft_revision']})
     from src.outreach_activation import activate_prepared_contact
     return activate_prepared_contact(lead)
+
+
+@app.post('/api/chat/dashboard/verifalia/connect')
+@protected
+def connect_verifalia():
+    from src import verifalia_mailbox as provider
+    data=request.get_json(silent=True) or {}
+    if not isinstance(data,dict):return jsonify(ok=False,error='Invalid connection request.'),400
+    username=str(data.get('username') or '').strip()
+    password=data.get('password')
+    if not username or not isinstance(password,str) or not password or len(username)>500 or len(password)>1000:
+        return jsonify(ok=False,error='Enter your Verifalia API username and password.'),400
+    if data.get('free_only') is not True:
+        return jsonify(ok=False,error='Confirm free-only verification before connecting.'),400
+    try:provider._cipher()
+    except ValueError:return jsonify(ok=False,error='Secure credential storage needs configuration. No credentials were saved.'),503
+    result=provider.balance((username,password))
+    if not result['ok']:return jsonify(ok=False,error=result['state']),409
+    provider.save_credentials(username,password)
+    return jsonify(ok=True,**{k:v for k,v in result.items() if k!='ok'})
+
+
+@app.post('/api/chat/dashboard/verifalia/check')
+@protected
+def check_verifalia():
+    from src.verifalia_mailbox import balance
+    return jsonify(balance())

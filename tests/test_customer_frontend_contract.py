@@ -288,7 +288,7 @@ window:{messagePreview:p=>p.body,sendMessage:()=> 'Check status',sendDetails:()=
 workspaceMutation:(path,options)=>{writes++;last=JSON.parse(options.body);return fail?Promise.reject(Error('Network error')):Promise.resolve({outreach:{send_status:'sent'}});},
 requestJSON:()=>{reads++;return Promise.resolve({outreach:{send_status:'unknown'}});}};
 vm.runInNewContext(code,context);
-assert(context.draft({id:42,draft_preview:{body:'Reviewed email',revision:'reviewed-revision'},outreach:{can_activate:true}}).includes('>Send</button>'));
+assert(context.draft({id:42,draft_preview:{body:'Reviewed email',revision:'reviewed-revision'},outreach:{can_activate:true},draft_send_allowed:true}).includes('>Send</button>'));
 assert(context.draft({id:42,draft_preview:{body:'Blocked',revision:'x'},outreach:{can_activate:false}}).includes(' disabled'));
 assert.equal(writes,0);
 (async()=>{
@@ -299,5 +299,23 @@ assert.equal(writes,0);
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(writes,2);assert.equal(reads,1);assert.equal(button.disabled,true);
 })().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_saved_research_badges_expire_and_free_verifier_failures_have_plain_messages():
+    import re,subprocess
+    source=Path('demo/access.js').read_text()
+    function=re.search(r'window.mailboxStatus=function\(row\)\{.*?\n\};',source,re.S).group(0)
+    helpers=source[source.index('window.emailSendStatus='):source.index('window.outreachControl=')]
+    script='const assert=require("assert/strict"),window={};'+function+helpers+r'''
+const old=new Date(Date.now()-8*86400000).toISOString(),fresh=new Date(Date.now()-86400000).toISOString();
+assert.equal(window.mailboxStatus({email_status:'Verified',email_verified_on:old}),'Verification expired');
+assert.equal(window.mailboxStatus({email_status:'Verified',email_verified_on:fresh}),'Verified');
+assert.equal(window.mailboxStatus({email_status:'Verified'}),'Verification expired');
+const reason='No email sent: VERIFALIA_FREE_QUOTA_EXHAUSTED';
+assert(window.mailboxDateMessage(reason,['VERIFIED_MAILBOX_REQUIRED']).includes('Daily free verification allowance used'));
+assert(window.sendMessage('Not sent',{reason_codes:['VERIFIED_MAILBOX_REQUIRED']},reason).includes('Daily free verification allowance used'));
+assert.equal(window.sendMessage('Sent',{},reason),'Your email was sent.');
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

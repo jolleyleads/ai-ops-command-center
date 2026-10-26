@@ -160,7 +160,7 @@ def test_hunter_person_address_requires_primary_role_and_durable_association(act
     get,_=transport()
     receipt=hunter.discover_contacts('https://acme.example',get)
     monkeypatch.setattr(hunter,'discover_contacts',lambda *a:receipt)
-    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:{'mailbox_status':'provider_verified','deliverability_status':'provider_reported_valid','reason_codes':[]})
+    monkeypatch.setattr(mailbox,'verify_mailbox',lambda email:{'email':email,'checked_at':datetime.now(timezone.utc).isoformat(),'mailbox_status':'provider_verified','deliverability_status':'provider_reported_valid','reason_codes':[]})
     item=enrichment()
     hunter.enrich_contact(item,'https://acme.example',required_person=True)
     assert item['fields']['email']['value']=='jane@acme.example'
@@ -357,7 +357,7 @@ def test_explicit_activation_sends_approved_copy_once_and_schedules_followup(env
     url=f'/api/chat/leads/{lead.id}/activate-outreach'
     assert env.post(url,json={},headers=headers).status_code==400
     preview=detail['draft_preview']
-    first=env.post(url,json={'activate':True,'draft_revision':preview['revision']},headers=headers)
+    first=env.post(url,json={'activate':True},headers=headers)
     assert first.status_code==200 and first.json['outreach']['state']=='active'
     assert first.json['outreach']['send_status']=='sent' and first.json['outreach']['label']=='Sent'
     assert first.json['outreach']['sent_at']
@@ -845,7 +845,9 @@ def test_manual_activation_still_requires_email_proof_and_respects_optout(env,mo
     lead,headers=manual_contact(env,monkeypatch)
     evidence=json.loads(lead.evidence_json)
     for row in evidence:
-        if problem=='mailbox':row.pop('contact_assessment',None)
+        if problem=='mailbox':
+            row.pop('contact_assessment',None)
+            (row.get('enrichment') or {}).pop('contact_assessment',None)
         if problem=='source':row.pop('company_identity',None)
     lead.evidence_json=json.dumps(evidence)
     if problem=='suppression':oa._suppress(lead.contact_email)
@@ -957,16 +959,70 @@ def test_manual_hunter_preserves_selected_email_or_finds_supported_person(active
     assert jobs.process_next_execution_job()['ok']
     result=env.get(launch.json['poll_url'],headers=headers).json['result']
     lead=oa.OutreachLead.query.one()
-    if displayed_email:
-        assert result['outreach']['sent']==1,result
-        assert len(sent)==1 and sent[0][0]==displayed_email
-        assert lead.contact_name==''
-    elif primary_buyer:
+    if primary_buyer:
         assert result['outreach']['sent']==1,result
         assert len(sent)==1 and sent[0][0]=='jane@acme.example'
         assert lead.contact_name=='Jane Smith'
         assert person_email_supported(oa._server_qualification_inputs(lead)[0]['contact_assessment'],lead.contact_email)
     else:
         assert not sent and result['outreach']['sent']==0
-        assert not lead.contact_email and 'VERIFIED_MAILBOX_REQUIRED' in result['workflow']['reason_codes']
+        assert not sent and 'VERIFIED_MAILBOX_REQUIRED' in result['workflow']['reason_codes']
         assert not lead.contact_name
+
+
+def test_reviewed_draft_send_uses_selected_contact_checks_without_business_qualification(env,monkeypatch):
+    lead,headers=manual_contact(env,monkeypatch)
+    from src.outreach_copy import approved_initial
+    copy=approved_initial(lead,json.loads(lead.evidence_json));lead.subject=copy['subject'];lead.body=copy['body'];oa.db.session.commit()
+    sent=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:sent.append(a) or {'ok':True,'message_id':'draft-message','thread_id':'draft-thread'})
+    detail=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json
+    assert detail['draft_send_allowed'] and not detail['outreach']['can_activate']
+    preview=detail['draft_preview'];url=f'/api/chat/leads/{lead.id}/activate-outreach'
+    launch=env.post(url,json={'activate':True,'draft_revision':preview['revision']},headers=headers)
+    assert launch.status_code==202 and not sent
+    assert env.post(url,json={'activate':True,'draft_revision':preview['revision']},headers=headers).json['job_id']==launch.json['job_id']
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['outreach']['sent']==1 and result['outreach']['qualified']==0
+    assert len(sent)==1 and sent[0][:3]==(preview['recipient'],preview['subject'],preview['body'])
+    assert env.post(url,json={'activate':True,'draft_revision':preview['revision']},headers=headers).status_code==409
+
+
+def test_reviewed_draft_changed_during_verification_never_sends(env,monkeypatch):
+    lead,headers=manual_contact(env,monkeypatch)
+    from src.outreach_copy import approved_initial
+    import src.manual_outreach as manual
+    draft=approved_initial(lead,json.loads(lead.evidence_json));lead.subject=draft['subject'];lead.body=draft['body'];oa.db.session.commit()
+    preview=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json['draft_preview']
+    launch=env.post(f'/api/chat/leads/{lead.id}/activate-outreach',json={'activate':True,'draft_revision':preview['revision']},headers=headers)
+    def changed(*a):
+        lead.contact_email='different@acme.example';oa.db.session.commit();return lead
+    monkeypatch.setattr(manual,'prepare_contact',changed)
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Changed reviewed recipient sent'))
+    assert jobs.process_next_execution_job()['ok']
+    result=env.get(launch.json['poll_url'],headers=headers).json['result']
+    assert result['workflow']['reason_codes']==['DRAFT_REVIEW_REQUIRED']
+    assert not oa.OutreachSendAttempt.query.count()
+
+
+def test_reviewed_draft_retry_keeps_binding_and_existing_rate_limit(env,monkeypatch):
+    lead,headers=manual_contact(env,monkeypatch)
+    from src.outreach_copy import approved_initial
+    copy=approved_initial(lead,json.loads(lead.evidence_json));lead.subject=copy['subject'];lead.body=copy['body'];oa.db.session.commit()
+    preview=env.get(f'/api/chat/dashboard/leads/{lead.id}',headers=headers).json['draft_preview']
+    monkeypatch.setattr(oa,'gmail_access_token',lambda:(_ for _ in ()).throw(RuntimeError('invalid_grant')))
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a,**k:pytest.fail('Disconnected Google sent'))
+    url=f'/api/chat/leads/{lead.id}/activate-outreach';payload={'activate':True,'draft_revision':preview['revision']}
+    launch=env.post(url,json=payload,headers=headers)
+    assert launch.status_code==202 and launch.json['reviewed_draft_revision']==preview['revision']
+    assert jobs.process_next_execution_job()['ok']
+    prior=oa.db.session.get(jobs.CampaignExecutionJob,launch.json['job_id'])
+    assert json.loads(prior.result_json)['workflow']['state']=='held'
+    assert env.post(url,json=payload,headers=headers).status_code==429
+    prior.finished_at=datetime.utcnow()-timedelta(seconds=61);oa.db.session.commit()
+    retry=env.post(url,json=payload,headers=headers)
+    assert retry.status_code==202 and retry.json['job_id']!=prior.id
+    job=oa.db.session.get(jobs.CampaignExecutionJob,retry.json['job_id'])
+    assert json.loads(job.payload_json)['_reviewed_draft']==preview
+    assert not oa.OutreachSendAttempt.query.count()

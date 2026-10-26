@@ -523,11 +523,11 @@ def _recipient_matches_source_domain(lead: OutreachLead) -> bool:
 
 
 def _independent_mailbox_gate(lead):
-    from src.hunter_mailbox import enabled, verify_mailbox
+    from src.mailbox_verification import enabled, verify_mailbox
     if not enabled():return {"ok":True}
     address=normalize_email(lead.contact_email)
     mailbox=verify_mailbox(address)
-    _audit_actor(lead.id,"mailbox_verification",{"email":address},mailbox,"system:hunter")
+    _audit_actor(lead.id,"mailbox_verification",{"email":address},mailbox,"system:mailbox-verification")
     db.session.commit()
     if mailbox.get("mailbox_status")!="provider_verified":
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["INDEPENDENT_MAILBOX_VERIFICATION_REQUIRED"],"mailbox_validation":mailbox}}

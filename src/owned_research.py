@@ -20,19 +20,20 @@ from src.research_policy import COUNT_WORDS
 
 def accepts(query):
     from src.hunter_research import is_contact_list_query
-    return is_contact_list_query(query) and bool(re.search(r'\b(?:emails?|contacts?|enrich\w*|hunter)\b',query,re.I))
+    return is_contact_list_query(query) and bool(re.search(r'\b(?:emails?|contacts?|enrich\w*|hunter|auto\s*hunt)\b',query,re.I))
 
 
 def request_filters(query, location):
     """Conservative search hints; unsupported conditions remain visible for review."""
-    prefix=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,1,flags=re.I)[0]
+    clean=re.sub(r'(?i)\b(?:use|using|with)\s+auto\s*hunt\b|\bauto\s*hunt\b',' ',query)
+    prefix=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',clean,1,flags=re.I)[0]
     prefix=re.split(r'\b(?:in|near|around|with|that|who)\b',prefix,1,flags=re.I)[0]
     stop=set('give find show list research get me us please up to only a an the local nearby'.split())|set(COUNT_WORDS)
     terms=[t for t in re.findall(r'[a-z][a-z-]+',prefix.lower()) if t not in stop]
     # These conditions need their own evidence, not a keyword match on a site.
     extra=bool(re.search(r'\b(?:revenue|employees?|headcount|rating|rated|stars?|over|under|at least|more than|less than|without|excluding|except|open 24|family.owned|women.owned|veteran.owned)\b',query,re.I))
     tail=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,1,flags=re.I)
-    instructions=set('in near around only with their its the and or also use using hunter io enrich enrichment verify verified verification valid available emails email contacts contact decision maker makers owner owners name names role roles phone phones number numbers please me give show to make sure they have those them it he s i owe'.split())
+    instructions=set('in near around only with their its the and or also use using hunter io enrich enrichment verify verified verification valid available emails email contacts contact decision maker makers owner owners name names role roles phone phones number numbers please me give show to make sure they have those them it he s i owe autohunt auto hunt that updated current recently'.split())
     instructions.update(re.findall(r'[a-z]+',location.lower()))
     if len(tail)>1 and any(t not in instructions for t in re.findall(r'[a-z]+',tail[1].lower())):extra=True
     return {'query':query,'location':location,'industry_terms':list(dict.fromkeys(terms)),
@@ -113,9 +114,9 @@ def view(lead, record=None):
     email=fields.get('email') or {};assessment=enrichment.get('contact_assessment') or {}
     mailbox=assessment.get('mailbox_validation') or {}
     address=email.get('value') if email.get('validated') else ''
-    try:fresh=timedelta(0)<=datetime.now(timezone.utc)-datetime.fromisoformat(str(mailbox.get('checked_at') or '').replace('Z','+00:00'))<=timedelta(hours=1)
-    except (ValueError,TypeError):fresh=False
-    verified=bool(address and fresh and mailbox.get('email')==address and mailbox.get('mailbox_status')=='provider_verified')
+    from src.mailbox_verification import lead_status
+    status=lead_status(lead,record)
+    verified=bool(address and status['verified'])
     named=bool(address and person_email_supported(assessment,address))
     person=(fields.get('decision_maker') or {}) if named else {}
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
@@ -125,9 +126,9 @@ def view(lead, record=None):
          'contact_name':person.get('value') or '', 'contact_role':person.get('title') or '',
          'contact_phone':(fields.get('phone') or {}).get('value') or '',
          'contact_type':'Company inbox' if address and is_shared_email(address) else 'Published contact' if address else '',
-         'email_status':'Verified' if verified else 'Email found · Mailbox not verified' if address else 'No email found',
+         'email_status':status['label'] if address else 'No email found','mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
          'email_source_url':email.get('source_url') or '', 'phone_source_url':(fields.get('phone') or {}).get('source_url') or '',
-         'email_observed_at':email.get('observed_at'), 'email_verified_on':mailbox.get('provider_verified_on') if verified else None,
+         'email_observed_at':email.get('observed_at'), 'email_verified_on':status['verified_on'] if verified else None,
          'domain_status':(email.get('mail_validation') or {}).get('domain_status') or 'unconfirmed',
          'public_contacts':record.get('contacts') or [],'contact_issue':record.get('contact_issue') or '',
          'contact_check':{'mailbox_verified':verified,'named_contact':bool(address and person_email_supported(assessment,address))}}
@@ -179,7 +180,7 @@ def collect(company, filters, cached=None):
         chosen=next(c for c in contacts if c['email']==candidate['value']);candidate['mail_validation']=chosen['mail_validation']
     text=' '.join(str(r.get('page_text') or '') for r in rows)
     terms=filters['industry_terms']
-    patterns={'electrical':r'\belectric(?:al|ians?)\b','electrician':r'\belectric(?:al|ians?)\b',
+    patterns={'dentists':r'\b(?:dentists?|dental|dentistry)\b','dentist':r'\b(?:dentists?|dental|dentistry)\b','dental':r'\b(?:dentists?|dental|dentistry)\b','electrical':r'\belectric(?:al|ians?)\b','electrician':r'\belectric(?:al|ians?)\b',
               'hvac':r'\b(?:hvac|heating|air conditioning)\b'}
     industry=bool(rows) and all(re.search(patterns.get(t,r'\b'+re.escape(t.rstrip('s'))+r'(?:s|es)?\b'),text,re.I) for t in terms)
     geography=not filters['location'] or location_matches(text,filters['location']) or location_matches(company.get('listing_location') or '',filters['location'])
@@ -229,7 +230,11 @@ def run(campaign, *, save_contacts=True):
             lead=OutreachLead(company=company['company'],source_url=company['website'],location=location,status='needs_evidence',score=0,verification='CANDIDATE')
             if save_contacts:db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
         address=(record['enrichment'].get('fields',{}).get('email') or {}).get('value') or ''
-        if lead.contact_email!=address:lead.subject='';lead.body=''
+        if lead.contact_email==address:
+            from src.mailbox_verification import lead_status
+            previous=lead_status(lead)
+            if previous['verified']:record['enrichment'].setdefault('contact_assessment',{})['mailbox_validation']=previous['receipt']
+        else:lead.subject='';lead.body=''
         lead.contact_email=address
         assessment=record['enrichment'].get('contact_assessment') or {}
         lead.contact_name=((record['enrichment'].get('fields',{}).get('decision_maker') or {}).get('value') or '') if person_email_supported(assessment,address) else ''
@@ -254,7 +259,7 @@ def verify_owned_contact():
     """Explicit mailbox-only action; never discovers, drafts, sends, or activates."""
     from outreach_automation import OutreachLead
     from workspace_security import owns
-    from src.hunter_mailbox import verify_mailbox
+    from src.mailbox_verification import verify_mailbox
     data=request.get_json(silent=True) or {}
     if not isinstance(data,dict):return jsonify(ok=False,error='Invalid contact selection.'),400
     lead_id=data.get('lead_id')
@@ -271,7 +276,7 @@ def verify_owned_contact():
     if lead.sent_at or lead.gmail_message_id or lead.status!='needs_evidence':
         return jsonify(ok=False,error='This conversation is already being managed. Its contact was not changed.'),409
     original_evidence=lead.evidence_json
-    result=verify_mailbox(email,research_only=True)
+    result=verify_mailbox(email)
     # Discard a provider receipt for any other address.
     if result.get('email')!=email:return jsonify(ok=False,error='Mailbox verification did not confirm this address.'),502
     record['enrichment'].setdefault('contact_assessment',{})['mailbox_validation']=result

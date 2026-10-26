@@ -147,7 +147,7 @@ def test_quota_parser_never_treats_total_allocation_as_remaining(bucket,expected
     assert mailbox.remaining_requests(bucket)==expected
 
 
-def test_research_verification_matches_hunter_dates_without_reusing_send_eligibility(native):
+def test_research_and_sending_share_seven_day_verification_and_cache(native):
     def get(url,**kwargs):
         r=transport(url,**kwargs)
         if url.endswith('/email-verifier'):
@@ -155,11 +155,11 @@ def test_research_verification_matches_hunter_dates_without_reusing_send_eligibi
             return response(data)
         return r
     preview=mailbox.verify_mailbox('jane@acme.example',get,research_only=True)
-    assert preview['mailbox_status']=='provider_verified'
-    assert preview['verification_policy']=='research-last-known-30-days'
+    assert preview['mailbox_status']=='unconfirmed'
+    assert preview['verification_policy']=='current-7-days'
     send=mailbox.verify_mailbox('jane@acme.example',get)
-    assert send['mailbox_status']=='unconfirmed' and not send.get('cache_hit')
-    assert send['verification_policy']=='send-current-7-days'
+    assert send['mailbox_status']=='unconfirmed' and send.get('cache_hit')
+    assert send['verification_policy']=='current-7-days'
 
 
 @pytest.mark.parametrize('status,reason',[(403,'HUNTER_DISCOVER_ACCESS_REQUIRED'),(429,'HUNTER_DISCOVER_QUOTA_EXHAUSTED'),(500,'HUNTER_DISCOVER_UNAVAILABLE')])
@@ -285,7 +285,7 @@ def test_explicit_verified_company_inbox_fallback_does_not_inherit_person(native
         enrichment['fields']['email']={'value':'hello@acme.example','validated':True}
         enrichment['contact_assessment']={'email_person_status':'shared_inbox',
             'mailbox_validation':{'email':'hello@acme.example','mailbox_status':'provider_verified',
-                'provider_verified_on':datetime.now(timezone.utc).date().isoformat()}}
+                'provider_verified_on':datetime.now(timezone.utc).date().isoformat(),'checked_at':datetime.now(timezone.utc).isoformat()}}
     monkeypatch.setattr(discovery,'enrich_contact',shared)
     query='Find businesses in Charlotte, NC with decision-maker emails; if unavailable provide a verified company email.'
     result,_,_=research.run_contact_research({'query':query,'territory':'Charlotte, NC','target_count':1,'offer':''})

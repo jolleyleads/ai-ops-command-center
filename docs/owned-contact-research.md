@@ -1,7 +1,7 @@
 # AutoHunt public contact research
 
 Contact-list requests (businesses/companies plus emails, contacts, enrichment, or
-Hunter) use AutoHunt, AutoMake’s discovery and source collection before any mailbox check.
+Hunter or AutoHunt) use AutoHunt, AutoMake’s discovery and source collection before any mailbox check.
 Hiring, permit, and buying-signal workflows keep their separate evidence rules.
 
 ## Collection
@@ -33,8 +33,8 @@ changed conversation evidence.
 
 “Email found · Mailbox not verified” is the default. Published MX records do not
 verify a mailbox. Unknown, invalid, mismatched, or expired receipts never produce
-the verified label. Research verification does not replace the stricter current
-mailbox and source checks at workflow activation.
+the verified label. Research and sending share the seven-day mailbox policy. Current company-source
+checks remain separate at workflow activation.
 
 The existing workflow activation remains the sending action. AutoMake-collected
 contacts skip Hunter contact discovery when activated, while the independent

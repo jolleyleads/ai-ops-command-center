@@ -137,7 +137,8 @@ def enrich_contact(enrichment, website, *, required_person=False, email_allowed=
                     and is_shared_email(c['email']) and (not email_allowed or email_allowed(c['email']))]
             for contact in shared[:3]:yield None,contact
     for person,contact in candidates():
-        check=mailbox.verify_mailbox(contact['email'],research_only=True) if research_only else mailbox.verify_mailbox(contact['email'])
+        from src.mailbox_verification import verify_mailbox
+        check=verify_mailbox(contact['email'])
         if check.get("mailbox_status")!="provider_verified":
             assessment["mailbox_validation"]=check
             continue

@@ -167,7 +167,7 @@ def test_mailbox_verification_is_explicit_owned_and_does_not_send(setup,monkeypa
     assert client.post(path,json={'lead_id':lead.id+10},headers=headers).status_code==404 and not calls
     result=client.post(path,json={'lead_id':lead.id},headers=headers)
     assert result.status_code==200 and result.json['contact']['email_status']=='Verified'
-    assert calls==[(lead.contact_email,{'research_only':True})]
+    assert calls==[(lead.contact_email,{})]
     assert lead.status=='needs_evidence' and not lead.sent_at and not lead.subject
 
 
@@ -216,8 +216,19 @@ def test_frontend_distinguishes_found_from_verified_and_labels_credit_use():
 const row={provider_contact_research:true,owned_contact_research:true,lead_id:1,contact_email:'hello@acme.example',email_status:'Email found · Mailbox not verified',email_source_url:'https://acme.example/contact',research_source:'AutoMake public sources'};
 const html=window.renderContactSummary(row);
 assert(html.includes('Mailbox not verified')&&html.includes('Email source'));
-assert(html.includes('Uses verification credits')&&html.includes('Does not send email'));
+assert(html.includes('Free daily allowance with Verifalia')&&html.includes('Does not send email'));
 assert(!html.includes('Contact checked with Hunter'));
 assert(window.researchResultHeading({contact_research:true,owned_contact_research:true,discovery:{results:[row]}}).includes('1 emails found · 0 mailboxes verified'));
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_autohunt_name_and_common_prompt_words_do_not_change_business_filters():
+    for query in ['Find 10 electrical businesses in Chesapeake Virginia using AutoHunt',
+                  'Use AutoHunt to find 10 electrical businesses in Chesapeake Virginia with current emails',
+                  'Give me 10 dentists businesses in Chesapeake Virginia that have updated emails and use autohunt to verify decision makers']:
+        assert owned.accepts(query)
+        filters=owned.request_filters(query,'Chesapeake Virginia')
+        assert filters['industry_terms'] in [['electrical'],['dentists']]
+        assert not filters['additional_filters_need_review']
+    assert owned.request_filters('Find 10 dental businesses in Chesapeake Virginia using AutoHunt with revenue over $1 million','Chesapeake Virginia')['additional_filters_need_review']
