@@ -762,7 +762,7 @@ def create_tables():
 
 @app.route("/")
 def index():
-    return redirect("/chat-operator", code=302)
+    return render_template("home.html", year=datetime.now().year)
 
 @app.route("/workflows")
 def workflows_page():
