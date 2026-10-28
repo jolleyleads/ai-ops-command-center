@@ -85,6 +85,8 @@ def _oauth_diagnostics():
 
 def _run_scheduled_outreach_cycle():
     """Process real inbound replies before any follow-up work."""
+    # Standalone cron must use the same durable sender as the web application.
+    import gmail_reconciliation  # noqa: F401
     _oauth_diagnostics()
     inbound = scan_real_inbound_replies()
     app.logger.info(
