@@ -3,7 +3,7 @@
   'use strict';
   var panel=document.getElementById('workspace-panel'), menu=document.getElementById('workspace-menu');
   var data=null, view='chat', requestVersion=0, leadOffset=0, campaignOffset=0;
-  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings'};
+  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive'};
   var statuses={needs_evidence:'Checking contact details',review:'Ready for review',rejected:'Not a match',qualified:'Ready to prepare',drafted:'Draft ready',sent:'Email sent · Waiting for reply',replied:'Reply received',interested:'Interested',booked:'Appointment booked',unsubscribed:'Contact stopped',opted_out:'Contact stopped',queued:'Queued',running:'In progress',completed:'Complete',failed:'Needs attention'};
   var checks={verified_identity:'Business identity confirmed',validated_website:'Company website found',validated_contact:'Contact information checked',source_evidence:'Research sources recorded',geographic_fit:'Location matches',business_type_fit:'Business type matches',intent_signal:'Requested business need supported',evidence_freshness:'Current evidence',named_decision_maker_email:'Named contact and email matched'};
   function e(value){return window.esc(value);}
@@ -26,8 +26,32 @@
     if(view==='chat'){document.getElementById('prompt').focus();return;}
     panel.innerHTML=heading(labels[view],'Loading your saved records…')+'<span class="loading" aria-label="Loading"></span>';
     if(view==='settings'){settings(version);return;}
+    if(view==='drive'){drive(version);return;}
     if(view==='appointments'){appointments(version);return;}
     load().then(function(){if(version!==requestVersion)return;if(view==='campaigns')campaigns();else leads();}).catch(function(err){if(version===requestVersion)error(err);});
+  }
+  function drive(version){
+    panel.innerHTML=heading('Google Drive','Connect your Google account to browse files in your workspace.')+'<div class="workspace-empty"><p>Checking Google Drive connection…</p></div>';
+    requestJSON('/api/drive/status',{cache:'no-store'}).then(function(info){
+      if(version!==requestVersion)return;
+      if(!info.connected){
+        panel.innerHTML=heading('Google Drive','Optional integration — connect whenever you are ready.')+
+        '<div class="workspace-empty"><h2>Connect Google Drive</h2><p>Authorize read-only access to browse your Google Drive files. Your Gmail and other workflows stay unchanged.</p>'+
+        '<a class="ghost" style="display:inline-block;text-decoration:none" href="/connect/drive">Connect Google Drive</a>'+
+        (!info.configured?'<p class="meta">Google OAuth configuration is required before connecting.</p>':'')+'</div>';
+        return;
+      }
+      panel.innerHTML=heading('Google Drive','Connected · Your recent Drive files')+'<div id="drive-files"><span class="loading"></span></div>'+
+      '<p><a class="ghost" style="display:inline-block;text-decoration:none" href="/connect/drive">Reconnect Google Drive</a></p>';
+      return requestJSON('/api/drive/files',{cache:'no-store'}).then(function(result){
+        if(version!==requestVersion)return;
+        var files=result.files||[];
+        document.getElementById('drive-files').innerHTML=files.length?files.map(function(f){
+          return '<article class="lead"><b>'+e(f.name)+'</b><p class="meta">'+e(f.mimeType||'File')+'</p>'+
+          (f.webViewLink?'<a href="'+e(f.webViewLink)+'" target="_blank" rel="noopener noreferrer">Open in Google Drive</a>':'')+'</article>';
+        }).join(''):'<div class="workspace-empty">No files found in this Drive.</div>';
+      });
+    }).catch(function(err){if(version===requestVersion)panel.innerHTML=heading('Google Drive','Connection status')+'<p class="error">'+e(err.message)+'</p>';});
   }
   function leads(){
     var title=labels[view]||'My Leads';
