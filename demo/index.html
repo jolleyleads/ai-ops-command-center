@@ -146,11 +146,11 @@ if(Array.isArray(d.research_presentation)&&d.research_presentation.length){
  var contactRows=d.research_presentation.map(function(item){
   var details=[];
   if(requestedFields.indexOf('decision_maker')!==-1)details.push('Contact: '+(item.decision_maker||'Not found')+(item.decision_maker_role?' ('+item.decision_maker_role+')':''));
-  if(requestedFields.indexOf('phone')!==-1)details.push('Phone: '+(item.phone||'Not found')+(item.phone_type==='direct'?' (verified direct)':''));
+  if(requestedFields.indexOf('phone')!==-1){details.push('Decision-maker direct phone: '+(item.phone||'Not publicly verified'));if(item.business_phone)details.push('Company main line (not direct): '+item.business_phone);}
   if(requestedFields.indexOf('email')!==-1)details.push('Email: '+(item.email||'Not found')+(item.email?' ('+(item.email_status||'Unverified')+')':''));
   if(requestedFields.indexOf('website')!==-1)details.push('Website: '+(item.website||'Not found'));
-  var phone=String(item.phone||''),dial=phone.replace(/[^+0-9]/g,'');
-  var actions=phone&&dial?'<p><a class="ghost" href="tel:'+esc(dial)+'">Call</a></p>':'';
+  var phone=String(item.phone||item.business_phone||''),dial=phone.replace(/[^+0-9]/g,'');
+  var actions=phone&&dial?'<p><a class="ghost" href="tel:'+esc(dial)+'">'+(item.phone?'Call decision-maker':'Call company')+'</a></p>':'';
   var match=rs.find(function(row){return String(row.company||row.name||row.title||'').toLowerCase()===String(item.company||'').toLowerCase();});
   if(item.email&&match&&window.businessAction)actions+=window.businessAction(Object.assign({},match,{contact_email:item.email}));
   return '<div class="lead"><b>'+esc(item.company)+'</b>'+(details.length?'<p>'+details.map(esc).join('<br>')+'</p>':'')+actions+(item.source_url&&String(item.source_url).indexOf('https://')===0?'<a target="_blank" rel="noopener noreferrer" href="'+esc(item.source_url)+'">Company source</a>':'')+'</div>';
