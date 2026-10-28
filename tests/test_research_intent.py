@@ -60,3 +60,9 @@ def test_contact_table_keeps_multiple_people_and_field_sources():
     assert result['email_type'] == 'Company inbox'
     assert result['phone'] is None and result['business_phone'] == '757-555-0100'
     assert len(result['sources']) == 3
+
+
+def test_user_needs_contact_details_is_not_a_company_buying_signal():
+    from src.owned_research import accepts
+    assert accepts('I give me five HVAC companies in Chesapeake, Virginia, but I need their decision-maker contact information like manager, CEO, etc.')
+    assert not accepts('Find HVAC companies needing automation with owner contact information')
