@@ -637,8 +637,18 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     ).order_by(OutreachBookingAttempt.updated_at.desc()).first() if lead.status=="booking_ready" else None
     time_only=bool(previous_unavailable and re.search(r"\\b\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)\\b",text,re.I))
     classification=classify_reply(text)
-    if time_only and classification.get("classification")=="unclear":
-        classification=validate_reply_classification(text,{"classification":"interested"})
+    if classification.get("classification")=="unclear":
+        # Natural dates and clear typographical variants can be scheduling
+        # intent even when the original keyword classifier does not recognize
+        # the spelling. Never override opt-outs, negatives or questions.
+        from src.scheduling_dates import interpret_booking
+        prior=None
+        if previous_unavailable and previous_unavailable.start:
+            try:prior=datetime.fromisoformat(previous_unavailable.start)
+            except ValueError:pass
+        natural=interpret_booking(text,prior_date=prior)
+        if natural.get("ready"):
+            classification=validate_reply_classification(text,{"classification":"interested"})
     label=classification.get("classification")
     from src.campaign_reporting import record_reply_outcome
     record_reply_outcome(lead.id,_clean(item.get("message_id"),255),label)
