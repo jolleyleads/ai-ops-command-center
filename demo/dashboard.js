@@ -3,7 +3,7 @@
   'use strict';
   var panel=document.getElementById('workspace-panel'), menu=document.getElementById('workspace-menu');
   var data=null, view='chat', requestVersion=0, leadOffset=0, campaignOffset=0;
-  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive',crm:'CRM Integrations'};
+  var labels={'email-workflows':'Email workflows',chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive',crm:'CRM Integrations'};
   var statuses={needs_evidence:'Checking contact details',review:'Ready for review',rejected:'Not a match',qualified:'Ready to prepare',drafted:'Draft ready',sent:'Email sent · Waiting for reply',replied:'Reply received',interested:'Interested',booked:'Appointment booked',unsubscribed:'Contact stopped',opted_out:'Contact stopped',queued:'Queued',running:'In progress',completed:'Complete',failed:'Needs attention'};
   var checks={verified_identity:'Business identity confirmed',validated_website:'Company website found',validated_contact:'Contact information checked',source_evidence:'Research sources recorded',geographic_fit:'Location matches',business_type_fit:'Business type matches',intent_signal:'Requested business need supported',evidence_freshness:'Current evidence',named_decision_maker_email:'Named contact and email matched'};
   function e(value){return window.esc(value);}
@@ -25,6 +25,7 @@
     document.querySelectorAll('[data-view]').forEach(function(b){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');});
     if(view==='chat'){document.getElementById('prompt').focus();return;}
     panel.innerHTML=heading(labels[view],'Loading your saved records…')+'<span class="loading" aria-label="Loading"></span>';
+    if(view==='email-workflows'){window.renderEmailWorkflowDesk(panel);return;}
     if(view==='settings'){settings(version);return;}
     if(view==='drive'){drive(version);return;}
     if(view==='crm'){crm(version);return;}
