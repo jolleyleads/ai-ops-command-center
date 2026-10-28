@@ -46,19 +46,38 @@ def test_date_time_intent_preserves_stops_questions_and_quotes(text, label):
     assert classify_reply(text)["classification"] == label
 
 
-def test_natural_scheduling_reply_clarifies_missing_year(env, monkeypatch):
-    lead=oa.OutreachLead(company="Example", contact_email="owner@example.com", subject="Hello", status="interested")
-    oa.db.session.add(lead);oa.db.session.commit()
-    text="Let’s do October 31 1:30 PM Eastern time"
-    oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id, message_id="natural", body_text=text));oa.db.session.commit()
-    monkeypatch.setattr(oa,"_qualification_gate",lambda lead:{"ok":True})
-    calls=[]
-    monkeypatch.setattr(oa,"_safe_send",lambda *a,**k:calls.append(k) or {"ok":True})
-    monkeypatch.setattr(oa,"check_availability",lambda *a:pytest.fail("missing year must be clarified before booking"))
-    result=oa._route_persisted_reply(lead,{"reply_evidence":[{"message_id":"natural","text":text}]},datetime.utcnow())
-    assert result["ok"] and result["stage"] == "interested"
-    assert not result["booking_attempted"] and lead.follow_up_due_at is None
-    assert "year" in calls[0]["body"] and "October 31" in calls[0]["body"]
+def test_natural_scheduling_reply_infers_upcoming_year():
+    from src.scheduling_dates import interpret_booking
+    from datetime import timezone
+    result=interpret_booking("Let’s do November 2 3 PM Eastern time",
+        now=datetime(2026,10,28,tzinfo=timezone.utc))
+    assert result["ready"]
+    assert result["start"].startswith("2026-11-02T15:00")
+
+
+def test_common_typos_numeric_dates_and_spoken_hour():
+    from src.scheduling_dates import interpret_booking
+    from datetime import timezone
+    now=datetime(2026,10,28,tzinfo=timezone.utc)
+    for phrase in ("Novembr 2 at 3pm", "11/2 at three pm", "November 2 at 3 PM"):
+        result=interpret_booking(phrase,now=now)
+        assert result["ready"],(phrase,result)
+        assert result["start"].startswith("2026-11-02T15:00")
+
+
+def test_time_only_uses_persisted_prior_unavailable_date():
+    from src.scheduling_dates import interpret_booking
+    from datetime import timezone
+    prior=datetime(2026,11,2,14,0,tzinfo=timezone.utc)
+    result=interpret_booking("3 PM is fine",now=datetime(2026,10,28,tzinfo=timezone.utc),prior_date=prior)
+    assert result["ready"],result
+    assert result["start"].startswith("2026-11-02T15:00")
+
+
+def test_time_only_without_prior_context_never_books():
+    from src.scheduling_dates import interpret_booking
+    result=interpret_booking("3 PM is fine")
+    assert not result["ready"]
 
 
 def test_previously_unclear_date_proposal_resumes_only_once(env, monkeypatch):
@@ -85,7 +104,7 @@ def test_missing_schedule_sends_reply_using_persisted_message_identity(env, monk
     result=oa._route_persisted_reply(lead,{"reply_evidence":[{"message_id":"m1","text":evidence.body_text}]},datetime.utcnow())
     assert result["ok"] and not result["booking_attempted"]
     assert calls[0]["sequence"] == evidence.id
-    assert "timezone" in calls[0]["body"]
+    assert "date and time" in calls[0]["body"]
 
 
 def test_unpersisted_reply_cannot_send(env, monkeypatch):
