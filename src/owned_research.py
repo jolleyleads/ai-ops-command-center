@@ -28,13 +28,14 @@ def request_filters(query, location):
     clean=re.sub(r'(?i)\b(?:use|using|with)\s+auto\s*hunt\b|\bauto\s*hunt\b',' ',query)
     prefix=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',clean,1,flags=re.I)[0]
     prefix=re.split(r'\b(?:in|near|around|with|that|who)\b',prefix,1,flags=re.I)[0]
-    stop=set('give find show list research get me us please up to only a an the local nearby'.split())|set(COUNT_WORDS)
+    stop=set('i give find show list research get me us please up to only a an the local nearby'.split())|set(COUNT_WORDS)
     terms=[t for t in re.findall(r'[a-z][a-z-]+',prefix.lower()) if t not in stop]
     # These conditions need their own evidence, not a keyword match on a site.
     extra=bool(re.search(r'\b(?:revenue|employees?|headcount|rating|rated|stars?|over|under|at least|more than|less than|without|excluding|except|open 24|family.owned|women.owned|veteran.owned)\b',query,re.I))
     tail=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,1,flags=re.I)
     instructions=set('in near around only with their its the and or also use using hunter io enrich enrichment verify verified verification valid available emails email contacts contact decision maker makers owner owners name names role roles phone phones number numbers please me give show to make sure they have those them it he s i owe autohunt auto hunt that updated current recently'.split())
     instructions.update(re.findall(r'[a-z]+',location.lower()))
+    instructions.update('but i we need want information info details like manager managers ceo ceos president presidents founder founders director directors etc'.split())
     if len(tail)>1 and any(t not in instructions for t in re.findall(r'[a-z]+',tail[1].lower())):extra=True
     return {'query':query,'location':location,'industry_terms':list(dict.fromkeys(terms)),
             'additional_filters_need_review':extra}
@@ -119,6 +120,14 @@ def view(lead, record=None):
     verified=bool(address and status['verified'])
     named=bool(address and person_email_supported(assessment,address))
     person=(fields.get('decision_maker') or {})
+    business_matched=(record.get('business_research') or {}).get('filter_status')=='matched'
+    people=[{'name':p['name'],'role':p['title'],'email':p.get('email') or '',
+             'source_url':p['source_url'],'observed_at':p.get('observed_at'),
+             'scope':'Local role supported' if p.get('status')=='source_supported' else 'Company leadership; branch assignment unconfirmed'}
+            for p in enrichment.get('decision_maker_candidates') or []
+            if p.get('status')=='source_supported' or (business_matched and p.get('company_status')=='source_confirmed'
+                and p.get('responsibility_status')=='source_supported'
+                and re.fullmatch(r'owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
     # A documented business owner can be displayed even without a personal email.
     # A general number scraped from the website is not their direct line.
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
@@ -129,7 +138,8 @@ def view(lead, record=None):
          'contact_phone':(fields.get('phone') or {}).get('value') or '',
          'phone_type':'business_or_unconfirmed', 'direct_phone':'', 'direct_phone_verified':False,
          'decision_maker_source_url':person.get('source_url') or '',
-         'contact_type':'Company inbox' if address and is_shared_email(address) else 'Published contact' if address else '',
+         'decision_makers':people,'research_observed_at':record.get('observed_at'),
+         'contact_type':'Named decision-maker email' if named else 'Company inbox' if address and is_shared_email(address) else 'Published contact; person association unconfirmed' if address else '',
          'email_status':status['label'] if address else 'No email found','mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
          'email_source_url':email.get('source_url') or '', 'phone_source_url':(fields.get('phone') or {}).get('source_url') or '',
          'email_observed_at':email.get('observed_at'), 'email_verified_on':status['verified_on'] if verified else None,
@@ -149,8 +159,10 @@ def collect(company, filters, cached=None):
     rows=[r for r in (cached or {}).get('pages') or [] if current_contact_source(r)]
     cache_hit=bool(rows)
     if not rows:
+        from src.research_intent import parse_research_request
+        needs_people='decision_maker' in parse_research_request(filters['query'])['fields']
         rows,_=_public_contact_evidence({**company,'location':filters['location'],
-            'query':'business outreach contact'},use_provider=False)
+            'decision_maker_research':needs_people,'query':'business outreach contact'},use_provider=False)
     rows=[r for r in rows if current_contact_source(r) and owned_host(r.get('url') or '',company['website'])
           and identity_proof(company['company'],r,company['website'])]
     # mailto/obfuscated values are source observations, not generated addresses.
