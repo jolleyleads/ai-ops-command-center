@@ -56,6 +56,7 @@ import customer_demo  # noqa: F401
 import customer_dashboard  # noqa: F401
 import customer_auth  # noqa: F401
 import google_drive_connect  # noqa: F401
+import crm_catalog_api  # noqa: F401
 
 import workspace_security  # noqa: F401
 import src.selection_workflows  # noqa: F401
