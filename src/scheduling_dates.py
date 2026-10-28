@@ -20,10 +20,10 @@ def _natural_date_text(raw, local_now, prior_date=None):
     def hour_word(match):
         hour=SPOKEN_HOURS.get(match.group(1).lower())
         return f"{hour} {match.group(2)}" if hour else match.group(0)
-    raw=re.sub(r"\\b("+ "|".join(SPOKEN_HOURS) +r")\\s*(a\\.?m\\.?|p\\.?m\\.?)\\b",hour_word,raw,flags=re.I)
-    raw=re.sub(r"\\b([ap])\\.m\\.\\b",lambda m:m.group(1)+"m",raw,flags=re.I)
+    raw=re.sub(r"\b("+ "|".join(SPOKEN_HOURS) +r")\s*(a\.?m\.?|p\.?m\.?)\b",hour_word,raw,flags=re.I)
+    raw=re.sub(r"\b([ap])\.m\.\b",lambda m:m.group(1)+"m",raw,flags=re.I)
     # Common typos accepted only for a unique nearby month, not arbitrary text.
-    tokens=r"\\b[A-Za-z]{4,12}\\b(?=\\s+\\d{1,2}(?:st|nd|rd|th)?\\b)"
+    tokens=r"\b[A-Za-z]{4,12}\b(?=\s+\d{1,2}(?:st|nd|rd|th)?\b)"
     def month_word(match):
         word=match.group(0)
         if word.lower() in MONTH_NAMES:return word
@@ -35,7 +35,7 @@ def _natural_date_text(raw, local_now, prior_date=None):
         month,day,year=match.groups()
         if not 1<=int(month)<=12 or not 1<=int(day)<=31:return match.group(0)
         return f"{MONTHS[int(month)-1]} {int(day)}"+(f" {year}" if year else "")
-    raw=re.sub(r"(?<![\\d/])([01]?\\d)/([0-3]?\\d)(?:/(20\\d{2}))?(?![\\d/])",numeric,raw)
+    raw=re.sub(r"(?<![\d/])([01]?\d)/([0-3]?\d)(?:/(20\d{2}))?(?![\d/])",numeric,raw)
     # A missing year means the next occurrence of that date in the calendar's zone.
     def add_year(match):
         name,day=match.group(1),int(match.group(2))
@@ -46,11 +46,11 @@ def _natural_date_text(raw, local_now, prior_date=None):
             datetime(year,MONTH_NAMES[name.lower()],day)
         except ValueError:return match.group(0)
         return f"{name} {day} {year}"
-    raw=re.sub(r"\\b("+"|".join(MONTHS)+r")\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*[,]?\\s*20\\d{2})",add_year,raw,flags=re.I)
+    raw=re.sub(r"\b("+"|".join(MONTHS)+r")\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*[,]?\s*20\d{2})",add_year,raw,flags=re.I)
     # A time-only answer can refer to the previous unavailable date, but never
     # invent a date without persisted context from this exact lead.
     if prior_date and not FULL_DATE.search(raw):
-        m=re.search(r"\\b\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)\\b",raw,re.I)
+        m=re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",raw,re.I)
         if m:
             raw=prior_date.strftime("%B %d %Y")+" at "+m.group(0)
     return raw
