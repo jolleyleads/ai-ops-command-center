@@ -109,6 +109,18 @@ def snapshot(lead):
     return next((x for x in reversed(_evidence(lead)) if isinstance(x,dict) and x.get('source')=='automake_contact_research'),None)
 
 
+
+def _published_direct_phone(person):
+    """Only an explicitly labeled number in this person's source excerpt."""
+    text=str(person.get('evidence_excerpt') or '')
+    name=str(person.get('name') or '')
+    at=text.find(name)
+    if not name or at<0:return ''
+    after=text[at+len(name):at+len(name)+180]
+    match=re.search(r'(?i)\\b(?:direct(?: line)?|mobile|cell(?: phone)?)\\s*[:#-]?\\s*((?:\\+?1[ .-]?)?\\(?[2-9]\\d{2}\\)?[ .-]?\\d{3}[ .-]?\\d{4})',after)
+    return match.group(1) if match else ''
+
+
 def view(lead, record=None):
     record=record or snapshot(lead) or {}
     enrichment=record.get('enrichment') or {};fields=enrichment.get('fields') or {}
@@ -123,10 +135,12 @@ def view(lead, record=None):
     business_matched=(record.get('business_research') or {}).get('filter_status')=='matched'
     people=[{'name':p['name'],'role':p['title'],'email':p.get('email') or '',
              'source_url':p['source_url'],'observed_at':p.get('observed_at'),
+             'direct_phone':_published_direct_phone(p),
              'scope':'Local role supported' if p.get('status')=='source_supported' else 'Company leadership; branch assignment unconfirmed'}
             for p in enrichment.get('decision_maker_candidates') or []
             if p.get('status')=='source_supported' or (business_matched and p.get('company_status')=='source_confirmed'
                 and re.fullmatch(r'company owner|owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
+    direct=people[0].get('direct_phone') or '' if len(people)==1 else ''
     # A documented business owner can be displayed even without a personal email.
     # A general number scraped from the website is not their direct line.
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
@@ -135,12 +149,12 @@ def view(lead, record=None):
          'research_source':'AutoHunt','contact_email':address or '',
          'contact_name':person.get('value') or '', 'contact_role':person.get('title') or '',
          'contact_phone':(fields.get('phone') or {}).get('value') or '',
-         'phone_type':'business_or_unconfirmed', 'direct_phone':'', 'direct_phone_verified':False,
+         'phone_type':'direct' if direct else 'business_or_unconfirmed', 'direct_phone':direct, 'direct_phone_verified':bool(direct),
          'decision_maker_source_url':person.get('source_url') or '',
          'decision_makers':people,'research_observed_at':record.get('observed_at'),
          'contact_type':'Named decision-maker email' if named else 'Company inbox' if address and is_shared_email(address) else 'Published contact; person association unconfirmed' if address else '',
          'email_status':status['label'] if address else 'No email found','mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
-         'email_source_url':email.get('source_url') or '', 'phone_source_url':(fields.get('phone') or {}).get('source_url') or '',
+         'email_source_url':email.get('source_url') or '', 'phone_source_url':people[0]['source_url'] if direct else (fields.get('phone') or {}).get('source_url') or '',
          'email_observed_at':email.get('observed_at'), 'email_verified_on':status['verified_on'] if verified else None,
          'domain_status':(email.get('mail_validation') or {}).get('domain_status') or 'unconfirmed',
          'public_contacts':record.get('contacts') or [],'contact_issue':record.get('contact_issue') or '',
