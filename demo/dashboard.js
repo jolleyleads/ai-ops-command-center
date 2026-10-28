@@ -3,7 +3,7 @@
   'use strict';
   var panel=document.getElementById('workspace-panel'), menu=document.getElementById('workspace-menu');
   var data=null, view='chat', requestVersion=0, leadOffset=0, campaignOffset=0;
-  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive'};
+  var labels={chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive',crm:'CRM Integrations'};
   var statuses={needs_evidence:'Checking contact details',review:'Ready for review',rejected:'Not a match',qualified:'Ready to prepare',drafted:'Draft ready',sent:'Email sent · Waiting for reply',replied:'Reply received',interested:'Interested',booked:'Appointment booked',unsubscribed:'Contact stopped',opted_out:'Contact stopped',queued:'Queued',running:'In progress',completed:'Complete',failed:'Needs attention'};
   var checks={verified_identity:'Business identity confirmed',validated_website:'Company website found',validated_contact:'Contact information checked',source_evidence:'Research sources recorded',geographic_fit:'Location matches',business_type_fit:'Business type matches',intent_signal:'Requested business need supported',evidence_freshness:'Current evidence',named_decision_maker_email:'Named contact and email matched'};
   function e(value){return window.esc(value);}
@@ -27,6 +27,7 @@
     panel.innerHTML=heading(labels[view],'Loading your saved records…')+'<span class="loading" aria-label="Loading"></span>';
     if(view==='settings'){settings(version);return;}
     if(view==='drive'){drive(version);return;}
+    if(view==='crm'){crm(version);return;}
     if(view==='appointments'){appointments(version);return;}
     load().then(function(){if(version!==requestVersion)return;if(view==='campaigns')campaigns();else leads();}).catch(function(err){if(version===requestVersion)error(err);});
   }
@@ -52,6 +53,17 @@
         }).join(''):'<div class="workspace-empty">No files found in this Drive.</div>';
       });
     }).catch(function(err){if(version===requestVersion)panel.innerHTML=heading('Google Drive','Connection status')+'<p class="error">'+e(err.message)+'</p>';});
+  }
+  function crm(version){
+    panel.innerHTML=heading('CRM Integrations','Available CRM connections for your workspace.')+'<div class="workspace-empty">Checking integrations…</div>';
+    requestJSON('/api/crm/providers',{cache:'no-store'}).then(function(result){
+      if(version!==requestVersion)return;
+      var providers=result.providers||[];
+      panel.innerHTML=heading('CRM Integrations','Provider connections will be enabled after secure authorization is configured.')+
+        (providers.length?providers.map(function(p){
+          return '<article class="lead workspace-lead"><div class="leadtop"><b>'+e(p.name)+'</b><span class="tag">Setup required</span></div><p class="meta">CRM authorization and synchronization are not yet configured. No account is connected.</p><button type="button" class="ghost" disabled aria-label="'+e(p.name)+' setup required">Connect (coming soon)</button></article>';
+        }).join(''):'<div class="workspace-empty">No CRM providers configured.</div>');
+    }).catch(function(err){if(version===requestVersion)error(err);});
   }
   function leads(){
     var title=labels[view]||'My Leads';
