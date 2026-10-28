@@ -69,7 +69,9 @@ def _primary_seed(raw):
 def discover(filters, limit, cached=()):
     from universal_app import _search_businesses
     from smart_search import _exa_search
-    companies=[];seen=set();diagnostics=[]
+    from src.research_intent import parse_research_request
+    wants_people='decision_maker' in parse_research_request(filters['query'])['fields']
+    companies=[];seen=set();diagnostics=[];leadership_domains=[]
     def add(row):
         domain=host(row.get('website'))
         if domain and not shared_host(domain) and domain not in seen and row.get('company'):
@@ -87,17 +89,21 @@ def discover(filters, limit, cached=()):
                      'listing_location':raw.get('subtitle') or '', 'discovery_source':'Google Places',
                      'discovery_url':raw.get('url') or raw.get('website')})
         except Exception as exc:diagnostics.append('Business search unavailable: '+type(exc).__name__)
-    if len(companies)<limit:
+    if len(companies)<limit or wants_people:
         checkpoint('researching_more_sources',requested=limit)
         try:
-            result=_exa_search(topic+' official company website',filters['location'])
+            result=_exa_search(topic+(' owner president CEO leadership official company website' if wants_people else ' official company website'),filters['location'])
             if result.get('message'):diagnostics.append(result['message'])
             for raw in result.get('results') or []:
                 checkpoint('reviewing_company_source')
                 seed=_primary_seed(raw)
-                if seed:add(seed)
+                if seed:
+                    add(seed)
+                    if wants_people and host(seed['website']) not in leadership_domains:leadership_domains.append(host(seed['website']))
         except Exception as exc:diagnostics.append('Web search unavailable: '+type(exc).__name__)
-    return companies[:min(20,max(limit*2,limit))],diagnostics
+    if wants_people:
+        companies.sort(key=lambda row:leadership_domains.index(host(row['website'])) if host(row['website']) in leadership_domains else len(leadership_domains))
+    return companies[:20 if wants_people else min(20,max(limit*2,limit))],diagnostics
 
 
 def _evidence(lead):
