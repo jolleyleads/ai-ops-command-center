@@ -80,7 +80,7 @@ def permitted(lead, kind):
     if kind not in {'followup', 'automatic_reply', 'booking_confirmation', 'booking'}:
         return False
     initial = oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id, recipient=address, kind='initial', status='sent').first()
-    if not initial or not initial.message_id or not initial.thread_id:
+    if not initial or not initial.message_id:
         return False
     audit = oa.OperatorAuditEvent.query.filter_by(lead_id=lead.id, action='provided_email_workflow_approved').order_by(oa.OperatorAuditEvent.id.desc()).first()
     approved = _json(audit.request_json) if audit else {}

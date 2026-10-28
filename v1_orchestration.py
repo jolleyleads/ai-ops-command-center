@@ -364,9 +364,62 @@ def _send_prepared_lead(lead,summary):
 
 def scan_real_inbound_replies():
     now=datetime.utcnow()
-    leads=OutreachLead.query.filter(OutreachLead.gmail_thread_id.isnot(None),OutreachLead.gmail_thread_id!="",OutreachLead.status.in_(["sent","followup_sent","interested","question","responded","booking_ready","booked"])).order_by(OutreachLead.id.asc()).all()
+    # A saved status is display state, not proof that an authorized conversation
+    # should stop being monitored. Recovery is limited to leads with an actual
+    # successful initial-send receipt; an arbitrary typed email is not a grant.
+    from outreach_automation import OutreachSendAttempt, gmail_access_token
+    from src.outreach_safety import normalize_email
+    import requests
+    # Existing thread-bearing records remain readable for legacy inbox history.
+    # Missing-thread recovery, however, requires a confirmed sent message.
+    from sqlalchemy import or_, and_
+    authorized_initial=and_(
+        OutreachSendAttempt.kind == "initial",
+        OutreachSendAttempt.status == "sent",
+        OutreachSendAttempt.message_id.isnot(None),
+        OutreachSendAttempt.message_id != "",
+    )
+    leads=OutreachLead.query.outerjoin(
+        OutreachSendAttempt, OutreachSendAttempt.lead_id == OutreachLead.id
+    ).filter(or_(
+        and_(OutreachLead.gmail_thread_id.isnot(None), OutreachLead.gmail_thread_id != ""),
+        authorized_initial,
+    )).distinct().order_by(OutreachLead.id.asc()).all()
     processed=[]
     for lead in leads:
+        if lead.status in {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}:
+            continue
+        if not lead.gmail_thread_id:
+            # Gmail's stable sent message ID resolves the provider thread even
+            # after a partial receipt or process restart. Do not match on sender
+            # alone: personal mail from this address may be unrelated.
+            attempt=OutreachSendAttempt.query.filter_by(
+                lead_id=lead.id, kind="initial", status="sent",
+                recipient=normalize_email(lead.contact_email)
+            ).filter(OutreachSendAttempt.message_id != "").order_by(
+                OutreachSendAttempt.id.desc()
+            ).first()
+            if not attempt:
+                processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_authorized_send"})
+                continue
+            try:
+                response=requests.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{attempt.message_id}",
+                    headers={"Authorization":f"Bearer {gmail_access_token()}"},
+                    params={"format":"minimal"},timeout=30,
+                )
+                if not response.ok:
+                    raise RuntimeError(f"GMAIL_MESSAGE_LOOKUP_{response.status_code}")
+                thread_id=str((response.json() or {}).get("threadId") or "").strip()
+                if not thread_id:
+                    raise RuntimeError("GMAIL_THREAD_ID_NOT_FOUND")
+                lead.gmail_thread_id=thread_id
+                lead.gmail_message_id=lead.gmail_message_id or attempt.message_id
+                db.session.commit()
+            except Exception as exc:
+                db.session.rollback()
+                processed.append({"lead_id":lead.id,"ok":False,"stage":"thread_recovery_failed","reason":type(exc).__name__})
+                continue
         reply=_gmail_thread_reply_state(lead.gmail_thread_id)
         if not reply.get("ok"):
             processed.append({"lead_id":lead.id,"ok":False,"stage":"reply_check_failed","reason":reply.get("reason"),"error":reply.get("error")}); continue
