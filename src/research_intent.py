@@ -3,6 +3,7 @@
 This module is deliberately pure: no database writes, sends or external requests.
 """
 import re
+from src.research_policy import COUNT_WORDS
 
 _FIELDS = {
     "email": r"\b(?:emails?|e-mails?|email addresses?)\b",
@@ -20,16 +21,16 @@ def parse_research_request(query, previous=None):
     query = str(query or "").strip()
     previous = previous or {}
     requested = [field for field, pattern in _FIELDS.items() if re.search(pattern, query, re.I)]
-    if not requested:
+    contact_bundle = bool(re.search(r'\bcontact\s+(?:information|info|details)\b', query, re.I))
+    if contact_bundle:
+        requested = ["company", "decision_maker", "email", "phone", "website"]
+    elif not requested:
         requested = ["company", "website", "location"]
-    elif "decision_maker" in requested and "phone" in requested:
-        requested = ["company", "decision_maker", "phone"]
-    elif "decision_maker" in requested and "email" in requested:
-        requested = ["company", "decision_maker", "email"]
     else:
-        requested = ["company"] + requested
+        requested = ["company"] + (["decision_maker"] if "decision_maker" in requested else []) + [f for f in requested if f != "decision_maker"]
     match = _COUNT.search(query)
-    count = min(100, max(1, int(match.group(1)))) if match else previous.get("count", 20)
+    word_count = re.search(r'\b('+'|'.join(COUNT_WORDS)+r')\s+(?:[a-z-]+\s+){0,4}(?:companies|businesses|prospects|leads)\b', query, re.I)
+    count = min(100, max(1, int(match.group(1)))) if match else COUNT_WORDS.index(word_count.group(1).lower())+1 if word_count else previous.get("count", 20)
     reuse = bool(previous and _FOLLOWUP.search(query))
     return {
         "query": query,
@@ -38,6 +39,7 @@ def parse_research_request(query, previous=None):
         "reuse_previous_results": reuse,
         "research_only": not bool(_OUTREACH.search(query)),
         "send_authorized": False,
+        "contact_bundle": contact_bundle,
     }
 
 
@@ -66,7 +68,7 @@ def format_research_results(rows, intent):
             elif field == "phone":
                 direct = row.get("direct_phone") if row.get("direct_phone_verified") else None
                 result[field] = direct or None
-                result["phone_type"] = "direct" if direct else "not_found"
+                result["phone_type"] = "direct" if direct else "business_or_unconfirmed" if row.get("contact_phone") else "not_found"
                 result["business_phone"] = row.get("contact_phone") or None
             elif field == "email":
                 result[field] = row.get("contact_email") or None
@@ -74,6 +76,17 @@ def format_research_results(rows, intent):
             else:
                 result[field] = row.get(field) or None
         result["source_url"] = row.get("source_url") or row.get("website") or None
+        result["decision_makers"] = row.get("decision_makers") or []
+        result["email_type"] = row.get("contact_type") or "Published contact; person association unconfirmed"
+        result["sources"] = [
+            {"label": label, "url": row[key]}
+            for label, key in [("Decision-maker source", "decision_maker_source_url"),
+                               ("Email source", "email_source_url"), ("Phone source", "phone_source_url")]
+            if row.get(key)
+        ]
+        result["observed_at"] = row.get("research_observed_at") or row.get("email_observed_at")
+        result["location"] = row.get("location") or None
+        result["contact_issue"] = row.get("contact_issue") or ""
         output.append(result)
         if len(output) >= intent["count"]:
             break

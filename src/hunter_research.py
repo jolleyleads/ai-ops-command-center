@@ -37,7 +37,7 @@ def search_location(query, fallback=''):
     from src.job_evidence import requested_location
     # A city explicitly typed in chat wins over the saved territory field.
     explicit=requested_location(query)
-    explicit=re.split(r'\b(?:use|using|enrich|verify|verified|contacts?|emails?)\b',explicit,1,flags=re.I)[0].strip(' ,. ')
+    explicit=re.split(r'\b(?:but|use|using|enrich|verify|verified|contacts?|emails?|decision[ -]?makers?)\b',explicit,1,flags=re.I)[0].strip(' ,. ')
     return explicit or fallback
 
 

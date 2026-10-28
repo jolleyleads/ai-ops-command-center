@@ -36,3 +36,27 @@ def test_phone_only_company_query_routes_to_owned_research():
     assert accepts('Give me 20 HVAC companies with the decision-makers phone numbers only in Chesapeake Virginia')
     assert accepts('List 10 plumbing businesses with owner telephone numbers in Norfolk')
     assert not accepts('Find 20 companies looking for automation engineers')
+
+
+def test_full_contact_request_keeps_all_fields_and_word_count():
+    intent = parse_research_request('Give me five HVAC companies in Chesapeake, Virginia, with decision-maker contact information like manager, CEO, etc.')
+    assert intent['count'] == 5
+    assert intent['fields'] == ['company', 'decision_maker', 'email', 'phone', 'website']
+    assert intent['research_only'] and not intent['send_authorized']
+    explicit = parse_research_request('Find 5 HVAC companies with owner emails and phone numbers')
+    assert {'decision_maker', 'email', 'phone'} <= set(explicit['fields'])
+
+
+def test_contact_table_keeps_multiple_people_and_field_sources():
+    intent = parse_research_request('Give me five HVAC companies with decision-maker contact information')
+    people = [{'name':'Jane Doe','role':'CEO','source_url':'https://acme.example/team'},
+              {'name':'Mary Jones','role':'President','source_url':'https://acme.example/team'}]
+    rows = [{'company':'Acme','website':'https://acme.example','decision_makers':people,
+             'contact_phone':'757-555-0100','contact_email':'info@acme.example',
+             'contact_type':'Company inbox','decision_maker_source_url':'https://acme.example/team',
+             'email_source_url':'https://acme.example/contact','phone_source_url':'https://acme.example/contact'}]
+    result = format_research_results(rows, intent)[0]
+    assert result['decision_makers'] == people
+    assert result['email_type'] == 'Company inbox'
+    assert result['phone'] is None and result['business_phone'] == '757-555-0100'
+    assert len(result['sources']) == 3

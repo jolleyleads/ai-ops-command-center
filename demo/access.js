@@ -120,7 +120,7 @@ window.showRequestInterpretation=function(query,location,count,sending){
 window.renderSavedJobResult=function(result){
   var bubble=window.activeResearchBubble;if(!bubble)return;
   var research=result.discovery||result,rows=research.results||[];
-  bubble.innerHTML='<b>Your results</b><p>'+esc(window.researchResultHeading?window.researchResultHeading(result):'Found '+rows.length+' businesses.')+'</p>'+(result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
+  bubble.innerHTML='<b>Your results</b><p>'+esc(window.researchResultHeading?window.researchResultHeading(result):'Found '+rows.length+' businesses.')+'</p>'+(result.research_presentation&&result.research_presentation.length&&window.renderResearchTable?window.renderResearchTable(result):result.business_progress&&result.business_progress.length?window.renderBusinessCards(result.business_progress):(window.bulkActivationControl?window.bulkActivationControl(rows):'')+rows.map(resultCard).join(''));
   if(result.progress)bubble.innerHTML+=window.renderWorkingActivity({status:'completed',progress:result.progress});
   if(result.outreach)bubble.innerHTML+='<details class="research-details"><summary>Search details</summary><p>Qualified: '+esc(result.outreach.qualified||0)+' · Drafts ready: '+esc(result.outreach.drafted||0)+' · Confirmed sends: '+esc(result.outreach.sent||0)+'</p></details>';
   var summary=(result.outreach||{}).prospect_summary;if(summary)bubble.innerHTML+='<details class="research-details"><summary>Result details</summary><p>Requested: '+esc(summary.requested)+' · Well-supported businesses: '+esc(summary.well_supported)+' · Buyers identified: '+esc(summary.buyer_identified)+' · Contacts ready: '+esc(summary.contact_ready)+' · Remaining shortfall: '+esc(summary.remaining_well_supported)+'.</p><p class="meta">'+esc(summary.note)+'</p></details>';
@@ -288,7 +288,7 @@ window.selectionControl=function(ref){
   var statusView=workflow.outreach||((stopped||active)?{send_status:'unknown'}:{});
   var sendStatus=window.emailSendStatus(statusView,running),sent=sendStatus==='Sent';
   var disabled=running||active||review||stopped||sent;
-  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':entry.actionLabel||'Activate Workflow';
+  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':entry.actionLabel||'Activate workflow';
   var reason=entry.error||workflow.reason||(running?'Checking the email and sending your message…':'Sends your message and résumé. No extra confirmation.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;

@@ -88,6 +88,16 @@ def _public_contact_evidence(result, *, use_provider=True):
     # Multiple unbound domains indicate conflicting identities, not more contacts.
     roots=roots if len(roots)==1 else []
     hunter_sources=[]
+    leadership_sources=[]
+    if roots and result.get('decision_maker_research'):
+        # Search discovers paths such as /team.html and /meet-the-team/ that
+        # guessed URLs miss. Search snippets never become contact evidence.
+        from smart_search import _exa_search
+        checkpoint('finding_decision_maker_sources')
+        hints=_exa_search('site:'+_host(roots[0])+' '+company+' owner president CEO manager team contact',location)
+        leadership_sources=list(dict.fromkeys(hit.get('url') for hit in hints.get('results') or []
+            if hit.get('url') and owned_host(hit['url'],roots[0])))[:3]
+        started=time.monotonic()
     if roots and use_provider:
         from src.hunter_discovery import discover_contacts
         checkpoint("contact_source_provider")
@@ -103,7 +113,7 @@ def _public_contact_evidence(result, *, use_provider=True):
     # interleaves all roots fairly: urljoin(root,"staff") urljoin(root,"locations") urljoin(root,"team")
     # Re-fetch the actual verified source first: a dedicated job/contact page
     # can contain a published mailbox absent from guessed /contact URLs.
-    fetch_urls=list(dict.fromkeys(hunter_sources[:4]+[u for u in urls if urlparse(u).path.rstrip('/') and any(owned_host(u,root) for root in roots)]))
+    fetch_urls=list(dict.fromkeys(leadership_sources+hunter_sources[:4]+[u for u in urls if urlparse(u).path.rstrip('/') and any(owned_host(u,root) for root in roots)]))
     for path in priority_paths:
         for root in roots:
             candidate=root if not path else urljoin(root,path)
