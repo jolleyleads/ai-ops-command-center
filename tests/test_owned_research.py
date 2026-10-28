@@ -295,3 +295,12 @@ def test_named_contact_request_refills_beyond_company_only_rows(setup,monkeypatc
     assert rows[0]['contact_name']=='Jane Doe'
     assert result['discovery']['contact_target_met'] is True
     assert result['outreach']['sent']==0
+
+
+@pytest.mark.parametrize('label,expected',[('Direct:','(757) 555-7777'),('Mobile:','(757) 555-7777'),('Office:','')])
+def test_only_explicit_person_direct_numbers_are_labeled_direct(label,expected):
+    person={'name':'Jane Doe','evidence_excerpt':'Jane Doe, CEO. '+label+' (757) 555-7777'}
+    assert owned._published_direct_phone(person)==expected
+
+def test_another_persons_name_cannot_bless_an_unrelated_direct_number():
+    assert not owned._published_direct_phone({'name':'Jane Doe','evidence_excerpt':'Mary Jones, CEO. Direct: (757) 555-7777'})
