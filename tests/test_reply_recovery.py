@@ -104,7 +104,7 @@ def test_missing_schedule_sends_reply_using_persisted_message_identity(env, monk
     result=oa._route_persisted_reply(lead,{"reply_evidence":[{"message_id":"m1","text":evidence.body_text}]},datetime.utcnow())
     assert result["ok"] and not result["booking_attempted"]
     assert calls[0]["sequence"] == evidence.id
-    assert "timezone" in calls[0]["body"]
+    assert "date and time" in calls[0]["body"]
 
 
 def test_unpersisted_reply_cannot_send(env, monkeypatch):
