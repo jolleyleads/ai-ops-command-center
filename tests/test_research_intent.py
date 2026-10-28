@@ -29,3 +29,10 @@ def test_outreach_request_does_not_grant_send_permission():
     intent = parse_research_request("Send my campaign to them", {"count": 10})
     assert not intent["research_only"]
     assert not intent["send_authorized"]
+
+
+def test_phone_only_company_query_routes_to_owned_research():
+    from src.owned_research import accepts
+    assert accepts('Give me 20 HVAC companies with the decision-makers phone numbers only in Chesapeake Virginia')
+    assert accepts('List 10 plumbing businesses with owner telephone numbers in Norfolk')
+    assert not accepts('Find 20 companies looking for automation engineers')
