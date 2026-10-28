@@ -40,3 +40,5 @@ jobs:
               time.sleep(10)
           else:raise SystemExit('Production research did not complete')
           PY
+
+# Verify production deployment cb60070 after it became live.
