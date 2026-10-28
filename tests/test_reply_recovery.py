@@ -205,3 +205,23 @@ def test_smoke_disabled_without_explicit_configuration(env,monkeypatch):
     from production_smoke import run_configured_smoke
     monkeypatch.delenv("AUTOMAKE_SMOKE_RUN_ID",raising=False)
     assert run_configured_smoke()=={"enabled":False}
+
+
+@pytest.mark.parametrize('text', [
+    "I'm Interested, when can you chat?",
+    "I’m interested. When can we talk? Sent from the all new AOL app for iOS",
+    "What times are you available?",
+    "Sounds good, what time works for you?",
+])
+def test_timing_only_questions_continue_scheduling(text):
+    assert classify_reply(text)['classification'] == 'interested'
+
+
+@pytest.mark.parametrize('text,label', [
+    ("I'm interested, when can you chat and how much does it cost?", 'question'),
+    ("When can you chat? What services do you offer?", 'question'),
+    ("Not interested. When can you chat?", 'not_interested'),
+    ("Unsubscribe. When can you chat?", 'not_interested'),
+])
+def test_timing_questions_keep_unsupported_questions_and_stops(text,label):
+    assert classify_reply(text)['classification'] == label
