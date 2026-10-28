@@ -20,7 +20,7 @@ from src.research_policy import COUNT_WORDS
 
 def accepts(query):
     from src.hunter_research import is_contact_list_query
-    return is_contact_list_query(query) and bool(re.search(r'\b(?:emails?|contacts?|enrich\w*|hunter|auto\s*hunt)\b',query,re.I))
+    return is_contact_list_query(query) and bool(re.search(r'\b(?:emails?|contacts?|enrich\w*|hunter|auto\s*hunt|phones?|telephone|numbers?|decision[ -]?makers?|owners?|presidents?|ceos?)\b',query,re.I))
 
 
 def request_filters(query, location):
