@@ -55,6 +55,7 @@ import provider_acceptance_ui  # noqa: F401
 import customer_demo  # noqa: F401
 import customer_dashboard  # noqa: F401
 import customer_auth  # noqa: F401
+import google_drive_connect  # noqa: F401
 
 import workspace_security  # noqa: F401
 import src.selection_workflows  # noqa: F401
