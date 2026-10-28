@@ -110,7 +110,7 @@ return m?(words.indexOf(m[1].toLowerCase())>=0?words.indexOf(m[1].toLowerCase())
 }
 window.requestedLeadCount=requestedLeadCount;
 window.requestedTerritory=function(query,fallback){var match=String(query||'').match(/\b(?:in|near|around)\s+(.+?)(?=\b(?:with|that|who|use|using|enrich|verify|verified)\b|[.;]|$)/i);return match?match[1].trim().replace(/[, ]+$/,''):fallback;};
-function deepSearch(q){return Promise.resolve(window.workspaceAccessReady).then(function(access){return access&&access.drafting_available?campaignSearch(q):publicResearch(q);});}
+function deepSearch(q){return publicResearch(q);}
 function publicResearch(q){
 var requested=window.requestedLeadCount(q),location=window.requestedTerritory(q,document.getElementById("territory").value);
 var body=JSON.stringify({prompt:q,location:location,target_count:requested});
@@ -130,14 +130,14 @@ function run(){
 if(window.closeWorkspaceMenu)window.closeWorkspaceMenu(false);
 if(window.savePendingPrompt)window.savePendingPrompt();
 var p=document.getElementById("prompt"),q=p.value.trim();if(!q)return;
-var campaign=document.getElementById("task-mode").value==="campaign";
+var campaign=document.getElementById("task-mode").value==="campaign" && !/\b(?:give me|find|show|list|get)\s+(?:me\s+)?(?:up to\s+)?\d+\b/i.test(q) && !/\b(?:phone numbers?|decision[ -]?makers?|contact list)\b/i.test(q);
 p.value="";resizeComposer();add("user",esc(q));
 var wait=add("ai",'<b>AutoMake AI</b><br><span class="loading"></span> '+(campaign?'Finding companies, verifying contacts and preparing drafts without sending…':'Researching current sources…'));
 window.activeResearchBubble=wait.querySelector(".bubble");
 var send=document.getElementById("send");send.disabled=true;
 (campaign?campaignSearch(q):deepSearch(q)).then(function(d){
 var research=d.discovery||d,rs=research.results||[],out=d.outreach||{},cards="";
-if(d.business_progress&&d.business_progress.length)cards=window.renderBusinessCards(d.business_progress);else{cards=window.bulkActivationControl?window.bulkActivationControl(rs):'';for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);}
+if(campaign&&d.business_progress&&d.business_progress.length)cards=window.renderBusinessCards(d.business_progress);else if(campaign){cards=window.bulkActivationControl?window.bulkActivationControl(rs):'';for(var i=0;i<rs.length;i++)cards+=resultCard(rs[i]);}else if(!Array.isArray(d.research_presentation)||!d.research_presentation.length){for(var i=0;i<rs.length;i++)cards+='<div class="lead"><b>'+esc(rs[i].company||rs[i].name||rs[i].title||"Business")+"</b></div>";}
 var stats='<details class="research-details"><summary>Search details</summary><div class="stats"><div class="stat"><b>'+esc(rs.length)+'</b>'+((research.contact_research_candidates||[]).length?'Hiring matches':'Businesses found')+'</div><div class="stat"><b>'+esc(research.verified||research.verified_count||0)+'</b>Confirmed</div>';
 if(d.outreach)stats+='<div class="stat"><b>'+esc(out.sent||0)+'</b>Emails sent</div><div class="stat"><b>'+esc(out.drafted||0)+'</b>Drafts prepared</div>';
 stats+='</div></details>';
