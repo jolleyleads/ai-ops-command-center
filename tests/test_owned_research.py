@@ -232,3 +232,44 @@ def test_autohunt_name_and_common_prompt_words_do_not_change_business_filters():
         assert filters['industry_terms'] in [['electrical'],['dentists']]
         assert not filters['additional_filters_need_review']
     assert owned.request_filters('Find 10 dental businesses in Chesapeake Virginia using AutoHunt with revenue over $1 million','Chesapeake Virginia')['additional_filters_need_review']
+
+
+def test_research_keeps_multiple_documented_executives_without_choosing_outreach_buyer(setup,monkeypatch):
+    rows=[page('Acme Electrical in Norfolk, VA. Jane Doe, CEO. jane@acmeelectrical.example'),
+          {**page('Acme Electrical in Norfolk, VA. Mary Jones, President. mary@acmeelectrical.example'),
+           'url':'https://acmeelectrical.example/team'}]
+    wire(monkeypatch,rows)
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me five electrical companies with decision-maker contact information'})
+    row=result['discovery']['results'][0]
+    assert {p['name'] for p in row['decision_makers']}=={'Jane Doe','Mary Jones'}
+    assert row['contact_name']==''  # Research does not select one of two equally supported buyers.
+    assert len(result['research_presentation'][0]['decision_makers'])==2
+    assert result['outreach']['sent']==0
+
+
+def test_leadership_search_hints_must_be_fetched_on_owned_domain(setup,monkeypatch):
+    import smart_search
+    fetched=[]
+    monkeypatch.setattr(smart_search,'_exa_search',lambda *a:{'results':[
+        {'url':'https://acmeelectrical.example/meet-our-team.html','page_text':'invented owner'},
+        {'url':'https://other.example/team','page_text':'invented CEO'}]})
+    def get(url,**kw):
+        fetched.append(url)
+        return SimpleNamespace(status_code=200,url=url,headers={'content-type':'text/html'},
+            text='<title>Acme Electrical</title><p>Acme Electrical in Norfolk, VA. Jane Doe, CEO. jane@acmeelectrical.example</p>')
+    monkeypatch.setattr(bridge,'public_get',get)
+    rows,_=bridge._public_contact_evidence({**COMPANY,'location':'Norfolk, VA','query':'business outreach contact','decision_maker_research':True},use_provider=False)
+    assert fetched[0]=='https://acmeelectrical.example/meet-our-team.html'
+    assert not any('other.example' in url for url in fetched)
+    assert rows and all(r['directly_fetched'] for r in rows)
+    assert not any('invented' in r['page_text'] for r in rows)
+
+
+def test_original_chesapeake_request_preserves_industry_and_geography(setup):
+    from src.hunter_research import search_location
+    query='I give me five HVAC companies in Chesapeake, Virginia, but I need their decision-maker contact information like manager, CEO, etc.'
+    location=search_location(query,'Hampton Roads Virginia')
+    assert location=='Chesapeake, Virginia'
+    filters=owned.request_filters(query,location)
+    assert filters['industry_terms']==['hvac']
+    assert not filters['additional_filters_need_review']
