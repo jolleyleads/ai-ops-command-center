@@ -13,7 +13,7 @@ def test_explicit_human_date_and_quoted_history():
     assert result==dict(start="2030-10-11T14:00:00-04:00",end="2030-10-11T14:30:00-04:00",timezone="America/New_York")
 
 
-@pytest.mark.parametrize("text",["Yes, tomorrow at 2 pm", "October 32nd 2030 at 2 pm", "October 11th 2030 at 2 pm Pacific", "October 11th at 2 pm"])
+@pytest.mark.parametrize("text",["Yes, tomorrow at 2 pm", "October 32nd 2030 at 2 pm", "October 11th 2030 at 2 pm Pacific"])
 def test_ambiguous_dates_stay_pending(text):
     from src.automatic_reply_router import extract_explicit_booking
     assert not extract_explicit_booking(text)["start"]
@@ -75,3 +75,9 @@ def test_import_rejects_wrong_provider_sender_and_unapproved_recipient(env,monke
 def test_import_endpoint_requires_authentication(env):
     client=env.app.test_client()
     assert client.post("/api/operator/conversation-import",json={}).status_code==401
+
+def test_yearless_upcoming_date_is_understood():
+    from src.scheduling_dates import interpret_booking
+    from datetime import datetime,timezone
+    result=interpret_booking("October 11th at 2 pm",now=datetime(2026,10,28,tzinfo=timezone.utc))
+    assert result["start"].startswith("2027-10-11T14:00")
