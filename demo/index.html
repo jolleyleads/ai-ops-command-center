@@ -141,6 +141,18 @@ if(d.business_progress&&d.business_progress.length)cards=window.renderBusinessCa
 var stats='<details class="research-details"><summary>Search details</summary><div class="stats"><div class="stat"><b>'+esc(rs.length)+'</b>'+((research.contact_research_candidates||[]).length?'Hiring matches':'Businesses found')+'</div><div class="stat"><b>'+esc(research.verified||research.verified_count||0)+'</b>Confirmed</div>';
 if(d.outreach)stats+='<div class="stat"><b>'+esc(out.sent||0)+'</b>Emails sent</div><div class="stat"><b>'+esc(out.drafted||0)+'</b>Drafts prepared</div>';
 stats+='</div></details>';
+if(Array.isArray(d.research_presentation)&&d.research_presentation.length){
+ var requestedFields=(d.research_intent&&d.research_intent.fields)||[];
+ var contactRows=d.research_presentation.map(function(item){
+  var details=[];
+  if(requestedFields.indexOf('decision_maker')!==-1)details.push('Contact: '+(item.decision_maker||'Not found')+(item.decision_maker_role?' ('+item.decision_maker_role+')':''));
+  if(requestedFields.indexOf('phone')!==-1)details.push('Phone: '+(item.phone||'Not found')+(item.phone_type==='direct'?' (verified direct)':''));
+  if(requestedFields.indexOf('email')!==-1)details.push('Email: '+(item.email||'Not found')+(item.email?' ('+(item.email_status||'Unverified')+')':''));
+  if(requestedFields.indexOf('website')!==-1)details.push('Website: '+(item.website||'Not found'));
+  return '<div class="lead"><b>'+esc(item.company)+'</b>'+(details.length?'<p>'+details.map(esc).join('<br>')+'</p>':'')+(item.source_url&&/^https:\\/\\//.test(item.source_url)?'<a target="_blank" rel="noopener noreferrer" href="'+esc(item.source_url)+'">Company source</a>':'')+'</div>';
+ });
+ cards+='<details class="research-details" open><summary>Requested contact details ('+contactRows.length+')</summary>'+contactRows.join('')+'</details>';
+}
 var detail=research.provider_message?'<details><summary>Search details</summary><p>'+esc(research.provider_message)+'</p></details>':'';
 if(campaign&&out.skipped&&out.skipped.length)detail+='<p>Some contacts still need checking.</p>';
 wait.querySelector(".bubble").innerHTML='<b>AutoMake AI</b><p>'+(window.researchResultHeading?window.researchResultHeading(d):'Found '+rs.length+' businesses.')+'</p>'+stats+cards+detail+(rs.length||(research.contact_research_candidates||[]).length?'':'<p>No matches were confirmed. Open search details to see why.</p>');
