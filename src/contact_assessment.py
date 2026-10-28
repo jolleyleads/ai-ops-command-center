@@ -3,7 +3,7 @@ import re
 from html.parser import HTMLParser
 from src.company_identity import contact_context_matches, email_on_domain, name_key, join_inline_markup
 
-NAME=r"[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*(?:['’-][A-Z]?[a-z]+)?){1,2}?"
+NAME=r"[A-Z][a-z]*\.?(?:['’-][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]*\.?(?:['’-][A-Z]?[a-z]+)?){1,2}?"
 ROLES=r"(?:regional vice president|vice president|safety director|branch manager|client manager|chief executive officer|chief technology officer|chief financial officer|human resources manager|talent acquisition manager|talent acquisition director|chief operating officer|operations manager|project manager|office manager|finance manager|accounting manager|financial controller|controller|sales manager|customer service manager|customer success manager|business development manager|engineering manager|hiring manager|recruiting manager|general manager|(?:director|head) of (?:engineering|technology|operations|finance|accounting|recruiting|talent acquisition|human resources|sales|customer service|customer success)|company owner|owner|founder|president|CEO|CTO|COO|CFO|recruiter|director|principal|partner)"
 # Names keep case; titles may use any case.
 PAIR=re.compile(r"\b("+NAME+r")\s*[,|:\-–—]\s*((?i:"+ROLES+r"))\b")
