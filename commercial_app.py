@@ -61,6 +61,7 @@ import crm_oauth_api  # noqa: F401
 
 import workspace_security  # noqa: F401
 import src.selection_workflows  # noqa: F401
+import src.email_workflows  # noqa: F401
 import src.campaign_reporting  # noqa: F401
 import src.progressive_campaign  # noqa: F401
 import src.owned_research  # noqa: F401
