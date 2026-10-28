@@ -109,7 +109,7 @@ var m=String(q||'').match(new RegExp(pattern,'i'));
 return m?(words.indexOf(m[1].toLowerCase())>=0?words.indexOf(m[1].toLowerCase())+1:Number(m[1])):10;
 }
 window.requestedLeadCount=requestedLeadCount;
-window.requestedTerritory=function(query,fallback){var match=String(query||'').match(/\b(?:in|near|around)\s+(.+?)(?=\b(?:with|that|who|use|using|enrich|verify|verified)\b|[.;]|$)/i);return match?match[1].trim().replace(/[, ]+$/,''):fallback;};
+window.requestedTerritory=function(query,fallback){var match=String(query||'').match(/\b(?:in|near|around)\s+(.+?)(?=\b(?:but|with|that|who|use|using|enrich|verify|verified)\b|[.;]|$)/i);return match?match[1].trim().replace(/[, ]+$/,''):fallback;};
 function deepSearch(q){return Promise.resolve(window.workspaceAccessReady).then(function(access){return access&&access.drafting_available?campaignSearch(q):publicResearch(q);});}
 function publicResearch(q){
 var requested=window.requestedLeadCount(q),location=window.requestedTerritory(q,document.getElementById("territory").value);
@@ -125,6 +125,28 @@ window.showRequestInterpretation(q,body.territory,requested,false);
 var fingerprint=JSON.stringify(body);
 return workspaceMutation('/api/chat/campaigns/prepare',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':window.requestKeyFor('draft',fingerprint)},body:fingerprint})
 .then(function(job){return window.followResearchJob(job,'drafts');});}
+
+window.renderResearchTable=function(d){
+ var fields=(d.research_intent&&d.research_intent.fields)||[];
+ var has=function(f){return fields.indexOf(f)!==-1;};
+ var link=function(url,label){return /^https?:\/\//i.test(String(url||''))?'<a target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">'+esc(label)+'</a>':esc(label);};
+ var headings=['Company'];
+ if(has('decision_maker'))headings.push('Decision-maker');
+ if(has('email'))headings.push('Public email / contact route');
+ if(has('phone'))headings.push('Business phone');
+ headings.push('Sources');
+ var rows=(d.research_presentation||[]).map(function(item){
+  var cells=[link(item.source_url,item.company)+(item.location?'<br><small>'+esc(item.location)+'</small>':'')];
+  var people=item.decision_makers||[];
+  if(has('decision_maker'))cells.push(people.length?people.map(function(p){return '<b>'+esc(p.name)+'</b> — '+esc(p.role)+(p.email?'<br>'+esc(p.email)+' (published with this person)':'')+(p.scope?'<br><small>'+esc(p.scope)+'</small>':'')+'<br>'+link(p.source_url,'Role source');}).join('<br><br>'):esc(item.decision_maker||'Not publicly found')+(item.decision_maker_role?' — '+esc(item.decision_maker_role):''));
+  if(has('email'))cells.push(item.email?esc(item.email)+'<br><small>'+esc(item.email_type||'Published contact')+' · '+esc(item.email_status||'Mailbox not verified')+'</small>':link(item.source_url,'Company website / contact route')+'<br><small>No public email found</small>');
+  if(has('phone')){var phone=item.phone||item.business_phone||'',dial=String(phone).replace(/[^+0-9]/g,'');cells.push(phone?'<a href="tel:'+esc(dial)+'">'+esc(phone)+'</a><br><small>'+(item.phone?'Verified direct line':'Company main line; direct extension unverified')+'</small>':'Not publicly found');}
+  var sources=(item.sources||[]).map(function(s){return link(s.url,s.label);}).join('<br>');
+  cells.push(sources+(item.observed_at?'<br><small>Checked '+esc(String(item.observed_at).slice(0,10))+'</small>':'')+(item.contact_issue?'<br><small>'+esc(item.contact_issue)+'</small>':''));
+  return '<tr>'+cells.map(function(c){return '<td style="vertical-align:top;padding:12px;border-bottom:1px solid #ddd">'+c+'</td>';}).join('')+'</tr>';
+ });
+ return '<p>Publicly listed business contacts. Company main lines are labeled separately from verified direct numbers. Published emails have not necessarily passed mailbox verification.</p><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;text-align:left"><thead><tr>'+headings.map(function(h){return '<th style="padding:12px">'+esc(h)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
+};
 
 function run(){
 if(window.closeWorkspaceMenu)window.closeWorkspaceMenu(false);
@@ -142,20 +164,7 @@ var stats='<details class="research-details"><summary>Search details</summary><d
 if(d.outreach)stats+='<div class="stat"><b>'+esc(out.sent||0)+'</b>Emails sent</div><div class="stat"><b>'+esc(out.drafted||0)+'</b>Drafts prepared</div>';
 stats+='</div></details>';
 if(Array.isArray(d.research_presentation)&&d.research_presentation.length){
- var requestedFields=(d.research_intent&&d.research_intent.fields)||[];
- var contactRows=d.research_presentation.map(function(item){
-  var details=[];
-  if(requestedFields.indexOf('decision_maker')!==-1)details.push('Contact: '+(item.decision_maker||'Not found')+(item.decision_maker_role?' ('+item.decision_maker_role+')':''));
-  if(requestedFields.indexOf('phone')!==-1){details.push('Decision-maker direct phone: '+(item.phone||'Not publicly verified'));if(item.business_phone)details.push('Company main line (not direct): '+item.business_phone);}
-  if(requestedFields.indexOf('email')!==-1)details.push('Email: '+(item.email||'Not found')+(item.email?' ('+(item.email_status||'Unverified')+')':''));
-  if(requestedFields.indexOf('website')!==-1)details.push('Website: '+(item.website||'Not found'));
-  var phone=String(item.phone||item.business_phone||''),dial=phone.replace(/[^+0-9]/g,'');
-  var actions=phone&&dial?'<p><a class="ghost" href="tel:'+esc(dial)+'">'+(item.phone?'Call decision-maker':'Call company')+'</a></p>':'';
-  var match=rs.find(function(row){return String(row.company||row.name||row.title||'').toLowerCase()===String(item.company||'').toLowerCase();});
-  if(item.email&&match&&window.businessAction)actions+=window.businessAction(Object.assign({},match,{contact_email:item.email}));
-  return '<div class="lead"><b>'+esc(item.company)+'</b>'+(details.length?'<p>'+details.map(esc).join('<br>')+'</p>':'')+actions+(item.source_url&&String(item.source_url).indexOf('https://')===0?'<a target="_blank" rel="noopener noreferrer" href="'+esc(item.source_url)+'">Company source</a>':'')+'</div>';
- });
- cards+='<details class="research-details" open><summary>Requested contact details ('+contactRows.length+')</summary>'+contactRows.join('')+'</details>';
+ cards=window.renderResearchTable(d);
 }
 var detail=research.provider_message?'<details><summary>Search details</summary><p>'+esc(research.provider_message)+'</p></details>':'';
 if(campaign&&out.skipped&&out.skipped.length)detail+='<p>Some contacts still need checking.</p>';
