@@ -118,13 +118,13 @@ def view(lead, record=None):
     status=lead_status(lead,record)
     verified=bool(address and status['verified'])
     named=bool(address and person_email_supported(assessment,address))
-    person=(fields.get('decision_maker') or {}) if named else {}
+    person=(fields.get('decision_maker') or {})\n    # A documented business owner can be displayed even without a personal email.\n    # A general number scraped from the website is not their direct line.
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
          'website':lead.source_url,'source_url':lead.source_url,'location':lead.location,
          'provider_contact_research':True,'owned_contact_research':True,'classification':'Business found',
          'research_source':'AutoHunt','contact_email':address or '',
          'contact_name':person.get('value') or '', 'contact_role':person.get('title') or '',
-         'contact_phone':(fields.get('phone') or {}).get('value') or '',
+         'contact_phone':(fields.get('phone') or {}).get('value') or '',\n         'phone_type':'business_or_unconfirmed', 'direct_phone':'', 'direct_phone_verified':False,\n         'decision_maker_source_url':person.get('source_url') or '',
          'contact_type':'Company inbox' if address and is_shared_email(address) else 'Published contact' if address else '',
          'email_status':status['label'] if address else 'No email found','mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
          'email_source_url':email.get('source_url') or '', 'phone_source_url':(fields.get('phone') or {}).get('source_url') or '',
@@ -239,7 +239,7 @@ def run(campaign, *, save_contacts=True):
         else:lead.subject='';lead.body=''
         lead.contact_email=address
         assessment=record['enrichment'].get('contact_assessment') or {}
-        lead.contact_name=((record['enrichment'].get('fields',{}).get('decision_maker') or {}).get('value') or '') if person_email_supported(assessment,address) else ''
+        lead.contact_name=(record['enrichment'].get('fields',{}).get('decision_maker') or {}).get('value') or ''
         lead.evidence_json=json.dumps([record,{'source':'campaign_context','context':{
             'query':campaign['query'],'offer':campaign.get('offer') or '', 'target_location':location,
             'owned_contact_research':True,'require_decision_maker':campaign.get('require_decision_maker') is True}}])
