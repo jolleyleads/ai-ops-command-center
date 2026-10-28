@@ -107,7 +107,10 @@ def execute_claimed_job(job_id):
         else:
             with execution_scope(execution_limit(job.kind)-5, report_stage), reporting_campaign(job_id):
                 payload=json.loads(job.payload_json)
-                if payload.get('_selected_bulk'):
+                if payload.get('_provided_email_policy'):
+                    from src.email_workflows import run_email_workflows
+                    result,stage,reason=run_email_workflows(payload,job_id)
+                elif payload.get('_selected_bulk'):
                     from src.selection_workflows import run_bulk_selected_workflows
                     result,stage,reason=run_bulk_selected_workflows(payload,job_id)
                 elif payload.get('_selected_workflow'):

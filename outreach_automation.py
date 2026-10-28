@@ -450,6 +450,9 @@ def _send_authorization_gate(lead, kind):
     from src.manual_outreach import permitted
     if permitted(lead,kind):
         return {'ok':True,'qualified':False,'authorization_basis':'customer_selected_verified_contact'}
+    from src.email_workflows import permitted as provided_permitted
+    if provided_permitted(lead,kind):
+        return {'ok':True,'qualified':False,'authorization_basis':'explicit_user_provided_recipient'}
     return receipt
 
 
@@ -537,7 +540,8 @@ def _independent_mailbox_gate(lead):
 
 def _prospect_send_gate(lead, kind):
     from src.manual_outreach import permitted
-    if permitted(lead,kind):return {'ok':True}
+    from src.email_workflows import permitted as provided_permitted
+    if permitted(lead,kind) or provided_permitted(lead,kind):return {'ok':True}
     # Follow-ups retain their existing reply/suppression gates; new and
     # reconciled initial attempts must recheck current prospect evidence.
     if kind in {'initial','reconciled_retry'} and _server_qualification_inputs(lead)[1].get('prospect_policy')=='evidence-led-v1':
@@ -551,7 +555,9 @@ def _prospect_send_gate(lead, kind):
 def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, body: str) -> Dict[str, Any]:
     from src.execution_deadline import checkpoint
     checkpoint("sending")
-    if not _recipient_matches_source_domain(lead):
+    from src.email_workflows import permitted as provided_permitted
+    provided=provided_permitted(lead,kind)
+    if not _recipient_matches_source_domain(lead) and not provided:
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     if not _recipient_mailbox_allowed(lead.contact_email):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
@@ -571,7 +577,8 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW"]},"attempt_status":"failed"}
     if not ag.get("allowed"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
-    mailbox_gate=_independent_mailbox_gate(lead)
+    # An explicit owner-provided recipient is not claimed to be an enriched or verified lead.
+    mailbox_gate={'ok':True} if provided else _independent_mailbox_gate(lead)
     if not mailbox_gate.get("ok"):return mailbox_gate
     if attempt is None:
         attempt=OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending")

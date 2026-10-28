@@ -36,6 +36,10 @@ def initial_email(lead, evidence, quote=''):
     problem = ('But what really caught my eye is how easily a slower response can give your competition '
                'a chance to win your leads and potential customers. If your response rate is lower than '
                'it could be, that’s business you could be missing out on.')
+    if getattr(lead, 'verification', '') == 'USER_PROVIDED':
+        company = 'your business'
+        recipient = plain(lead.contact_name).split(' ')[0] if lead.contact_name else 'there'
+        compliment = 'I wanted to introduce myself and share how I help businesses respond to inquiries and follow up with potential customers.'
     body = f'''Hey {recipient} 👋
 
 {compliment}
@@ -51,7 +55,8 @@ The reason I’m reaching out is that I’d love to help you keep the business y
 Matthew Jolley
 AutoMake AI
 757 840 9648'''
-    return {'subject': f'Something caught my eye about {company}'[:160], 'body': body,
+    subject = 'A quick introduction from Matthew Jolley' if getattr(lead, 'verification', '') == 'USER_PROVIDED' else f'Something caught my eye about {company}'[:160]
+    return {'subject': subject, 'body': body,
             'template': 'matthew_personal_outreach_v1', 'compliment_source_backed': bool(supported)}
 
 
