@@ -202,6 +202,8 @@ def run(campaign, *, save_contacts=True):
     from workspace_security import OWNER,scope,claim
     from src.hunter_research import search_location
     from src.campaign_reporting import attribute_new_lead
+    from src.research_intent import parse_research_request, format_research_results
+    intent=parse_research_request(campaign['query'])
     location=search_location(campaign['query'],campaign.get('territory') or '')
     filters=request_filters(campaign['query'],location);limit=campaign['target_count']
     saved=[];views=[];cached=[];snapshots={}
@@ -244,7 +246,9 @@ def run(campaign, *, save_contacts=True):
         if save_contacts:db.session.commit();saved.append(lead.id)
         views.append(view(lead,record))
         checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,contacts_verified=0)
-    return {'ok':True,'contact_research':True,'owned_contact_research':True,'campaign':{**campaign,'territory':location},
+    presentation=format_research_results(views,intent)
+    return {'ok':True,'contact_research':True,'owned_contact_research':True,'research_intent':intent,
+        'research_presentation':presentation,'campaign':{**campaign,'territory':location},
         'discovery':{'results':views,'count':len(views),'verified':0,'emails_found':sum(bool(v['contact_email']) for v in views),
             'target_count':limit,'target_met':len(views)>=limit,'source':'automake_public_sources','diagnostics':diagnostics},
         'outreach':{'lead_ids':saved,'saved':len(saved),'qualified':0,'drafted':0,'sent':0},'business_progress':views},None,None
