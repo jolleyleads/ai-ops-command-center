@@ -288,7 +288,7 @@ window.selectionControl=function(ref){
   var statusView=workflow.outreach||((stopped||active)?{send_status:'unknown'}:{});
   var sendStatus=window.emailSendStatus(statusView,running),sent=sendStatus==='Sent';
   var disabled=running||active||review||stopped||sent;
-  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':entry.actionLabel||'Activate workflow';
+  var label=sent?'Sent':stopped?'Stopped':entry.pending?'Sending…':state.status==='queued'?'Sending…':running?'Sending…':active?'Check status':held&&entry.job&&entry.job.activation_policy==='selected-email-v2'?'Try again':entry.actionLabel||'Activate Workflow';
   var reason=entry.error||workflow.reason||(running?'Checking the email and sending your message…':'Sends your message and résumé. No extra confirmation.');
   if(state.status==='failed'||state.status==='cancelled')reason=state.error||'Workflow stopped. Review its saved status before starting again.';
   if(sent&&workflow.outreach.reason)reason=workflow.outreach.reason;
@@ -302,10 +302,13 @@ window.selectionControl=function(ref){
   return html+'</div>';
 };
 window.businessAction=function(row){
-  if(row.lead_id&&row.outreach&&['active','stopped','review'].indexOf(row.outreach.state)!==-1)return (window.businessEmail?window.businessEmail(row):'')+window.outreachControl(row.lead_id,row.outreach);
+  var contactEmail=row.contact_email||row.email||(row.contact||{}).email||'';
+  var contactDisplay=window.businessEmail?window.businessEmail(row):'';
+  if(!contactEmail)return contactDisplay;
+  if(row.lead_id&&row.outreach&&['active','stopped','review'].indexOf(row.outreach.state)!==-1)return contactDisplay+window.outreachControl(row.lead_id,row.outreach);
   var ref=row.selection||(row.lead_id?{kind:'lead',lead_id:row.lead_id}:null);
-  if(ref)return (window.businessEmail?window.businessEmail(row):'')+window.selectionControl(ref);
-  return row.lead_id&&window.outreachControl?window.outreachControl(row.lead_id,row.outreach):'';
+  if(ref)return contactDisplay+window.selectionControl(ref);
+  return contactDisplay;
 };
 window.refreshSelectionCards=function(id){
   var entry=window.selectedWorkflows[id];if(!entry)return;
