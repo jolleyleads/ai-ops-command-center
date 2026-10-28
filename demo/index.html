@@ -224,4 +224,11 @@ function loadCampaignPerformance(){if(window.openWorkspace){window.openWorkspace
   }).catch(function(err){slot.querySelector(".bubble").innerHTML="<b>Campaign Performance</b><p class='error'>"+esc(err.message)+"</p><p class='meta'>Authorization required. No sample data displayed.</p>";});
 }
 
+window.openResearchLink=function(){
+  var query=new URLSearchParams(window.location.search).get('research_prompt');
+  if(query&&query.length<=1000)chooseSuggestion(query);
+};
+window.addEventListener('load',window.openResearchLink);
+
+
 </script><script src="/chat-operator/dashboard.js?v=message-preview-activity-3" defer></script><script src="/chat-operator/access.js?v=message-preview-activity-3"></script></body></html>

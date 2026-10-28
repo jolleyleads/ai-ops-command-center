@@ -319,3 +319,21 @@ assert(window.sendMessage('Not sent',{reason_codes:['VERIFIED_MAILBOX_REQUIRED']
 assert.equal(window.sendMessage('Sent',{},reason),'Your email was sent.');
 '''
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_research_link_prefills_the_real_composer_without_starting_outreach():
+    import subprocess
+    script=r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('demo/index.html','utf8');
+const start=source.indexOf('window.openResearchLink=function');
+const end=source.indexOf("window.addEventListener('load',",start);
+const code=source.slice(start,end);
+let query='',sends=0;
+const context={window:{location:{search:'?research_prompt='+encodeURIComponent('Find five HVAC companies with decision-maker phone numbers in Chesapeake Virginia')}},URLSearchParams,chooseSuggestion:value=>{query=value;},run:()=>{sends++;}};
+vm.runInNewContext(code,context);context.window.openResearchLink();
+assert(query.includes('decision-maker phone numbers'));assert.equal(sends,0);
+context.window.location.search='?research_prompt='+encodeURIComponent('x'.repeat(1001));query='';
+context.window.openResearchLink();assert.equal(query,'');assert.equal(sends,0);
+"""
+    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)

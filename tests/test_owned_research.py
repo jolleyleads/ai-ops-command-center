@@ -304,3 +304,18 @@ def test_only_explicit_person_direct_numbers_are_labeled_direct(label,expected):
 
 def test_another_persons_name_cannot_bless_an_unrelated_direct_number():
     assert not owned._published_direct_phone({'name':'Jane Doe','evidence_excerpt':'Mary Jones, CEO. Direct: (757) 555-7777'})
+
+
+def test_people_discovery_searches_leadership_sources_before_settling_for_map_listings(setup,monkeypatch):
+    import universal_app,smart_search
+    calls=[]
+    monkeypatch.setattr(universal_app,'_search_businesses',lambda *a:{'results':[{'title':'Map Company','website':'https://map-company.example','subtitle':'Norfolk, VA'}]})
+    def search(query,location):
+        calls.append((query,location))
+        return {'results':[{'url':'https://named-company.example/team'}]}
+    monkeypatch.setattr(smart_search,'_exa_search',search)
+    monkeypatch.setattr(owned,'_primary_seed',lambda row:{'company':'Named Company','website':'https://named-company.example/','listing_location':'Norfolk, VA'})
+    rows,_=owned.discover(owned.request_filters('Give me one electrical company with owner phone numbers','Norfolk, VA'),1)
+    assert calls and 'owner president CEO leadership' in calls[0][0]
+    assert rows[0]['company']=='Named Company'
+    assert any(row['company']=='Map Company' for row in rows)

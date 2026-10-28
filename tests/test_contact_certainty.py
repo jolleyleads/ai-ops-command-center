@@ -339,3 +339,8 @@ def test_company_owner_title_does_not_become_part_of_person_name():
     row=source('Acme Norfolk VA. Brian Overton, Company Owner. Our business owner can discuss operations.')
     result=enrich_lead(lead(),[row])
     assert any(c['name']=='Brian Overton' and c['title'].lower()=='company owner' for c in result['decision_maker_candidates'])
+
+
+def test_published_executive_name_can_include_a_middle_initial():
+    result=enrich_lead(lead(query='business outreach'),[source('Acme Norfolk VA. Travis L. Stepps, President. Office phone (757) 555-0100.')])
+    assert result['fields']['decision_maker']['value']=='Travis L. Stepps'
