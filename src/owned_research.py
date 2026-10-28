@@ -117,7 +117,7 @@ def _published_direct_phone(person):
     at=text.find(name)
     if not name or at<0:return ''
     after=text[at+len(name):at+len(name)+180]
-    match=re.search(r'(?i)\\b(?:direct(?: line)?|mobile|cell(?: phone)?)\\s*[:#-]?\\s*((?:\\+?1[ .-]?)?\\(?[2-9]\\d{2}\\)?[ .-]?\\d{3}[ .-]?\\d{4})',after)
+    match=re.search(r'(?i)\b(?:direct(?: line)?|mobile|cell(?: phone)?)\s*[:#-]?\s*((?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4})',after)
     return match.group(1) if match else ''
 
 
