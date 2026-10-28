@@ -67,7 +67,7 @@ def permitted(lead,kind):
     if not owns('lead',lead.id,OWNER):return False
     # Only real initial-send history can extend the customer's workflow grant.
     initial=oa.OutreachSendAttempt.query.filter_by(lead_id=lead.id,kind='initial',status='sent',recipient=oa.normalize_email(lead.contact_email)).first()
-    if not initial or not initial.message_id or not initial.thread_id:return False
+    if not initial or not initial.message_id:return False
     grant=oa.OperatorAuditEvent.query.filter_by(lead_id=lead.id,action='selected_contact_send_approved').order_by(oa.OperatorAuditEvent.id.desc()).first()
     if not grant:return False
     data=json.loads(grant.request_json or '{}')
