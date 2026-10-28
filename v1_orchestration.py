@@ -370,14 +370,21 @@ def scan_real_inbound_replies():
     from outreach_automation import OutreachSendAttempt, gmail_access_token
     from src.outreach_safety import normalize_email
     import requests
-    leads=OutreachLead.query.join(
-        OutreachSendAttempt, OutreachSendAttempt.lead_id == OutreachLead.id
-    ).filter(
+    # Existing thread-bearing records remain readable for legacy inbox history.
+    # Missing-thread recovery, however, requires a confirmed sent message.
+    from sqlalchemy import or_, and_
+    authorized_initial=and_(
         OutreachSendAttempt.kind == "initial",
         OutreachSendAttempt.status == "sent",
         OutreachSendAttempt.message_id.isnot(None),
         OutreachSendAttempt.message_id != "",
-    ).distinct().order_by(OutreachLead.id.asc()).all()
+    )
+    leads=OutreachLead.query.outerjoin(
+        OutreachSendAttempt, OutreachSendAttempt.lead_id == OutreachLead.id
+    ).filter(or_(
+        and_(OutreachLead.gmail_thread_id.isnot(None), OutreachLead.gmail_thread_id != ""),
+        authorized_initial,
+    )).distinct().order_by(OutreachLead.id.asc()).all()
     processed=[]
     for lead in leads:
         if lead.status in {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}:
