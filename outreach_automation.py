@@ -18,6 +18,7 @@ from src.outreach_copy import initial_email, primary_copy_sources, add_resume_at
 from src.outreach_execution import validate_outreach_message, execute_outreach_send
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
+from src.reply_booking import validate_reply_classification
 from src.google_calendar_provider import check_availability, create_event, get_event, reschedule_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
@@ -629,7 +630,15 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         return {"ok":False,"stage":"no_reply_evidence"}
     item=evidence[-1]
     text=current_reply_text(_clean(item.get("text"),20000))
+    # A short time answer is understood in the context of the prior
+    # unavailable booking request, without matching unrelated conversations.
+    previous_unavailable=OutreachBookingAttempt.query.filter_by(
+        lead_id=lead.id,status="failed"
+    ).order_by(OutreachBookingAttempt.updated_at.desc()).first() if lead.status=="booking_ready" else None
+    time_only=bool(previous_unavailable and re.search(r"\\b\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)\\b",text,re.I))
     classification=classify_reply(text)
+    if time_only and classification.get("classification")=="unclear":
+        classification=validate_reply_classification(text,{"classification":"interested"})
     label=classification.get("classification")
     from src.campaign_reporting import record_reply_outcome
     record_reply_outcome(lead.id,_clean(item.get("message_id"),255),label)
@@ -657,13 +666,18 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     if not qualification.get("ok"):
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="QUALIFICATION_REQUIRED_FOR_BOOKING"
         return {"ok":False,"stage":"booking_blocked","classification":classification,"qualification":qualification}
-    booking=extract_explicit_booking(text)
+    from src.scheduling_dates import interpret_booking
+    prior_date=None
+    if previous_unavailable and previous_unavailable.start:
+        try:prior_date=datetime.fromisoformat(previous_unavailable.start)
+        except ValueError:pass
+    parsed=interpret_booking(text,prior_date=prior_date)
+    booking={key:parsed[key] for key in ("start","end","timezone")}
     booking["attendee_email"]=lead.contact_email
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
     if not booking.get("start") or not booking.get("end") or not booking.get("timezone"):
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
-        from src.scheduling_dates import interpret_booking
-        sent=_send_reply_for_message(lead,item,interpret_booking(text)["clarification"] or "Please confirm one full date, start time, and timezone. I'll check availability before confirming.")
+        sent=_send_reply_for_message(lead,item,parsed["clarification"] or "What date and time works for you? I’ll check my calendar.")
         if not sent.get("ok"):lead.last_error="AUTOMATIC_REPLY_REQUIRES_REVIEW"
         return {"ok":sent.get("ok") is True,"stage":"interested","classification":classification,"booking_attempted":False,"reply":sent}
 
@@ -745,7 +759,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         end=datetime.fromisoformat(booking["end"])
         subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
         confirmation=_safe_send(lead,kind="booking_confirmation",sequence=0,subject=subject,
-            body=f"Confirmed for {start.strftime('%A, %B %d, %Y at %I:%M %p')} to {end.strftime('%I:%M %p')} ({booking['timezone']}). A calendar invitation has been sent. Looking forward to speaking with you.")
+            body=f"Awesome, {start.strftime('%A, %B %d at %I:%M %p')} works! I’m sending you a calendar invitation now. Looking forward to talking with you.")
         result["confirmation"]=confirmation
         if not confirmation.get("ok"):lead.last_error="BOOKED_CONFIRMATION_REQUIRES_REVIEW"
         try:stored=json.loads(lead.evidence_json or "[]")
@@ -762,8 +776,8 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
             if availability.get("ok") and availability.get("available"):
                 alternatives.append((start+offset).strftime("%B %d, %Y at %I:%M %p"))
             if len(alternatives)==2:break
-        body="That time is unavailable. "
-        body+=("These alternatives are currently open: "+"; ".join(alternatives)+f" ({booking['timezone']}). Which do you prefer? I'll recheck before confirming.") if alternatives else "Please send another full date, start time, and timezone, and I'll check it."
+        body="I’m tied up at that time. Could you do a different time that same day? "
+        body+=("I can also check "+ " or ".join(alternatives)+f" ({booking['timezone']}). Just tell me what works for you.") if alternatives else "Send me another time that works, and I’ll check."
         result["reply"]=_send_reply_for_message(lead,item,body)
     else:
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=_clean(result,2000)
