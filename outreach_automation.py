@@ -682,7 +682,10 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         try:prior_date=datetime.fromisoformat(previous_unavailable.start)
         except ValueError:pass
     parsed=interpret_booking(text,prior_date=prior_date)
-    booking={key:parsed[key] for key in ("start","end","timezone")}
+    # Keep the existing extraction contract so command recovery, provider
+    # reconciliation, and test adapters remain unchanged for ordinary replies.
+    booking=(extract_explicit_booking(text) if prior_date is None else
+             {key:parsed[key] for key in ("start","end","timezone")})
     booking["attendee_email"]=lead.contact_email
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
     if not booking.get("start") or not booking.get("end") or not booking.get("timezone"):
