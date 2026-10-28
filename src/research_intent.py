@@ -64,9 +64,10 @@ def format_research_results(rows, intent):
                 result[field] = row.get("contact_name") or row.get("decision_maker") or None
                 result["decision_maker_role"] = row.get("contact_role") or None
             elif field == "phone":
-                result[field] = row.get("direct_phone") or row.get("contact_phone") or None
-                result["phone_type"] = ("direct" if row.get("direct_phone_verified") else
-                                        "business_or_unconfirmed" if result[field] else "not_found")
+                direct = row.get("direct_phone") if row.get("direct_phone_verified") else None
+                result[field] = direct or None
+                result["phone_type"] = "direct" if direct else "not_found"
+                result["business_phone"] = row.get("contact_phone") or None
             elif field == "email":
                 result[field] = row.get("contact_email") or None
                 result["email_status"] = row.get("email_status") or "unverified"
