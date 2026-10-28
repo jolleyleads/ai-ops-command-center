@@ -188,3 +188,34 @@ def test_existing_gmail_history_cannot_be_resent_without_an_attempt_row(client,c
     assert row['status']==('active' if complete else 'review') and not row['can_activate']
     assert activate(client,[row['id']]).status_code==409
     assert jobs.CampaignExecutionJob.query.count()==0
+
+
+def test_provided_email_reply_recovers_review_then_books_once(client,monkeypatch):
+    import v1_orchestration as scanner
+    sent=[];events=[];checks=[]
+    monkeypatch.setattr(oa,'_gmail_send',lambda email,*args:(sent.append((email,args)) or {'ok':True,'message_id':'sent-'+str(len(sent)),'thread_id':'thread'}))
+    row=add(client,'recipient@example.com')[0]
+    run_job(activate(client,[row['id']]))
+    lead=db.session.get(oa.OutreachLead,row['lead_id'])
+    # Reproduce a scheduling question held by the old scanner, including AOL footer.
+    text="I'm Interested, when can you chat? Sent from the all new AOL app for iOS"
+    evidence={'message_id':'interest','from_email':lead.contact_email,'text':text,'internal_date':'1'}
+    oa._audit_actor(lead.id,'inbound_processed',{'message_id':'interest'},{'stage':'question'},'scheduler')
+    lead.status='question';db.session.commit()
+    monkeypatch.setattr(scanner,'_gmail_thread_reply_state',lambda _:{'ok':True,'replied':True,'reply_evidence':[evidence]})
+    monkeypatch.setattr(oa,'check_availability',lambda req:(checks.append(req) or {'ok':True,'available':True,'checked_start':req['start'],'checked_end':req['end']}))
+    monkeypatch.setattr(oa,'_calendar_create_via_command',lambda lead,req,**k:(events.append(k) or {'ok':True,'event_id':'calendar-event','event_url':'https://calendar.google.com/event','start':req['start'],'end':req['end']}))
+    result=scanner.scan_real_inbound_replies()
+    assert result['ok'] and result['processed'][0]['stage']=='interested',result
+    assert len(sent)==2 and not events and not checks
+    assert 'date' in sent[-1][1][1] and 'timezone' in sent[-1][1][1]
+    assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='already_processed'
+    assert len(sent)==2
+    evidence.update(message_id='chosen-time',text='November 11 2030 at 2 pm America/New_York',internal_date='2')
+    result=scanner.scan_real_inbound_replies()
+    assert result['ok'] and result['processed'][0]['stage']=='booked',result
+    assert len(checks)==len(events)==1 and len(sent)==3
+    assert lead.status=='booked' and lead.follow_up_due_at is None
+    assert oa.OutreachBookingAttempt.query.one().event_id=='calendar-event'
+    assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='already_processed'
+    assert len(sent)==3 and len(events)==1
