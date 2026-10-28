@@ -333,3 +333,9 @@ def test_staffing_company_type_does_not_replace_requested_callback_need():
     result=enrich_lead(lead(query='staffing companies with poor callback responses'),[source('Acme Norfolk VA Jane Doe, CEO. jane@acme.com')])
     assert result['contact_assessment']['decision_maker_status']=='source_supported'
     assert result['decision_maker_candidates'][0]['responsibility_basis']=='business_function_title'
+
+
+def test_company_owner_title_does_not_become_part_of_person_name():
+    row=source('Acme Norfolk VA. Brian Overton, Company Owner. Our business owner can discuss operations.')
+    result=enrich_lead(lead(),[row])
+    assert any(c['name']=='Brian Overton' and c['title'].lower()=='company owner' for c in result['decision_maker_candidates'])

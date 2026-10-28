@@ -133,14 +133,14 @@ window.renderResearchTable=function(d){
  var headings=['Company'];
  if(has('decision_maker'))headings.push('Decision-maker');
  if(has('email'))headings.push('Public email / contact route');
- if(has('phone'))headings.push('Business phone');
+ if(has('phone'))headings.push('Phone number');
  headings.push('Sources');
  var rows=(d.research_presentation||[]).map(function(item){
   var cells=[link(item.source_url,item.company)+(item.location?'<br><small>'+esc(item.location)+'</small>':'')];
   var people=item.decision_makers||[];
-  if(has('decision_maker'))cells.push(people.length?people.map(function(p){return '<b>'+esc(p.name)+'</b> — '+esc(p.role)+(p.email?'<br>'+esc(p.email)+' (published with this person)':'')+(p.scope?'<br><small>'+esc(p.scope)+'</small>':'')+'<br>'+link(p.source_url,'Role source');}).join('<br><br>'):esc(item.decision_maker||'Not publicly found')+(item.decision_maker_role?' — '+esc(item.decision_maker_role):''));
+  if(has('decision_maker'))cells.push(people.length?people.map(function(p){return '<b>'+esc(p.name)+'</b> — '+esc(p.role)+(p.email?'<br>'+esc(p.email)+' (published with this person)':'')+(p.direct_phone?'<br>'+esc(p.direct_phone)+' (published direct / mobile)':'')+(p.scope?'<br><small>'+esc(p.scope)+'</small>':'')+'<br>'+link(p.source_url,'Role source');}).join('<br><br>'):esc(item.decision_maker||'Not publicly found')+(item.decision_maker_role?' — '+esc(item.decision_maker_role):''));
   if(has('email'))cells.push(item.email?esc(item.email)+'<br><small>'+esc(item.email_type||'Published contact')+' · '+esc(item.email_status||'Mailbox not verified')+'</small>':link(item.source_url,'Company website / contact route')+'<br><small>No public email found</small>');
-  if(has('phone')){var phone=item.phone||item.business_phone||'',dial=String(phone).replace(/[^+0-9]/g,'');cells.push(phone?'<a href="tel:'+esc(dial)+'">'+esc(phone)+'</a><br><small>'+(item.phone?'Verified direct line':'Company main line; direct extension unverified')+'</small>':'Not publicly found');}
+  if(has('phone')){var phone=item.phone||item.business_phone||'',dial=String(phone).replace(/[^+0-9]/g,'');cells.push(phone?'<a href="tel:'+esc(dial)+'">'+esc(phone)+'</a><br><small>'+(item.phone?'Published direct line':'Company main line; direct extension unverified')+'</small>':'Not publicly found');}
   var sources=(item.sources||[]).map(function(s){return link(s.url,s.label);}).join('<br>');
   cells.push(sources+(item.observed_at?'<br><small>Checked '+esc(String(item.observed_at).slice(0,10))+'</small>':'')+(item.contact_issue?'<br><small>'+esc(item.contact_issue)+'</small>':''));
   return '<tr>'+cells.map(function(c){return '<td style="vertical-align:top;padding:12px;border-bottom:1px solid #ddd">'+c+'</td>';}).join('')+'</tr>';

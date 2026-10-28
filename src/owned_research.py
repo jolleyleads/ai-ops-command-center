@@ -109,6 +109,18 @@ def snapshot(lead):
     return next((x for x in reversed(_evidence(lead)) if isinstance(x,dict) and x.get('source')=='automake_contact_research'),None)
 
 
+
+def _published_direct_phone(person):
+    """Only an explicitly labeled number in this person's source excerpt."""
+    text=str(person.get('evidence_excerpt') or '')
+    name=str(person.get('name') or '')
+    at=text.find(name)
+    if not name or at<0:return ''
+    after=text[at+len(name):at+len(name)+180]
+    match=re.search(r'(?i)\b(?:direct(?: line)?|mobile|cell(?: phone)?)\s*[:#-]?\s*((?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4})',after)
+    return match.group(1) if match else ''
+
+
 def view(lead, record=None):
     record=record or snapshot(lead) or {}
     enrichment=record.get('enrichment') or {};fields=enrichment.get('fields') or {}
@@ -123,11 +135,12 @@ def view(lead, record=None):
     business_matched=(record.get('business_research') or {}).get('filter_status')=='matched'
     people=[{'name':p['name'],'role':p['title'],'email':p.get('email') or '',
              'source_url':p['source_url'],'observed_at':p.get('observed_at'),
+             'direct_phone':_published_direct_phone(p),
              'scope':'Local role supported' if p.get('status')=='source_supported' else 'Company leadership; branch assignment unconfirmed'}
             for p in enrichment.get('decision_maker_candidates') or []
             if p.get('status')=='source_supported' or (business_matched and p.get('company_status')=='source_confirmed'
-                and p.get('responsibility_status')=='source_supported'
-                and re.fullmatch(r'owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
+                and re.fullmatch(r'company owner|owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
+    direct=people[0].get('direct_phone') or '' if len(people)==1 else ''
     # A documented business owner can be displayed even without a personal email.
     # A general number scraped from the website is not their direct line.
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
@@ -136,12 +149,12 @@ def view(lead, record=None):
          'research_source':'AutoHunt','contact_email':address or '',
          'contact_name':person.get('value') or '', 'contact_role':person.get('title') or '',
          'contact_phone':(fields.get('phone') or {}).get('value') or '',
-         'phone_type':'business_or_unconfirmed', 'direct_phone':'', 'direct_phone_verified':False,
+         'phone_type':'direct' if direct else 'business_or_unconfirmed', 'direct_phone':direct, 'direct_phone_verified':bool(direct),
          'decision_maker_source_url':person.get('source_url') or '',
          'decision_makers':people,'research_observed_at':record.get('observed_at'),
          'contact_type':'Named decision-maker email' if named else 'Company inbox' if address and is_shared_email(address) else 'Published contact; person association unconfirmed' if address else '',
          'email_status':status['label'] if address else 'No email found','mailbox_verification':{k:v for k,v in status.items() if k!='receipt'},
-         'email_source_url':email.get('source_url') or '', 'phone_source_url':(fields.get('phone') or {}).get('source_url') or '',
+         'email_source_url':email.get('source_url') or '', 'phone_source_url':people[0]['source_url'] if direct else (fields.get('phone') or {}).get('source_url') or '',
          'email_observed_at':email.get('observed_at'), 'email_verified_on':status['verified_on'] if verified else None,
          'domain_status':(email.get('mail_validation') or {}).get('domain_status') or 'unconfirmed',
          'public_contacts':record.get('contacts') or [],'contact_issue':record.get('contact_issue') or '',
@@ -234,10 +247,18 @@ def run(campaign, *, save_contacts=True):
     companies,diagnostics=discover(filters,limit,cached)
     checkpoint('business_results_ready',businesses=[{**c,'owned_contact_research':True,'provider_contact_research':True,
         'research_source':'AutoHunt','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit)
+    wants_people='decision_maker' in intent['fields']
+    def ready(row):
+        return bool(row.get('contact_name') or row.get('decision_makers')) and (
+            'phone' not in intent['fields'] or bool(row.get('contact_phone') or row.get('direct_phone')))
     for company in companies:
-        if len(views)>=limit:break
-        checkpoint('collecting_public_contacts',businesses=views,requested=limit)
-        record=collect(company,filters,snapshots.get(host(company['website'])))
+        if (sum(ready(row) for row in views)>=limit if wants_people else len(views)>=limit):break
+        try:
+            checkpoint('collecting_public_contacts',businesses=views,requested=limit)
+            record=collect(company,filters,snapshots.get(host(company['website'])))
+        except TimeoutError:
+            if len(views)>=limit:break
+            raise
         if record['excluded']:continue
         lead=OutreachLead.query.filter_by(company=company['company'],source_url=company['website']).filter(scope(OutreachLead,'lead',OWNER)).first() if save_contacts else None
         if lead and (lead.sent_at or lead.gmail_message_id or lead.status!='needs_evidence'):
@@ -262,11 +283,15 @@ def run(campaign, *, save_contacts=True):
         if save_contacts:db.session.commit();saved.append(lead.id)
         views.append(view(lead,record))
         checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,contacts_verified=0)
+    # A company-only row must not displace a researched decision-maker when
+    # the user asked for people. Keep partial results when sources run out.
+    if wants_people:views.sort(key=lambda row:(ready(row),bool(row.get('contact_name') or row.get('decision_makers'))),reverse=True)
+    views=views[:limit]
     presentation=format_research_results(views,intent)
     return {'ok':True,'contact_research':True,'owned_contact_research':True,'research_intent':intent,
         'research_presentation':presentation,'campaign':{**campaign,'territory':location},
         'discovery':{'results':views,'count':len(views),'verified':0,'emails_found':sum(bool(v['contact_email']) for v in views),
-            'target_count':limit,'target_met':len(views)>=limit,'source':'automake_public_sources','diagnostics':diagnostics},
+            'target_count':limit,'target_met':len(views)>=limit,'contact_target_met':not wants_people or sum(ready(row) for row in views)>=limit,'decision_makers_found':sum(bool(row.get('contact_name') or row.get('decision_makers')) for row in views),'source':'automake_public_sources','diagnostics':diagnostics},
         'outreach':{'lead_ids':saved,'saved':len(saved),'qualified':0,'drafted':0,'sent':0},'business_progress':views},None,None
 
 

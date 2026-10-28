@@ -1,0 +1,42 @@
+name: Production contact research acceptance
+on:
+  push:
+    branches: [fix/production-contact-acceptance]
+    paths: ['.github/workflows/contact-research-acceptance.yml']
+permissions:
+  contents: read
+jobs:
+  contact-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Require five named decision-makers and reachable business phones
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python -u - <<'PY'
+          import json,os,time,urllib.request,http.cookiejar
+          base='https://automakeai.live'
+          opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          query='I give me five HVAC companies in Chesapeake, Virginia, but I need their decision-maker contact information like manager, CEO, etc.'
+          req=urllib.request.Request(base+'/api/research/jobs',data=json.dumps({'prompt':query,'location':'Chesapeake, Virginia','target_count':5}).encode(),headers={'Content-Type':'application/json','Origin':base,'Idempotency-Key':'acceptance-'+os.environ['RUN_ID']})
+          with opener.open(req,timeout=40) as response:job=json.load(response)
+          print('JOB',job,flush=True)
+          for i in range(55):
+              with opener.open(base+job['poll_url'],timeout=40) as response:state=json.load(response)
+              progress=state.get('progress') or {}
+              print('PROGRESS',state['status'],progress.get('stage'),len(progress.get('businesses') or []),flush=True)
+              if state['status'] in {'completed','failed','cancelled'}:
+                  result=state.get('result') or {}
+                  rows=result.get('research_presentation') or []
+                  print('CONTACT_RESEARCH_ACCEPTANCE='+json.dumps({'status':state['status'],'error':state.get('error'),'owned':result.get('owned_contact_research'),'rows':rows,'diagnostics':(result.get('discovery') or {}).get('diagnostics')}),flush=True)
+                  assert state['status']=='completed',state.get('error')
+                  assert result.get('owned_contact_research'),'Wrong research engine'
+                  assert len(rows)==5,('Expected five businesses',len(rows))
+                  assert all(r.get('decision_maker') or r.get('decision_makers') for r in rows),'Missing named decision-makers'
+                  assert all(r.get('phone') or r.get('business_phone') for r in rows),'Missing usable phones'
+                  assert (result.get('outreach') or {}).get('sent',0)==0,'Research must not send'
+                  break
+              time.sleep(10)
+          else:raise SystemExit('Production research did not complete')
+          PY
