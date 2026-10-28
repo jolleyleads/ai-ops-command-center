@@ -149,7 +149,7 @@ if(Array.isArray(d.research_presentation)&&d.research_presentation.length){
   if(requestedFields.indexOf('phone')!==-1)details.push('Phone: '+(item.phone||'Not found')+(item.phone_type==='direct'?' (verified direct)':''));
   if(requestedFields.indexOf('email')!==-1)details.push('Email: '+(item.email||'Not found')+(item.email?' ('+(item.email_status||'Unverified')+')':''));
   if(requestedFields.indexOf('website')!==-1)details.push('Website: '+(item.website||'Not found'));
-  return '<div class="lead"><b>'+esc(item.company)+'</b>'+(details.length?'<p>'+details.map(esc).join('<br>')+'</p>':'')+(item.source_url&&/^https:\\/\\//.test(item.source_url)?'<a target="_blank" rel="noopener noreferrer" href="'+esc(item.source_url)+'">Company source</a>':'')+'</div>';
+  return '<div class="lead"><b>'+esc(item.company)+'</b>'+(details.length?'<p>'+details.map(esc).join('<br>')+'</p>':'')+(item.source_url&&String(item.source_url).indexOf('https://')===0?'<a target="_blank" rel="noopener noreferrer" href="'+esc(item.source_url)+'">Company source</a>':'')+'</div>';
  });
  cards+='<details class="research-details" open><summary>Requested contact details ('+contactRows.length+')</summary>'+contactRows.join('')+'</details>';
 }
