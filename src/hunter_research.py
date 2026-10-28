@@ -24,6 +24,9 @@ class ContactResearchUnavailable(RuntimeError):
 
 def is_contact_list_query(query):
     from src.job_evidence import is_hiring_query
+    # A user's “I need their contact information” is an instruction, not a
+    # requirement that the target company has a documented buying need.
+    query=re.sub(r'\b(?:I|we)\s+(?:need|want)\b',' ',str(query or ''),flags=re.I)
     return bool(re.search(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,re.I)
                 and not is_hiring_query(query)
                 and not re.search(r'\b(?:permits?|licenses?|needing|needs?|seeking|looking for|buying|struggling)\b',query,re.I))

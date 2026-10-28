@@ -19,7 +19,8 @@ from google.oauth2.id_token import verify_oauth2_token
 from app import app
 
 LOGIN_TTL = 600
-SESSION_TTL = 8 * 60 * 60
+SESSION_TTL = 30 * 24 * 60 * 60
+SESSION_RENEWAL_INTERVAL = 24 * 60 * 60
 
 
 def allowed_emails():
@@ -155,6 +156,16 @@ def customer_logout():
 
 @app.after_request
 def protect_login_response(response):
+    # Renew only an already valid, approved identity. An expired/revoked grant
+    # must never be resurrected, and logout leaves no identity to renew.
+    if google_session_authorized():
+        identity = session['google_identity']
+        now = int(time.time())
+        if identity['expires'] <= now + SESSION_TTL - SESSION_RENEWAL_INTERVAL:
+            identity = {**identity, 'expires': now + SESSION_TTL}
+            identity['proof'] = _proof(identity)
+            session['google_identity'] = identity
+        session.permanent = True
     if request.path == '/login' or request.path.startswith('/auth/'):
         response.headers.update({'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
                                  'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff'})
