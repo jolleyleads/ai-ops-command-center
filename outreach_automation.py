@@ -635,7 +635,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     previous_unavailable=OutreachBookingAttempt.query.filter_by(
         lead_id=lead.id,status="failed"
     ).order_by(OutreachBookingAttempt.updated_at.desc()).first() if lead.status=="booking_ready" else None
-    time_only=bool(previous_unavailable and re.search(r"\\b\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)\\b",text,re.I))
+    time_only=bool(previous_unavailable and re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",text,re.I))
     classification=classify_reply(text)
     if classification.get("classification")=="unclear":
         # Natural dates and clear typographical variants can be scheduling
