@@ -273,3 +273,25 @@ def test_original_chesapeake_request_preserves_industry_and_geography(setup):
     filters=owned.request_filters(query,location)
     assert filters['industry_terms']==['hvac']
     assert not filters['additional_filters_need_review']
+
+
+def test_named_contact_request_refills_beyond_company_only_rows(setup,monkeypatch):
+    companies=[{**COMPANY,'company':'Company Only','website':'https://company-only.example/'},
+               {**COMPANY,'company':'Named Company','website':'https://named.example/'}]
+    monkeypatch.setattr(owned,'discover',lambda *a:(companies,[]))
+    def collect(company,*a):
+        text=company['company']+' in Norfolk, VA. Electrical services. (757) 555-1234.'
+        if company['company']=='Named Company':text+=' Jane Doe, CEO.'
+        source=company['website']
+        record_page={**page(text),'url':source,'candidate_name':company['company'],'source_title':company['company']}
+        from src.enrichment import enrich_lead
+        enrichment=enrich_lead({'company':company['company'],'website':source,'target_location':'Norfolk, VA','query':'business outreach'},[record_page])
+        return {'source':'automake_contact_research','enrichment':enrichment,'pages':[record_page],
+                'contacts':[],'business_research':{'filter_status':'matched'},'excluded':False}
+    monkeypatch.setattr(owned,'collect',collect)
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me one electrical company with decision-maker contact information'},save_contacts=False)
+    rows=result['discovery']['results']
+    assert len(rows)==1 and rows[0]['company']=='Named Company'
+    assert rows[0]['contact_name']=='Jane Doe'
+    assert result['discovery']['contact_target_met'] is True
+    assert result['outreach']['sent']==0
