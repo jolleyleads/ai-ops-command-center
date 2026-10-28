@@ -55,14 +55,27 @@
     }).catch(function(err){if(version===requestVersion)panel.innerHTML=heading('Google Drive','Connection status')+'<p class="error">'+e(err.message)+'</p>';});
   }
   function crm(version){
-    panel.innerHTML=heading('CRM Integrations','Available CRM connections for your workspace.')+'<div class="workspace-empty">Checking integrations…</div>';
+    var selected=window.automakeCrmSelection||'';
+    panel.innerHTML=heading('CRM Integrations','Connect the CRM your business already uses.')+'<div class="workspace-empty">Checking integrations…</div>';
     requestJSON('/api/crm/providers',{cache:'no-store'}).then(function(result){
       if(version!==requestVersion)return;
       var providers=result.providers||[];
-      panel.innerHTML=heading('CRM Integrations','Provider connections will be enabled after secure authorization is configured.')+
-        (providers.length?providers.map(function(p){
-          return '<article class="lead workspace-lead"><div class="leadtop"><b>'+e(p.name)+'</b><span class="tag">Setup required</span></div><p class="meta">CRM authorization and synchronization are not yet configured. No account is connected.</p><button type="button" class="ghost" disabled aria-label="'+e(p.name)+' setup required">Connect (coming soon)</button></article>';
-        }).join(''):'<div class="workspace-empty">No CRM providers configured.</div>');
+      panel.innerHTML=heading('CRM Integrations','Choose a CRM. Connect is available when provider app authorization is configured.')+
+        providers.map(function(p){
+          return '<article class="lead workspace-lead"><div class="leadtop"><b>'+e(p.name)+'</b><span id="crm-status-'+e(p.id)+'" class="tag">Checking…</span></div><div id="crm-actions-'+e(p.id)+'" class="meta">Checking connection status…</div></article>';
+        }).join('');
+      providers.forEach(function(p){
+        requestJSON('/api/crm/status/'+encodeURIComponent(p.id),{cache:'no-store'}).then(function(s){
+          if(version!==requestVersion)return;
+          var badge=document.getElementById('crm-status-'+p.id), actions=document.getElementById('crm-actions-'+p.id);
+          if(!badge||!actions)return;
+          badge.textContent=s.connected?'Connected':s.configured?'Ready to connect':'Setup required';
+          actions.innerHTML=s.connected?'<p>Authorized. Live CRM record verification and synchronization are not yet enabled.</p>':
+            s.configured?'<a class="ghost" href="/connect/crm/'+encodeURIComponent(p.id)+'">Connect '+e(p.name)+'</a>':
+            '<p>Provider app credentials or approval required before sign-in is available.</p>';
+          if(selected===p.id)actions.scrollIntoView({block:'nearest'});
+        }).catch(function(){var el=document.getElementById('crm-status-'+p.id);if(el)el.textContent='Unavailable';});
+      });
     }).catch(function(err){if(version===requestVersion)error(err);});
   }
   function leads(){
