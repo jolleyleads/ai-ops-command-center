@@ -103,7 +103,9 @@ def reconcile_gmail_command(cmd):
 
 
 def hardened_safe_send(lead,*,kind,sequence,subject,body):
-    if not oa._recipient_matches_source_domain(lead):
+    from src.email_workflows import permitted as provided_permitted
+    provided=provided_permitted(lead,kind)
+    if not oa._recipient_matches_source_domain(lead) and not provided:
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_COMPANY_DOMAIN_MISMATCH"]}}
     if not oa._recipient_mailbox_allowed(lead.contact_email):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["RECIPIENT_PURPOSE_MAILBOX_BLOCKED"]}}
@@ -116,7 +118,7 @@ def hardened_safe_send(lead,*,kind,sequence,subject,body):
     key=send_key(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address);attempt=oa.OutreachSendAttempt.query.filter_by(idempotency_key=key).first();ag=send_attempt_gate(attempt.status if attempt else "")
     if attempt is not None and attempt.status=="failed":return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":["FAILED_ATTEMPT_REQUIRES_OPERATOR_REVIEW"]},"attempt_status":"failed"}
     if not ag.get("allowed"):return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
-    mailbox_gate=oa._independent_mailbox_gate(lead)
+    mailbox_gate={"ok":True} if provided else oa._independent_mailbox_gate(lead)
     if not mailbox_gate.get("ok"):return mailbox_gate
     if attempt is None:
         attempt=oa.OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending");db.session.add(attempt);existing=oa._commit_unique_or_existing(oa.OutreachSendAttempt,{"idempotency_key":key})
