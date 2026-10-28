@@ -205,3 +205,31 @@ def test_smoke_disabled_without_explicit_configuration(env,monkeypatch):
     from production_smoke import run_configured_smoke
     monkeypatch.delenv("AUTOMAKE_SMOKE_RUN_ID",raising=False)
     assert run_configured_smoke()=={"enabled":False}
+
+
+def test_missing_thread_recovered_from_authorized_sent_message(env, monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company="Provided contact",contact_email="owner@example.com",status="needs_evidence",gmail_thread_id="")
+    oa.db.session.add(lead);oa.db.session.flush()
+    oa.db.session.add(oa.OutreachSendAttempt(lead_id=lead.id,recipient=lead.contact_email,
+        kind="initial",sequence=0,idempotency_key="recovery-test",status="sent",message_id="sent-message"))
+    oa.db.session.commit()
+    class GmailMessage:
+        ok=True
+        def json(self): return {"threadId":"recovered-thread"}
+    called=[]
+    monkeypatch.setattr(scanner.requests if hasattr(scanner,"requests") else __import__("requests"),"get",
+        lambda url, **kwargs: GmailMessage())
+    monkeypatch.setattr(oa,"gmail_access_token",lambda:"test-token")
+    monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda thread:called.append(thread) or {"ok":True,"replied":False})
+    result=scanner.scan_real_inbound_replies()
+    assert result["ok"] and called==["recovered-thread"]
+    assert lead.gmail_thread_id=="recovered-thread"
+
+
+def test_unactivated_provided_email_never_enters_inbound_recovery(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company="Unactivated",contact_email="unsent@example.com",status="needs_evidence")
+    oa.db.session.add(lead);oa.db.session.commit()
+    monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda *args:pytest.fail("Unsent email was monitored"))
+    assert scanner.scan_real_inbound_replies()["checked"]==0
