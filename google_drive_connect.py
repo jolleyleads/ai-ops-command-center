@@ -1,5 +1,8 @@
 """Optional per-session Google Drive integration for the customer workspace."""
 import os
+import base64
+import hashlib
+from cryptography.fernet import Fernet, InvalidToken
 import secrets
 import time
 from urllib.parse import urlencode
@@ -19,6 +22,16 @@ def _credentials():
 
 def _redirect():
     return os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "https://automakeai.live/oauth/drive/callback")
+
+def _cipher():
+    key = hashlib.sha256(str(app.secret_key).encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+def _access_token():
+    try:
+        return _cipher().decrypt(session.get("drive_access_token", "").encode()).decode()
+    except (InvalidToken, ValueError, TypeError):
+        return ""
 
 def _authorized():
     return _operator_session_authorized()
@@ -63,7 +76,7 @@ def drive_callback():
         token = payload["access_token"]
         if DRIVE_SCOPE not in payload.get("scope", DRIVE_SCOPE).split():
             return jsonify(error="Drive permission was not granted"), 403
-        session["drive_access_token"] = token
+        session["drive_access_token"] = _cipher().encrypt(token.encode()).decode()
         session["drive_expires"] = time.time() + min(int(payload.get("expires_in", 3600)), 3600) - 60
     except (requests.RequestException, KeyError, ValueError, TypeError):
         return jsonify(error="Could not connect Google Drive"), 502
@@ -73,13 +86,13 @@ def drive_callback():
 def drive_files():
     if not _authorized():
         return jsonify(error="Sign in first"), 401
-    token = session.get("drive_access_token")
+    token = _access_token()
     if not token or time.time() >= session.get("drive_expires", 0):
         return jsonify(error="Connect Google Drive to browse files", connected=False), 401
     try:
         response = requests.get("https://www.googleapis.com/drive/v3/files",
             headers={"Authorization": "Bearer " + token},
-            params={"page_size": 50, "fields": "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)",
+            params={"pageSize": 50, "fields": "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)",
                     "q": "trashed = false", "orderBy": "modifiedTime desc"}, timeout=15)
         if response.status_code == 401:
             session.pop("drive_access_token", None)
