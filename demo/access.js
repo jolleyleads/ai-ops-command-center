@@ -44,7 +44,7 @@ window.renderContactSummary=function(row){
   var email=row.contact_email||'',status=window.mailboxStatus?window.mailboxStatus(row):row.email_status||row.contact_status||'Finding contact';
   var owned=row.owned_contact_research===true;
   var sources=owned&&/^https?:\/\//.test(row.email_source_url||'')?'<p><a href="'+esc(row.email_source_url)+'" target="_blank" rel="noopener noreferrer">Email source</a>'+(row.email_observed_at?' · Found '+esc(new Date(row.email_observed_at).toLocaleDateString()):'')+'</p>':'';
-  if(owned&&row.contact_phone)sources+='<p>Phone: '+esc(row.contact_phone)+(/^https?:\/\//.test(row.phone_source_url||'')?' · <a href="'+esc(row.phone_source_url)+'" target="_blank" rel="noopener noreferrer">Phone source</a>':'')+'</p>';
+  if(owned&&row.contact_phone){var dial=String(row.contact_phone).replace(/[^+0-9]/g,'');sources+='<p>Phone: '+esc(row.contact_phone)+(dial?'<br><a class="ghost" href="tel:'+esc(dial)+'">Call</a>':'')+(/^https?:\/\//.test(row.phone_source_url||'')?' · <a href="'+esc(row.phone_source_url)+'" target="_blank" rel="noopener noreferrer">Phone source</a>':'')+'</p>';}
   var additional=(row.public_contacts||[]).filter(function(c){return c.email&&c.email!==email;});
   if(owned&&additional.length)sources+='<details><summary>Other published emails ('+additional.length+')</summary>'+additional.slice(0,8).map(function(c){return '<p>'+esc(c.email)+' · Mailbox not verified'+(/^https?:\/\//.test(c.source_url||'')?' · <a href="'+esc(c.source_url)+'" target="_blank" rel="noopener noreferrer">Source</a>':'')+'</p>';}).join('')+'</details>';
   var verify=owned&&email&&row.lead_id&&status!=='Verified'?'<button type="button" class="ghost" data-verify-mailbox="'+esc(row.lead_id)+'">Verify email</button><p class="meta">Uses your connected verifier · Free daily allowance with Verifalia · Does not send email</p>':'';
@@ -375,7 +375,7 @@ window.businessEmailValue=function(row){
     return domain===host||domain.endsWith('.'+host)||host.endsWith('.'+domain);
   })||'';
 };
-window.businessEmail=function(row){if(row.provider_contact_research)return '';var email=window.businessEmailValue(row);return (email?'<p class="meta">Email: '+esc(email)+'</p>':'')+(row.contact_phone?'<p class="meta">Phone: '+esc(row.contact_phone)+'</p>':'');};
+window.businessEmail=function(row){if(row.provider_contact_research)return '';var email=window.businessEmailValue(row),phone=row.contact_phone||row.direct_phone||'',dial=String(phone).replace(/[^+0-9]/g,'');return (email?'<p class="meta">Email: '+esc(email)+'</p>':'')+(phone?'<p class="meta">Phone: '+esc(phone)+(dial?'<br><a class="ghost" href="tel:'+esc(dial)+'">Call</a>':'')+'</p>':'');};
 window.bulkActivationControl=function(rows){
   if(!rows.length)return '';
   var refs=[],seen=new Set();
