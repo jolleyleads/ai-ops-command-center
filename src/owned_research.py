@@ -126,8 +126,7 @@ def view(lead, record=None):
              'scope':'Local role supported' if p.get('status')=='source_supported' else 'Company leadership; branch assignment unconfirmed'}
             for p in enrichment.get('decision_maker_candidates') or []
             if p.get('status')=='source_supported' or (business_matched and p.get('company_status')=='source_confirmed'
-                and p.get('responsibility_status')=='source_supported'
-                and re.fullmatch(r'owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
+                and re.fullmatch(r'company owner|owner|founder|president|CEO|chief executive officer|general manager',p.get('title') or '',re.I))]
     # A documented business owner can be displayed even without a personal email.
     # A general number scraped from the website is not their direct line.
     row={**(record.get('business_research') or {}),'company':lead.company,'title':lead.company,
@@ -234,10 +233,18 @@ def run(campaign, *, save_contacts=True):
     companies,diagnostics=discover(filters,limit,cached)
     checkpoint('business_results_ready',businesses=[{**c,'owned_contact_research':True,'provider_contact_research':True,
         'research_source':'AutoHunt','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit)
+    wants_people='decision_maker' in intent['fields']
+    def ready(row):
+        return bool(row.get('contact_name') or row.get('decision_makers')) and (
+            'phone' not in intent['fields'] or bool(row.get('contact_phone') or row.get('direct_phone')))
     for company in companies:
-        if len(views)>=limit:break
-        checkpoint('collecting_public_contacts',businesses=views,requested=limit)
-        record=collect(company,filters,snapshots.get(host(company['website'])))
+        if (sum(ready(row) for row in views)>=limit if wants_people else len(views)>=limit):break
+        try:
+            checkpoint('collecting_public_contacts',businesses=views,requested=limit)
+            record=collect(company,filters,snapshots.get(host(company['website'])))
+        except TimeoutError:
+            if len(views)>=limit:break
+            raise
         if record['excluded']:continue
         lead=OutreachLead.query.filter_by(company=company['company'],source_url=company['website']).filter(scope(OutreachLead,'lead',OWNER)).first() if save_contacts else None
         if lead and (lead.sent_at or lead.gmail_message_id or lead.status!='needs_evidence'):
@@ -262,11 +269,15 @@ def run(campaign, *, save_contacts=True):
         if save_contacts:db.session.commit();saved.append(lead.id)
         views.append(view(lead,record))
         checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,contacts_verified=0)
+    # A company-only row must not displace a researched decision-maker when
+    # the user asked for people. Keep partial results when sources run out.
+    if wants_people:views.sort(key=lambda row:(ready(row),bool(row.get('contact_name') or row.get('decision_makers'))),reverse=True)
+    views=views[:limit]
     presentation=format_research_results(views,intent)
     return {'ok':True,'contact_research':True,'owned_contact_research':True,'research_intent':intent,
         'research_presentation':presentation,'campaign':{**campaign,'territory':location},
         'discovery':{'results':views,'count':len(views),'verified':0,'emails_found':sum(bool(v['contact_email']) for v in views),
-            'target_count':limit,'target_met':len(views)>=limit,'source':'automake_public_sources','diagnostics':diagnostics},
+            'target_count':limit,'target_met':len(views)>=limit,'contact_target_met':not wants_people or sum(ready(row) for row in views)>=limit,'decision_makers_found':sum(bool(row.get('contact_name') or row.get('decision_makers')) for row in views),'source':'automake_public_sources','diagnostics':diagnostics},
         'outreach':{'lead_ids':saved,'saved':len(saved),'qualified':0,'drafted':0,'sent':0},'business_progress':views},None,None
 
 
