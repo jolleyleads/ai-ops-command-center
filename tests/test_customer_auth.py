@@ -183,3 +183,42 @@ def test_login_preserves_only_public_research_ownership_and_rotates_auth_state(c
     with client.session_transaction(base_url='https://automakeai.live') as stored:
         assert stored['research_workspace']=='public-browser-research'
         assert stored['csrf_token']!='old-csrf' and 'untrusted_extra' not in stored
+
+
+def test_login_cookie_remembers_user_for_thirty_days(client, monkeypatch):
+    from datetime import timedelta
+    pending=start(client);mock_google(monkeypatch,pending)
+    result=callback(client,pending)
+    assert oa.app.permanent_session_lifetime==timedelta(days=30)
+    assert oa.app.config['SESSION_REFRESH_EACH_REQUEST'] is True
+    assert 'Expires=' in result.headers['Set-Cookie']
+    with client.session_transaction(base_url='https://automakeai.live') as saved:
+        assert saved.permanent
+        assert auth.SESSION_TTL-10 < saved['google_identity']['expires']-time.time() <= auth.SESSION_TTL
+
+
+def test_valid_older_login_renews_without_google_reauthentication(client, monkeypatch):
+    now=int(time.time())
+    identity={'sub':'subject-123','email':'owner@example.com','expires':now+3600}
+    identity['proof']=auth._proof(identity)
+    with client.session_transaction(base_url='https://automakeai.live') as saved:
+        saved['google_identity']=identity
+    monkeypatch.setattr(auth.requests,'post',Mock(side_effect=AssertionError('Session renewal must not request Google consent')))
+    assert client.get('/auth/session',base_url='https://automakeai.live').json['signed_in']
+    with client.session_transaction(base_url='https://automakeai.live') as saved:
+        renewed=saved['google_identity']
+        assert saved.permanent and renewed['expires']>=now+auth.SESSION_TTL-5
+        assert renewed['proof']==auth._proof(renewed)
+
+
+@pytest.mark.parametrize('invalid', ['expired','revoked','forged'])
+def test_remember_me_never_resurrects_invalid_identity(client,monkeypatch,invalid):
+    identity={'sub':'subject-123','email':'owner@example.com','expires':int(time.time())+3600}
+    if invalid=='expired':identity['expires']=int(time.time())-1
+    identity['proof']=auth._proof(identity)
+    if invalid=='forged':identity['proof']='invalid-proof'
+    if invalid=='revoked':monkeypatch.setenv('GOOGLE_LOGIN_ALLOWED_EMAILS','another@example.com')
+    with client.session_transaction(base_url='https://automakeai.live') as saved:saved['google_identity']=identity
+    assert not client.get('/auth/session',base_url='https://automakeai.live').json['signed_in']
+    with client.session_transaction(base_url='https://automakeai.live') as saved:
+        assert saved['google_identity']==identity
