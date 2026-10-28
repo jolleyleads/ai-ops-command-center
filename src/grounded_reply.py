@@ -86,10 +86,25 @@ def routine_answer(text):
     return '\n\n'.join(dict.fromkeys(answers))
 
 
+def scheduling_inquiry(text):
+    """Recognize a complete timing-only question, without hiding other questions."""
+    text = re.split(r"\s+On\s+.{0,500}?wrote:\s*", str(text or ""), maxsplit=1, flags=re.I|re.S)[0]
+    text = re.split(r"\bSent from (?:the all new AOL app|my (?:iPhone|iPad|Android))\b", text, maxsplit=1, flags=re.I)[0]
+    text = text.replace('’', "'").strip()
+    prefix = r"(?:(?:i(?:'m| am) |we(?:'re| are) )?interested|sounds good|yes|sure|let's talk)"
+    text = re.sub(r"^(?:" + prefix + r")[\s,.!—-]+", '', text, flags=re.I)
+    return bool(re.fullmatch(
+        r"(?:when (?:can|could|are|would) (?:you|we) (?:be )?(?:chat|talk|meet|available|free)(?: for (?:a |the )?(?:call|meeting))?"
+        r"|(?:what (?:times?|days?) (?:are you|would you be) (?:available|free))"
+        r"|(?:what (?:times?|days?) (?:work|works) (?:best )?for you))[\s?!.]*", text, re.I))
+
+
 def scheduling_request(text):
     # Only the new reply supplies intent; quoted invitations are not proposals.
     text = re.split(r"\s+On\s+.{0,500}?wrote:\s*", str(text or ""), maxsplit=1, flags=re.I|re.S)[0]
     text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+    if scheduling_inquiry(text):
+        return True
     if routine_answer(text) or re.search(r"\b(?:price|pricing|cost|how much|what|how|where|who|security|guarantee)\b", text, re.I):
         return False
     # A calendar date paired with a time is a scheduling proposal in its own
