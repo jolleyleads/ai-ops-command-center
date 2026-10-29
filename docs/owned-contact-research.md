@@ -53,3 +53,23 @@ actual verified receipts. Other published addresses remain separately labeled
 unverified. The manual verification button uses Hunter when enabled as well.
 This uses the existing Hunter account identity, free-plan quota guard, cache,
 and seven-day freshness policy. It never buys a plan or activates outreach.
+
+## Decision-maker research results
+
+Owner/decision-maker contact requests also route to AutoHunt without requiring
+"companies" in the prompt. "Contacts" means names, emails, and phones unless a
+channel is explicitly requested. Documented company leaders remain visible
+without an outreach relevance score. Published company phone numbers remain
+labeled as main lines, never reclassified as personal numbers.
+
+When public company pages lack a named email, Hunter Domain Search supplements
+the research with company-associated named contacts. Hunter's verification
+result is shown alongside them; pending verification does not hide the address.
+Provider-only research contacts are stored separately from the persisted sending
+recipient and cannot silently replace public-source or outreach authorization
+evidence. Existing qualified/active conversations are unchanged.
+
+Research tries additional companies when requested channels are missing. A
+source error or time limit preserves already collected contact results instead
+of returning a blank failure. The saved-lead score badge calls low-scored records
+"Contact research" rather than "Needs more research".

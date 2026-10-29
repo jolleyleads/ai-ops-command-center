@@ -245,7 +245,7 @@ def test_research_keeps_multiple_documented_executives_without_choosing_outreach
     result,_,_=owned.run({**CAMPAIGN,'query':'Give me five electrical companies with decision-maker contact information'})
     row=result['discovery']['results'][0]
     assert {p['name'] for p in row['decision_makers']}=={'Jane Doe','Mary Jones'}
-    assert row['contact_name']==''  # Research does not select one of two equally supported buyers.
+    assert row['contact_name'] in {'Jane Doe','Mary Jones'}  # Display leadership without choosing an outreach buyer.
     assert len(result['research_presentation'][0]['decision_makers'])==2
     assert result['outreach']['sent']==0
 
@@ -296,7 +296,7 @@ def test_named_contact_request_refills_beyond_company_only_rows(setup,monkeypatc
     rows=result['discovery']['results']
     assert len(rows)==1 and rows[0]['company']=='Named Company'
     assert rows[0]['contact_name']=='Jane Doe'
-    assert result['discovery']['contact_target_met'] is True
+    assert result['discovery']['contact_target_met'] is False  # Name and phone found; requested email is still missing.
     assert result['outreach']['sent']==0
 
 
@@ -393,3 +393,74 @@ def test_auto_verification_persists_real_hunter_lease_before_new_lead_write(setu
     assert calls==['account','email-verifier']
     assert outreach.OutreachLead.query.count()==1
     assert hunter_mailbox.HunterMailboxCheck.query.filter_by(state='complete').count()==1
+
+
+@pytest.mark.parametrize('verified',[True,False])
+def test_hunter_fills_missing_owner_email_without_hiding_unverified_contacts(setup,monkeypatch,verified):
+    wire(monkeypatch)
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','true')
+    calls=[]
+    def discover(website,**kw):
+        calls.append((website,kw))
+        return {'contacts':[{'name':'Jane Doe','title':'Owner','type':'personal','email':'jane@acmeelectrical.example'}],
+                'checked_at':datetime.now(timezone.utc).isoformat(),'reason_codes':[]}
+    monkeypatch.setattr(hunter_discovery,'discover_contacts',discover)
+    def verify(email,**kw):
+        return {**hunter_mailbox.base_receipt(email,'HUNTER_RESULT_PENDING'),
+                'mailbox_status':'provider_verified' if verified else 'unconfirmed',
+                'provider_verified_on':datetime.now(timezone.utc).date().isoformat()}
+    monkeypatch.setattr(hunter_mailbox,'verify_mailbox',verify)
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me one electrical business owner contacts in Norfolk VA'})
+    row=result['discovery']['results'][0]
+    assert calls==[(COMPANY['website'],{'decision_makers':True})]
+    assert row['contact_name']=='Jane Doe' and row['contact_email']=='jane@acmeelectrical.example'
+    assert row['contact_phone']=='(757) 555-1234'
+    assert row['contact_check']['mailbox_verified']==verified
+    assert row['research_email_only'] and 'lead_id' not in row
+    lead=outreach.OutreachLead.query.one()
+    assert lead.contact_email=='hello@acmeelectrical.example'  # Research cannot replace a sending recipient.
+    assert lead.status=='needs_evidence' and not lead.sent_at
+    assert result['research_presentation'][0]['decision_maker']=='Jane Doe'
+
+
+def test_company_leader_is_visible_without_outreach_or_local_role_qualification(setup,monkeypatch):
+    wire(monkeypatch,[page('Acme Electrical in Norfolk, VA. Jane Doe, General Manager. (757) 555-1234.')])
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me one electrical business owner contact information'},save_contacts=False)
+    row=result['discovery']['results'][0]
+    assert row['contact_name']=='Jane Doe' and row['decision_makers'][0]['role']=='General Manager'
+    assert row['contact_phone']=='(757) 555-1234'
+
+
+def test_decision_maker_discovery_is_not_capped_at_twenty(setup,monkeypatch):
+    import universal_app, smart_search
+    monkeypatch.setattr(universal_app,'_search_businesses',lambda *a:{'results':[
+        {'title':f'Business {i}','website':f'https://business{i}.example','subtitle':'Norfolk VA'} for i in range(30)]})
+    monkeypatch.setattr(smart_search,'_exa_search',lambda *a:{'results':[]})
+    rows,_=owned.discover(owned.request_filters('Give me 25 electrical companies with owner contacts','Norfolk VA'),25)
+    assert len(rows)==30
+
+
+def test_source_failure_does_not_erase_collected_contacts(setup,monkeypatch):
+    wire(monkeypatch)
+    companies=[COMPANY,{**COMPANY,'company':'Unavailable','website':'https://unavailable.example'}]
+    monkeypatch.setattr(owned,'discover',lambda *a:(companies,[]))
+    original=owned.collect
+    def collect(company,*a):
+        if company['company']=='Unavailable':raise TimeoutError('Source timed out')
+        return original(company,*a)
+    monkeypatch.setattr(owned,'collect',collect)
+    result,_,_=owned.run({**CAMPAIGN,'target_count':2},save_contacts=False)
+    assert result['discovery']['count']==1
+    assert result['discovery']['results'][0]['contact_email']=='hello@acmeelectrical.example'
+    assert result['discovery']['diagnostics']
+
+
+def test_places_main_phone_survives_when_website_has_no_number(setup,monkeypatch):
+    wire(monkeypatch,[page('Acme Electrical in Norfolk, VA. Jane Doe, Owner. hello@acmeelectrical.example')])
+    monkeypatch.setattr(owned,'discover',lambda *a:([{**COMPANY,'company_phone':'(757) 555-9090',
+        'discovery_url':'https://maps.google.com/?cid=123'}],[]))
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me one electrical company with owner phone numbers'},save_contacts=False)
+    row=result['discovery']['results'][0]
+    assert row['contact_phone']=='(757) 555-9090' and row['phone_type']=='business_or_unconfirmed'
+    assert row['phone_source_url']=='https://maps.google.com/?cid=123'
+    assert result['research_presentation'][0]['business_phone']=='(757) 555-9090'

@@ -21,7 +21,7 @@ def parse_research_request(query, previous=None):
     query = str(query or "").strip()
     previous = previous or {}
     requested = [field for field, pattern in _FIELDS.items() if re.search(pattern, query, re.I)]
-    contact_bundle = bool(re.search(r'\bcontact\s+(?:information|info|details)\b', query, re.I))
+    contact_bundle = bool(re.search(r'\bcontacts?\b', query, re.I)) and not any(f in requested for f in ('phone','email'))
     if contact_bundle:
         requested = ["company", "decision_maker", "email", "phone", "website"]
     elif not requested:
@@ -29,7 +29,7 @@ def parse_research_request(query, previous=None):
     else:
         requested = ["company"] + (["decision_maker"] if "decision_maker" in requested else []) + [f for f in requested if f != "decision_maker"]
     match = _COUNT.search(query)
-    word_count = re.search(r'\b('+'|'.join(COUNT_WORDS)+r')\s+(?:[a-z-]+\s+){0,4}(?:companies|businesses|prospects|leads)\b', query, re.I)
+    word_count = re.search(r'\b('+'|'.join(COUNT_WORDS)+r')\s+(?:[a-z-]+\s+){0,4}(?:companies|businesses|prospects|leads|owners|decision[ -]?makers)\b', query, re.I)
     count = min(100, max(1, int(match.group(1)))) if match else COUNT_WORDS.index(word_count.group(1).lower())+1 if word_count else previous.get("count", 20)
     reuse = bool(previous and _FOLLOWUP.search(query))
     return {

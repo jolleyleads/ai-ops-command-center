@@ -28,6 +28,6 @@ def target_count_from_prompt(prompt, explicit=None):
     import re
     if explicit is not None:return requested_target_count(explicit)
     words=COUNT_WORDS
-    match=re.search(r'(?:^\s*|\b(?:find|research|get|give|show|list)\s+(?:me\s+)?(?:up to\s+)?)(\d+|'+ '|'.join(words)+r')\s+(?:[a-z][a-z-]*\s+){0,4}(?:companies|company|businesses|business|prospects?|leads?)\b',str(prompt or ''),re.I)
+    match=re.search(r'(?:^\s*|\b(?:find|research|get|give|show|list)\s+(?:me\s+)?(?:up to\s+)?)(\d+|'+ '|'.join(words)+r')\s+(?:[a-z][a-z-]*\s+){0,4}(?:companies|company|businesses|business|prospects?|leads?|owners?|decision[ -]?makers?)\b',str(prompt or ''),re.I)
     value=match.group(1).lower() if match else None
     return requested_target_count(words.index(value)+1 if value in words else int(value) if value else None)
