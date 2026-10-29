@@ -349,3 +349,11 @@ def connect_verifalia():
 def check_verifalia():
     from src.verifalia_mailbox import balance
     return jsonify(balance())
+
+
+@app.get('/api/chat/dashboard/verified-emails')
+@protected
+def verified_email_directory():
+    from src.verified_contacts import verified_contacts
+    contacts=verified_contacts()
+    return jsonify(ok=True,contacts=contacts,count=len(contacts))

@@ -3,7 +3,7 @@
   'use strict';
   var panel=document.getElementById('workspace-panel'), menu=document.getElementById('workspace-menu');
   var data=null, view='chat', requestVersion=0, leadOffset=0, campaignOffset=0;
-  var labels={'email-workflows':'Email workflows',chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive',crm:'CRM Integrations'};
+  var labels={'verified-emails':'Verified Emails','email-workflows':'Email workflows',chat:'Chat',leads:'My Leads',campaigns:'My Campaigns',conversations:'Conversations',drafts:'Drafts',sent:'Sent',appointments:'Appointments',settings:'Settings',drive:'Google Drive',crm:'CRM Integrations'};
   var statuses={needs_evidence:'Checking contact details',review:'Ready for review',rejected:'Not a match',qualified:'Ready to prepare',drafted:'Draft ready',sent:'Email sent · Waiting for reply',replied:'Reply received',interested:'Interested',booked:'Appointment booked',unsubscribed:'Contact stopped',opted_out:'Contact stopped',queued:'Queued',running:'In progress',completed:'Complete',failed:'Needs attention'};
   var checks={verified_identity:'Business identity confirmed',validated_website:'Company website found',validated_contact:'Contact information checked',source_evidence:'Research sources recorded',geographic_fit:'Location matches',business_type_fit:'Business type matches',intent_signal:'Requested business need supported',evidence_freshness:'Current evidence',named_decision_maker_email:'Named contact and email matched'};
   function e(value){return window.esc(value);}
@@ -30,7 +30,22 @@
     if(view==='drive'){drive(version);return;}
     if(view==='crm'){crm(version);return;}
     if(view==='appointments'){appointments(version);return;}
+    if(view==='verified-emails'){verifiedEmails(version);return;}
     load().then(function(){if(version!==requestVersion)return;if(view==='campaigns')campaigns();else leads();}).catch(function(err){if(version===requestVersion)error(err);});
+  }
+  function verifiedEmails(version){
+    panel.innerHTML=heading('Verified Emails','Decision-makers only · Current verified emails and person-specific phone numbers.')+'<p role="status">Loading verified contacts…</p>';
+    requestJSON(API+'/api/chat/dashboard/verified-emails',{cache:'no-store'}).then(function(result){
+      if(version!==requestVersion)return;
+      panel.innerHTML=heading('Verified Emails','Decision-makers only · Latest verification first.')+'<label>Search contacts<input id="verified-contact-search" type="search" placeholder="Name, company, email or phone"></label><p id="verified-contact-count" class="meta"></p><div id="verified-contact-results"></div>';
+      function render(){
+        var term=document.getElementById('verified-contact-search').value.toLowerCase();
+        var rows=(result.contacts||[]).filter(function(c){return [c.name,c.role,c.company,c.email,c.phone].join(' ').toLowerCase().includes(term);});
+        document.getElementById('verified-contact-count').textContent=rows.length+' verified '+(rows.length===1?'decision-maker':'decision-makers');
+        document.getElementById('verified-contact-results').innerHTML=rows.length?'<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-collapse:collapse"><thead><tr>'+['Decision-maker','Company','Verified email','Direct phone','Verification'].map(function(h){return '<th style="padding:12px">'+e(h)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.map(function(c){var phone=c.phone?'<a href="tel:'+e(c.phone.replace(/[^+0-9]/g,''))+'">'+e(c.phone)+'</a>':'No person-specific number found';return '<tr>'+['<b>'+e(c.name)+'</b><br>'+e(c.role),e(c.company),'<a href="mailto:'+e(c.email)+'">'+e(c.email)+'</a>',phone,e(c.provider||'Verified')+'<br>'+e(String(c.verified_on||'').slice(0,10))+'<br>'+link(c.source_url,'Contact source')].map(function(v){return '<td style="padding:12px;vertical-align:top;border-bottom:1px solid #eee">'+v+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>':'<div class="workspace-empty"><b>No verified decision-maker emails found</b><p>Verified owner and decision-maker contacts from your saved research will appear here. Company inboxes, expired verifications and main office numbers are excluded.</p></div>';
+      }
+      document.getElementById('verified-contact-search').addEventListener('input',render);render();
+    }).catch(function(err){if(version===requestVersion)error(err);});
   }
   function drive(version){
     panel.innerHTML=heading('Google Drive','Connect your Google account to browse files in your workspace.')+'<div class="workspace-empty"><p>Checking Google Drive connection…</p></div>';

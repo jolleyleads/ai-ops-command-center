@@ -167,3 +167,70 @@ def test_drafts_and_campaigns_have_stable_newest_first_order(workspace):
     result=workspace.get('/api/chat/dashboard?folder=drafts',headers=AUTH).json
     assert [r['id'] for r in result['leads']]==[second.id,first.id]
     assert [r['id'] for r in result['campaigns']]==['new','old']
+
+
+def directory_person(email='jane@acme.example',days=0,direct=True):
+    at=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat()
+    proof={'email':email,'provider':'hunter','mailbox_status':'provider_verified','checked_at':at,'provider_verified_on':at}
+    person={'value':'Jane Doe','title':'Owner','source_url':'https://acme.example/team'}
+    candidate={'name':'Jane Doe','email':email,'evidence_excerpt':'Jane Doe, Owner. '+('Direct: (757) 555-9876' if direct else 'Office: (757) 555-1111')}
+    return {'enrichment':{'fields':{'decision_maker':person,'phone':{'value':'(757) 555-1111'}},
+        'decision_maker_candidates':[candidate],
+        'contact_assessment':{'person_name':'Jane Doe','person_email':email,'email_person_status':'same_source_card',
+            'decision_maker_status':'source_supported','mailbox_validation':proof}}}
+
+
+def test_verified_directory_requires_auth_and_shows_only_current_named_contacts(workspace):
+    path='/api/chat/dashboard/verified-emails'
+    assert workspace.get(path).status_code==401
+    for email,days in [('jane@acme.example',0),('old@acme.example',8),('info@acme.example',0)]:
+        lead=saved_lead(contact_name='Jane Doe')
+        lead.contact_email=email;lead.evidence_json=json.dumps([directory_person(email,days)]);oa.db.session.commit()
+    result=workspace.get(path,headers=AUTH)
+    assert result.status_code==200 and result.headers['Cache-Control']=='no-store'
+    assert result.json['count']==1
+    row=result.json['contacts'][0]
+    assert row['email']=='jane@acme.example' and row['name']=='Jane Doe'
+    assert row['phone']=='(757) 555-9876' and row['role']=='Owner'
+    assert oa.OutreachSendAttempt.query.count()==0
+
+
+def test_verified_directory_never_uses_company_main_phone_or_other_workspace(workspace):
+    from workspace_security import claim
+    lead=saved_lead(contact_name='Jane Doe')
+    lead.contact_email='jane@acme.example';lead.evidence_json=json.dumps([directory_person(direct=False)])
+    other=saved_lead(contact_name='Jane Doe')
+    other.contact_email='other@acme.example';other.evidence_json=json.dumps([directory_person(other.contact_email)])
+    claim('lead',other.id,'different-customer');oa.db.session.commit()
+    contacts=workspace.get('/api/chat/dashboard/verified-emails',headers=AUTH).json['contacts']
+    assert len(contacts)==1 and contacts[0]['phone']==''
+
+
+def test_verified_directory_includes_research_only_provider_contacts_and_deduplicates(workspace):
+    from background_research import ResearchJob
+    from workspace_security import claim
+    person={'name':'Mary Jones','role':'President','email':'mary@acme.example','source_url':'https://hunter.io/domain-search?domain=acme.example',
+            'mailbox_validation':directory_person('mary@acme.example')['enrichment']['contact_assessment']['mailbox_validation']}
+    lead=saved_lead()
+    lead.evidence_json=json.dumps([{'research_contacts':[person]}]);oa.db.session.commit()
+    row={'company':'Acme','contact_phone':'(757) 555-1111','decision_makers':[person]}
+    for job_id,owner,email in [('owned-research','matthew-owner-workspace',None),('other-research','other-customer','secret@acme.example')]:
+        result_row=json.loads(json.dumps(row))
+        if email:
+            result_row['decision_makers'][0]['email']=email
+            result_row['decision_makers'][0]['mailbox_validation']['email']=email
+        oa.db.session.add(ResearchJob(id=job_id,prompt_text='Owner contacts',status='completed',result_json=json.dumps({'discovery':{'results':[result_row]}})))
+        claim('research',job_id,owner)
+    oa.db.session.commit()
+    contacts=workspace.get('/api/chat/dashboard/verified-emails',headers=AUTH).json['contacts']
+    assert len(contacts)==1 and contacts[0]['email']=='mary@acme.example' and contacts[0]['phone']==''
+
+
+def test_verified_directory_latest_rejection_removes_previously_verified_address(workspace):
+    lead=saved_lead(contact_name='Jane Doe');lead.contact_email='jane@acme.example'
+    evidence=directory_person();lead.evidence_json=json.dumps([evidence]);oa.db.session.commit()
+    receipt={'email':lead.contact_email,'provider':'hunter','mailbox_status':'provider_rejected',
+             'checked_at':(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()}
+    oa.db.session.add(oa.OperatorAuditEvent(lead_id=lead.id,action='mailbox_verification',result_json=json.dumps(receipt),event_hash='verified-directory-rejection'))
+    oa.db.session.commit()
+    assert workspace.get('/api/chat/dashboard/verified-emails',headers=AUTH).json['count']==0
