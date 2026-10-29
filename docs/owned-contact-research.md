@@ -21,12 +21,12 @@ Hiring, permit, and buying-signal workflows keep their separate evidence rules.
   unsupported conditions remain explicitly unconfirmed. An unavailable page or
   search source does not prove that no matching business exists.
 
-## Separate mailbox action
+## Manual mailbox retry
 
 `POST /api/chat/contacts/verify` accepts only the ID of an owned saved public
 contact. Existing authentication, CSRF, ownership, current-source, and stopped
 conversation checks apply. It verifies the exact persisted address through the
-configured mailbox verifier; it does not buy contacts, create drafts, send mail,
+Hunter when enabled, otherwise the configured mailbox verifier; it does not buy contacts, create drafts, send mail,
 activate follow-ups, or book appointments. The button explicitly discloses
 verification credit use. Optimistic writes prevent replacing concurrently
 changed conversation evidence.
@@ -39,3 +39,17 @@ checks remain separate at workflow activation.
 The existing workflow activation remains the sending action. AutoMake-collected
 contacts skip Hunter contact discovery when activated, while the independent
 mailbox check and all sending restrictions remain in place.
+
+## Automatic Hunter verification
+
+When `HUNTER_MAILBOX_VERIFICATION_ENABLED=true`, email/contact-information
+research runs AutoHunt collection followed by Hunter Email Verifier on each
+selected, source-supported email. This explicitly chooses Hunter even when
+Verifalia is also connected. Phone-only research does not use verification
+credits. Current Hunter receipts are reused; pending, rejected, catch-all,
+stale, or quota-blocked results remain unverified and retain the business and
+published email with the provider reason. Progress and final counts reflect
+actual verified receipts. Other published addresses remain separately labeled
+unverified. The manual verification button uses Hunter when enabled as well.
+This uses the existing Hunter account identity, free-plan quota guard, cache,
+and seven-day freshness policy. It never buys a plan or activates outreach.

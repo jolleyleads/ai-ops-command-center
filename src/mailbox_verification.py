@@ -27,12 +27,13 @@ def enabled():
     return verifalia_mailbox.configured() or hunter_mailbox.enabled()
 
 
-def verify_mailbox(email,*,research_only=False):
+def verify_mailbox(email,*,research_only=False,provider=None):
     from src import hunter_mailbox,verifalia_mailbox
     if hunter_mailbox.processing_restriction_state(email)=='restricted':
         receipt=hunter_mailbox.base_receipt(email,'HUNTER_PROCESSING_RESTRICTED');receipt['mailbox_status']='provider_rejected';return receipt
-    # An explicitly connected free provider never silently spends Hunter credits.
-    receipt=verifalia_mailbox.verify(email) if verifalia_mailbox.configured() else hunter_mailbox.verify_mailbox(email)
+    # Default callers keep the connected free provider; AutoHunt explicitly selects Hunter.
+    if provider not in {None,'hunter'}:raise ValueError('Unsupported mailbox provider')
+    receipt=verifalia_mailbox.verify(email) if provider is None and verifalia_mailbox.configured() else hunter_mailbox.verify_mailbox(email)
     if receipt.get('mailbox_status')=='provider_verified' and not current(receipt,email):
         receipt={**receipt,'mailbox_status':'unconfirmed','deliverability_status':'unconfirmed',
                  'reason_codes':['MAILBOX_VERIFICATION_EXPIRED']}
