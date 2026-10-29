@@ -66,3 +66,21 @@ def test_user_needs_contact_details_is_not_a_company_buying_signal():
     from src.owned_research import accepts
     assert accepts('I give me five HVAC companies in Chesapeake, Virginia, but I need their decision-maker contact information like manager, CEO, etc.')
     assert not accepts('Find HVAC companies needing automation with owner contact information')
+
+
+def test_owner_contacts_without_company_word_routes_and_requests_both_channels():
+    from src.owned_research import accepts, request_filters
+    query='Give me 10 HVAC owners contacts in Chesapeake Virginia'
+    assert accepts(query)
+    intent=parse_research_request(query)
+    assert {'decision_maker','phone','email'} <= set(intent['fields'])
+    assert request_filters(query,'Chesapeake Virginia')['industry_terms']==['hvac']
+    phone=parse_research_request('Give me 10 HVAC owners contacts phone numbers only')
+    assert 'phone' in phone['fields'] and 'email' not in phone['fields']
+
+
+def test_owner_prompt_word_count_is_preserved_by_job_and_presentation():
+    from src.research_policy import target_count_from_prompt
+    query='Give me five HVAC owners contacts in Chesapeake VA'
+    assert parse_research_request(query)['count']==5
+    assert target_count_from_prompt(query)==5

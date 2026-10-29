@@ -11,7 +11,7 @@
   function date(value){if(!value)return 'Not scheduled';var d=new Date(value);return Number.isNaN(d.getTime())?String(value):d.toLocaleString();}
   function link(url,text){return /^https?:\/\//i.test(String(url||''))?'<a href="'+e(url)+'" target="_blank" rel="noopener noreferrer">'+e(text)+'</a>':e(text||'Not available');}
   function score(n){return typeof n==='number'&&Number.isFinite(n)?Math.max(0,Math.min(100,n)):null;}
-  function badge(n){n=score(n);return n===null?'Score pending':n+'/100 · '+(n>=80?'Strong match':n>=60?'Potential match':'Needs more research');}
+  function badge(n){n=score(n);return n===null?'Score pending':n+'/100 · '+(n>=80?'Strong match':n>=60?'Potential match':'Contact research');}
   function load(){return requestJSON(API+'/api/chat/dashboard?lead_offset='+leadOffset+'&campaign_offset='+campaignOffset+'&folder='+(['sent','drafts','conversations'].includes(view)?view:''),{cache:'no-store'}).then(function(result){data=result;return result;});}
   function heading(title,subtitle){return '<div class="workspace-heading"><div><h1>'+e(title)+'</h1><p class="meta">'+e(subtitle)+'</p></div><button type="button" class="ghost" data-refresh>Refresh</button></div>';}
   function error(err){panel.innerHTML=heading(labels[view],'Your workspace')+'<div class="workspace-empty"><p>'+e(err.message)+'</p><a href="/login">Sign in to your workspace</a></div>';}
