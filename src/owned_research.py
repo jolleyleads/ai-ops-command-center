@@ -1,7 +1,8 @@
 """AutoHunt discovery and public contact collection. Never purchases email data.
 
 Search providers supply hints, current company pages supply contact evidence,
-and DNS supplies routing information only. Mailbox checks are a separate action.
+and DNS supplies routing information only. Hunter checks collected mailboxes
+automatically when enabled; verification never authorizes outreach.
 """
 import json
 import re
@@ -132,6 +133,13 @@ def view(lead, record=None):
     enrichment=record.get('enrichment') or {};fields=enrichment.get('fields') or {}
     email=fields.get('email') or {};assessment=enrichment.get('contact_assessment') or {}
     mailbox=assessment.get('mailbox_validation') or {}
+    reasons=mailbox.get('reason_codes') or []
+    issue=record.get('contact_issue') or ''
+    if mailbox.get('provider')=='hunter' and reasons:
+        issue=('Hunter verification credits are unavailable. Check Hunter usage in Settings.' if any('QUOTA' in r for r in reasons) else
+               'Hunter verification is pending. Try verifying this email again shortly.' if any('PENDING' in r or 'IN_PROGRESS' in r for r in reasons) else
+               'Hunter rejected this email address.' if mailbox.get('mailbox_status')=='provider_rejected' else
+               'Hunter has not confirmed this mailbox. Check the Hunter connection in Settings or retry verification.')
     address=email.get('value') if email.get('validated') else ''
     from src.mailbox_verification import lead_status
     status=lead_status(lead,record)
@@ -163,7 +171,7 @@ def view(lead, record=None):
          'email_source_url':email.get('source_url') or '', 'phone_source_url':people[0]['source_url'] if direct else (fields.get('phone') or {}).get('source_url') or '',
          'email_observed_at':email.get('observed_at'), 'email_verified_on':status['verified_on'] if verified else None,
          'domain_status':(email.get('mail_validation') or {}).get('domain_status') or 'unconfirmed',
-         'public_contacts':record.get('contacts') or [],'contact_issue':record.get('contact_issue') or '',
+         'public_contacts':record.get('contacts') or [],'contact_issue':issue,
          'contact_check':{'mailbox_verified':verified,'named_contact':bool(address and person_email_supported(assessment,address))}}
     if lead.id:row['lead_id']=lead.id
     return row
@@ -239,6 +247,9 @@ def run(campaign, *, save_contacts=True):
     from src.campaign_reporting import attribute_new_lead
     from src.research_intent import parse_research_request, format_research_results
     intent=parse_research_request(campaign['query'])
+    from src import hunter_mailbox
+    from src.mailbox_verification import verify_mailbox, current
+    verify_emails=hunter_mailbox.enabled() and 'email' in intent['fields']
     location=search_location(campaign['query'],campaign.get('territory') or '')
     filters=request_filters(campaign['query'],location);limit=campaign['target_count']
     saved=[];views=[];cached=[];snapshots={}
@@ -273,22 +284,37 @@ def run(campaign, *, save_contacts=True):
             views.append(shown);continue
         if not lead:
             lead=OutreachLead(company=company['company'],source_url=company['website'],location=location,status='needs_evidence',score=0,verification='CANDIDATE')
-            if save_contacts:db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
         address=(record['enrichment'].get('fields',{}).get('email') or {}).get('value') or ''
         if lead.contact_email==address:
             from src.mailbox_verification import lead_status
             previous=lead_status(lead)
-            if previous['verified']:record['enrichment'].setdefault('contact_assessment',{})['mailbox_validation']=previous['receipt']
+            if previous['verified'] and (not verify_emails or previous['provider']=='hunter'):
+                record['enrichment'].setdefault('contact_assessment',{})['mailbox_validation']=previous['receipt']
         else:lead.subject='';lead.body=''
         lead.contact_email=address
+        field=record['enrichment'].get('fields',{}).get('email') or {}
+        assessment=record['enrichment'].setdefault('contact_assessment',{})
+        check=assessment.get('mailbox_validation') or {}
+        if verify_emails and address and field.get('validated') and not (check.get('provider')=='hunter' and current(check,address)):
+            checkpoint('verifying_research_mailbox',businesses=views,requested=limit)
+            check=verify_mailbox(address,provider='hunter',research_only=True)
+            assessment['mailbox_validation']=check
+            field['mailbox_status']=check.get('mailbox_status','unconfirmed')
+            field['deliverability_status']=check.get('deliverability_status','unconfirmed')
         assessment=record['enrichment'].get('contact_assessment') or {}
         lead.contact_name=(record['enrichment'].get('fields',{}).get('decision_maker') or {}).get('value') or ''
         lead.evidence_json=json.dumps([record,{'source':'campaign_context','context':{
             'query':campaign['query'],'offer':campaign.get('offer') or '', 'target_location':location,
             'owned_contact_research':True,'require_decision_maker':campaign.get('require_decision_maker') is True}}])
-        if save_contacts:db.session.commit();saved.append(lead.id)
+        if save_contacts:
+            # Hunter stores its lease in a separate transaction. Finish the
+            # mailbox check before flushing a new lead (also works on SQLite).
+            if lead.id is None:
+                db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
+            db.session.commit();saved.append(lead.id)
         views.append(view(lead,record))
-        checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,contacts_verified=0)
+        checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,
+            contacts_verified=sum(v['contact_check']['mailbox_verified'] for v in views))
     # A company-only row must not displace a researched decision-maker when
     # the user asked for people. Keep partial results when sources run out.
     if wants_people:views.sort(key=lambda row:(ready(row),bool(row.get('contact_name') or row.get('decision_makers'))),reverse=True)
@@ -296,7 +322,7 @@ def run(campaign, *, save_contacts=True):
     presentation=format_research_results(views,intent)
     return {'ok':True,'contact_research':True,'owned_contact_research':True,'research_intent':intent,
         'research_presentation':presentation,'campaign':{**campaign,'territory':location},
-        'discovery':{'results':views,'count':len(views),'verified':0,'emails_found':sum(bool(v['contact_email']) for v in views),
+        'discovery':{'results':views,'count':len(views),'verified':sum(v['contact_check']['mailbox_verified'] for v in views),'emails_found':sum(bool(v['contact_email']) for v in views),
             'target_count':limit,'target_met':len(views)>=limit,'contact_target_met':not wants_people or sum(ready(row) for row in views)>=limit,'decision_makers_found':sum(bool(row.get('contact_name') or row.get('decision_makers')) for row in views),'source':'automake_public_sources','diagnostics':diagnostics},
         'outreach':{'lead_ids':saved,'saved':len(saved),'qualified':0,'drafted':0,'sent':0},'business_progress':views},None,None
 
@@ -327,7 +353,8 @@ def verify_owned_contact():
     if lead.sent_at or lead.gmail_message_id or lead.status!='needs_evidence':
         return jsonify(ok=False,error='This conversation is already being managed. Its contact was not changed.'),409
     original_evidence=lead.evidence_json
-    result=verify_mailbox(email)
+    from src import hunter_mailbox
+    result=verify_mailbox(email,provider='hunter') if hunter_mailbox.enabled() else verify_mailbox(email)
     # Discard a provider receipt for any other address.
     if result.get('email')!=email:return jsonify(ok=False,error='Mailbox verification did not confirm this address.'),502
     record['enrichment'].setdefault('contact_assessment',{})['mailbox_validation']=result

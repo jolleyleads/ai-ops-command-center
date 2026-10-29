@@ -14,6 +14,8 @@ from src import owned_research as owned,hunter_discovery,hunter_mailbox
 from src.company_identity import identity_proof
 from workspace_security import claim,OWNER
 
+REAL_HUNTER_VERIFY=hunter_mailbox.verify_mailbox
+
 QUERY='Give me five electrical businesses with their emails'
 CAMPAIGN={'query':QUERY,'territory':'Norfolk, VA','target_count':1,'offer':'Scheduling automation'}
 COMPANY={'company':'Acme Electrical','website':'https://acmeelectrical.example/',
@@ -22,6 +24,7 @@ COMPANY={'company':'Acme Electrical','website':'https://acmeelectrical.example/'
 
 @pytest.fixture
 def setup(monkeypatch):
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','false')
     monkeypatch.setenv('OPERATOR_CONTROL_TOKEN','owned-contact-test')
     monkeypatch.setenv('AUTOMAKE_ISOLATED_EXECUTION','0')
     monkeypatch.setattr(hunter_discovery,'discover_contacts',lambda *a,**k:pytest.fail('Collection purchased Hunter data'))
@@ -216,7 +219,7 @@ def test_frontend_distinguishes_found_from_verified_and_labels_credit_use():
 const row={provider_contact_research:true,owned_contact_research:true,lead_id:1,contact_email:'hello@acme.example',email_status:'Email found · Mailbox not verified',email_source_url:'https://acme.example/contact',research_source:'AutoMake public sources'};
 const html=window.renderContactSummary(row);
 assert(html.includes('Mailbox not verified')&&html.includes('Email source'));
-assert(html.includes('Free daily allowance with Verifalia')&&html.includes('Does not send email'));
+assert(html.includes('Uses Hunter when connected')&&html.includes('Does not send email'));
 assert(!html.includes('Contact checked with Hunter'));
 assert(window.researchResultHeading({contact_research:true,owned_contact_research:true,discovery:{results:[row]}}).includes('1 emails found · 0 mailboxes verified'));
 '''
@@ -319,3 +322,74 @@ def test_people_discovery_searches_leadership_sources_before_settling_for_map_li
     assert calls and 'owner president CEO leadership' in calls[0][0]
     assert rows[0]['company']=='Named Company'
     assert any(row['company']=='Map Company' for row in rows)
+
+
+def test_autohunt_automatically_verifies_with_hunter_even_when_verifalia_connected(setup,monkeypatch):
+    from src import verifalia_mailbox
+    wire(monkeypatch)
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','true')
+    monkeypatch.setattr(verifalia_mailbox,'configured',lambda:True)
+    monkeypatch.setattr(verifalia_mailbox,'verify',lambda *a:pytest.fail('AutoHunt bypassed requested Hunter verifier'))
+    calls=[]
+    def verify(email,**kw):
+        calls.append(email)
+        return {'email':email,'provider':'hunter','mailbox_status':'provider_verified',
+                'checked_at':datetime.now(timezone.utc).isoformat(),
+                'provider_verified_on':datetime.now(timezone.utc).date().isoformat(),'reason_codes':[]}
+    monkeypatch.setattr(hunter_mailbox,'verify_mailbox',verify)
+    result,_,_=owned.run(CAMPAIGN)
+    assert calls==['hello@acmeelectrical.example']
+    assert result['discovery']['verified']==1
+    row=result['discovery']['results'][0]
+    assert row['email_status']=='Verified' and row['mailbox_verification']['provider']=='hunter'
+    lead=outreach.OutreachLead.query.one()
+    assert owned.snapshot(lead)['enrichment']['contact_assessment']['mailbox_validation']['provider']=='hunter'
+    owned.run(CAMPAIGN)
+    assert len(calls)==1  # Fresh Hunter proof is reused.
+    assert lead.status=='needs_evidence' and not lead.subject and not lead.sent_at
+
+
+@pytest.mark.parametrize('reason,state',[
+    ('HUNTER_RESULT_PENDING','unconfirmed'),('HUNTER_FREE_QUOTA_UNAVAILABLE','unconfirmed'),
+    ('HUNTER_ADDRESS_REJECTED','provider_rejected'),('HUNTER_ACCEPT_ALL_UNCONFIRMED','unconfirmed')])
+def test_automatic_hunter_failure_keeps_business_and_published_email_unverified(setup,monkeypatch,reason,state):
+    wire(monkeypatch)
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','true')
+    def verify(email,**kw):
+        return {**hunter_mailbox.base_receipt(email,reason),'mailbox_status':state}
+    monkeypatch.setattr(hunter_mailbox,'verify_mailbox',verify)
+    result,_,_=owned.run(CAMPAIGN,save_contacts=False)
+    assert result['discovery']['count']==result['discovery']['emails_found']==1
+    assert result['discovery']['verified']==0
+    assert result['discovery']['results'][0]['mailbox_verification']['reason_codes']==[reason]
+    assert outreach.OutreachLead.query.count()==0
+
+
+def test_phone_only_research_does_not_spend_hunter_verification_credits(setup,monkeypatch):
+    wire(monkeypatch)
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','true')
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me five electrical companies with phone numbers only'})
+    assert result['discovery']['count']==1 and result['discovery']['verified']==0
+
+
+
+def test_auto_verification_persists_real_hunter_lease_before_new_lead_write(setup,monkeypatch):
+    wire(monkeypatch)
+    monkeypatch.setenv('HUNTER_MAILBOX_VERIFICATION_ENABLED','true')
+    monkeypatch.setenv('HUNTER_API_KEY','unit-test-secret')
+    monkeypatch.setenv('HUNTER_ACCOUNT_EMAIL','owner@example.com')
+    calls=[]
+    def get(url,**kw):
+        calls.append(url.rsplit('/',1)[-1])
+        data=({'email':'owner@example.com','plan_name':'Free','requests':{'credits':{'remaining':20}}}
+              if url.endswith('/account') else
+              {'email':'hello@acmeelectrical.example','status':'valid','smtp_check':True,
+               'accept_all':False,'block':False,'disposable':False,
+               'verification':{'date':datetime.now(timezone.utc).date().isoformat(),'status':'valid'}})
+        return SimpleNamespace(status_code=200,content=b'{}',json=lambda:{'data':data})
+    monkeypatch.setattr(hunter_mailbox,'verify_mailbox',lambda email,**kw:REAL_HUNTER_VERIFY(email,get,**kw))
+    result,_,_=owned.run(CAMPAIGN)
+    assert result['discovery']['verified']==1
+    assert calls==['account','email-verifier']
+    assert outreach.OutreachLead.query.count()==1
+    assert hunter_mailbox.HunterMailboxCheck.query.filter_by(state='complete').count()==1
