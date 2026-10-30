@@ -139,11 +139,11 @@ def _published_direct_phone(person):
 
 def _published_person_email(person, website):
     """Preserve a published profile email for research without granting send authority."""
-    from src.contact_assessment import EMAIL, PAIR, email_name_consistent, current_email_context
+    from src.contact_assessment import EMAIL, PAIR, CARD_PAIR, email_name_consistent, current_email_context
     text=str(person.get('evidence_excerpt') or '')
     name=person.get('name') or ''
     if not name or not owned_host(person.get('source_url') or '',website):return ''
-    matches=list(PAIR.finditer(text))
+    matches=list(PAIR.finditer(text)) or list(CARD_PAIR.finditer(text))
     if len(matches)!=1 or matches[0].group(1)!=name:return ''
     # Sentence punctuation is not part of a published address. Keep internal
     # domain dots intact and leave the shared bounded address matcher unchanged.

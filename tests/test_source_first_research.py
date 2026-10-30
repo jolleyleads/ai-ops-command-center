@@ -22,9 +22,11 @@ def test_role_and_channel_requests_route_without_needing_company_word(query):
     assert 'decision_maker' in parse_research_request(query)['fields']
 
 
-def test_public_profile_email_is_research_evidence_without_locality_or_mailbox_claim():
+@pytest.mark.parametrize('excerpt',['Jane Doe, CEO. Contact jane.doe@acme.example.',
+                                   'Jane Doe CEO jane.doe@acme.example'])
+def test_public_profile_email_is_research_evidence_without_locality_or_mailbox_claim(excerpt):
     person={'name':'Jane Doe','source_url':'https://acme.example/team/jane',
-            'evidence_excerpt':'Jane Doe, CEO. Contact jane.doe@acme.example.'}
+            'evidence_excerpt':excerpt}
     assert owned._published_person_email(person,'https://acme.example')=='jane.doe@acme.example'
     for text in ['Jane Doe, CEO. info@acme.example',
                  'Jane Doe, CEO. mary@acme.example',
