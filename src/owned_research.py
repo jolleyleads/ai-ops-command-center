@@ -67,6 +67,7 @@ def _primary_seed(raw):
         names += re.split(r'\s+[|–—-]\s+|\s*\|\s*',metadata.get('source_title') or '')
         names=[str(n).strip() for n in names if isinstance(n,str) and n.strip()]
         names=[n for n in names if not re.search(r'(?i)\b(?:home|contact|welcome|best|top|directory|results)\b',n)]
+        names=[n for n in names if not re.fullmatch(r'(?i)(?:(?:our|executive|senior)\s+)?(?:leadership|team|staff|people|management|about(?:\s+us)?|company|who\s+we\s+are|meet\s+(?:the|our)\s+team)',n)]
         website=f'{urlparse(response.url).scheme}://{urlparse(response.url).netloc}/'
         name=next((n for n in names if identity_proof(n,page,website)),None)
         if name:return {'company':name,'website':website,'source_url':website,'listing_location':'',

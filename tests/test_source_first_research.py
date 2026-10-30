@@ -58,6 +58,15 @@ def test_working_source_provider_and_cancellation_do_not_launch_another_search(m
     assert not web.called
 
 
+def test_source_heading_is_not_used_as_the_business_name(monkeypatch):
+    from src import public_fetch
+    from types import SimpleNamespace
+    monkeypatch.setattr(public_fetch,'public_get',lambda url,**kw:SimpleNamespace(
+        status_code=200,url=url,text='<html><title>Leadership - Acme Electrical</title><main>Acme Electrical in Norfolk, VA. Leadership.</main></html>'))
+    seed=owned._primary_seed({'url':'https://acmeelectrical.example/team'})
+    assert seed['company']=='Acme Electrical'
+
+
 def test_research_mode_does_not_depend_on_login_or_start_campaign_preparation():
     script=r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
