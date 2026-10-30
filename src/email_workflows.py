@@ -280,7 +280,7 @@ def available_verified_workflow_contacts():
         email = oa.normalize_email(person.get('email') or '')
         if not email or not EMAIL_RE.fullmatch(email) or oa._is_suppressed(email):
             continue
-        key = hashlib.sha256((OWNER+'\\0'+email).encode()).hexdigest()
+        key = hashlib.sha256((OWNER+'\0'+email).encode()).hexdigest()
         row = db.session.get(EmailWorkflowContact, key)
         if row and (row.last_job_id or not contact_view(row)['can_activate']):
             continue
