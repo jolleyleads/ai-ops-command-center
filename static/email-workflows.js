@@ -15,7 +15,9 @@
     clearTimeout(timer);if(recognition){recognition.stop();recognition=null;}
     panel.innerHTML='<div class="workspace-heading"><div><h1>Email workflows</h1><p class="meta">Add email addresses, choose your recipients, and activate their workflows.</p></div><button class="ghost email-workflows-primary" type="button" id="activate-email-workflows" disabled>Activate all workflows</button></div>'+
       '<section class="email-workflow-entry lead"><label for="workflow-emails"><b>Type or say an email address</b></label><textarea id="workflow-emails" rows="3" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="name@company.com&#10;Add more addresses on separate lines"></textarea>'+
-      '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div><p class="meta" id="email-voice-status" role="status">You can say “name at company dot com.” Review the address before adding it.</p></section>'+
+      '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div>'+ 
+      '<details id="verified-workflow-picker" class="email-workflow-entry"><summary style="cursor:pointer;font-weight:650">✓ Select from Verified Emails</summary><p class="meta">Select verified decision-makers who have never had an outreach workflow activated. Adding an address will not send an email.</p><div id="verified-workflow-picker-items" role="group" aria-label="Available verified emails"></div><div class="email-workflow-entry-actions"><button class="ghost" type="button" id="verified-workflow-picker-select-all">Select all available</button><button class="ghost email-workflows-primary" type="button" id="verified-workflow-picker-add">Add selected to email box</button><button class="ghost" type="button" id="verified-workflow-picker-refresh">Refresh</button></div><p class="meta" id="verified-workflow-picker-count" role="status"></p></details>'+ 
+      '<p class="meta" id="email-voice-status" role="status">You can say “name at company dot com.” Review the address before adding it.</p></section>'+
       '<div class="email-workflow-toolbar"><label><input type="checkbox" id="select-email-workflows"> Select all</label><span class="meta" id="email-workflow-count" aria-live="polite"></span><button class="ghost" type="button" id="refresh-email-workflows">Refresh</button></div>'+
       '<p class="meta">Activation sends your outreach email and résumé, then starts follow-ups and reply handling.</p><p id="email-workflow-notice" role="status" aria-live="polite"></p><div id="email-workflow-list"><span class="loading"></span> Loading your email workflows…</div>';
     var input=panel.querySelector('#workflow-emails'),notice=panel.querySelector('#email-workflow-notice');
@@ -56,6 +58,55 @@
         .catch(function(error){message(error.message,true);return load();})
         .finally(function(){busy=false;if(current())renderRows();});
     }
+    var verifiedChoices=[],verifiedSelected=new Set(),pickerInserted=new Set();
+    function syncVerifiedToEntry(){
+      var currentEmails=window.parseWorkflowEmails(input.value);
+      var original=currentEmails.filter(function(email){return !pickerInserted.has(email);});
+      var chosen=verifiedChoices.filter(function(row){return verifiedSelected.has(row.email);}).map(function(row){return row.email;});
+      input.value=Array.from(new Set(original.concat(chosen))).join('\\n');
+      pickerInserted=new Set(chosen.filter(function(email){return original.indexOf(email)<0;}));
+    }
+    function updateVerifiedPicker(){
+      var count=verifiedSelected.size;
+      panel.querySelector('#verified-workflow-picker-count').textContent=count+' selected · '+verifiedChoices.length+' verified emails available';
+      panel.querySelector('#verified-workflow-picker-add').disabled=!count||busy;
+      panel.querySelector('#verified-workflow-picker-select-all').disabled=!verifiedChoices.length||busy;
+    }
+    function loadVerifiedPicker(){
+      var target=panel.querySelector('#verified-workflow-picker-items');
+      target.textContent='Loading eligible verified contacts…';
+      return requestJSON(API+'/api/chat/email-workflows/verified-available',{cache:'no-store'}).then(function(result){
+        if(!current())return;
+        verifiedChoices=result.contacts||[];
+        verifiedSelected=new Set(Array.from(verifiedSelected).filter(function(email){return verifiedChoices.some(function(p){return p.email===email;});}));
+        target.innerHTML=verifiedChoices.length?verifiedChoices.map(function(person){
+          return '<label class="email-workflow-recipient" style="display:flex;gap:10px;align-items:flex-start;padding:10px 2px"><input type="checkbox" data-verified-workflow-email="'+esc(person.email)+'"'+(verifiedSelected.has(person.email)?' checked':'')+'><span><b>'+esc(person.name||person.email)+'</b><span class="meta" style="display:block;overflow-wrap:anywhere">'+esc(person.email)+' · '+esc(person.role||'Decision-maker')+' · '+esc(person.company||'')+'</span></span></label>';
+        }).join(''):'<p class="meta">No verified, never-activated contacts available right now.</p>';
+        updateVerifiedPicker();
+      }).catch(function(err){if(current()){target.textContent='Could not load verified emails: '+err.message;updateVerifiedPicker();}});
+    }
+    panel.querySelector('#verified-workflow-picker').ontoggle=function(){if(this.open)loadVerifiedPicker();};
+    panel.querySelector('#verified-workflow-picker-items').onchange=function(event){
+      var email=event.target.dataset.verifiedWorkflowEmail;
+      if(!email)return;
+      if(event.target.checked)verifiedSelected.add(email);else verifiedSelected.delete(email);
+      syncVerifiedToEntry();updateVerifiedPicker();
+    };
+    panel.querySelector('#verified-workflow-picker-select-all').onclick=function(){
+      verifiedChoices.forEach(function(row){verifiedSelected.add(row.email);});
+      panel.querySelectorAll('[data-verified-workflow-email]').forEach(function(box){box.checked=true;});
+      syncVerifiedToEntry();updateVerifiedPicker();
+    };
+    panel.querySelector('#verified-workflow-picker-refresh').onclick=loadVerifiedPicker;
+    panel.querySelector('#verified-workflow-picker-add').onclick=function(){
+      var candidates=verifiedChoices.filter(function(row){return verifiedSelected.has(row.email);}).map(function(row){return row.email;});
+      if(!candidates.length)return;
+      var existing=window.parseWorkflowEmails(input.value);
+      input.value=Array.from(new Set(existing.concat(candidates))).join('\n');
+      verifiedSelected.clear();pickerInserted.clear();updateVerifiedPicker();
+      message(candidates.length+' verified email'+(candidates.length===1?'':'s')+' placed in the entry box. Choose Add email addresses, then activate your selected workflows.');
+      input.focus();
+    };
     panel.querySelector('#add-workflow-emails').onclick=function(){
       var addresses=window.parseWorkflowEmails(input.value);
       if(!addresses.length){message('Type or dictate an email address first.',true);input.focus();return;}
