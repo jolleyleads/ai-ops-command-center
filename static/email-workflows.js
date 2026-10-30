@@ -80,7 +80,7 @@
         verifiedChoices=result.contacts||[];
         verifiedSelected=new Set(Array.from(verifiedSelected).filter(function(email){return verifiedChoices.some(function(p){return p.email===email;});}));
         target.innerHTML=verifiedChoices.length?verifiedChoices.map(function(person){
-          return '<label class="email-workflow-recipient" style="display:flex;gap:10px;align-items:flex-start;padding:10px 2px"><input type="checkbox" data-verified-workflow-email="'+esc(person.email)+'"'+(verifiedSelected.has(person.email)?' checked':'')+'><span><b>'+esc(person.name||person.email)+'</b><span class="meta" style="display:block;overflow-wrap:anywhere">'+esc(person.email)+' · '+esc(person.role||'Decision-maker')+' · '+esc(person.company||'')+'</span></span></label>';
+          return '<label class="verified-workflow-option" ><input type="checkbox" data-verified-workflow-email="'+esc(person.email)+'"'+(verifiedSelected.has(person.email)?' checked':'')+'><span><b>'+esc(person.name||person.email)+'</b><span class="meta" style="display:block;overflow-wrap:anywhere">'+esc(person.email)+' · '+esc(person.role||'Decision-maker')+' · '+esc(person.company||'')+'</span></span></label>';
         }).join(''):'<p class="meta">No verified, never-activated contacts available right now.</p>';
         updateVerifiedPicker();
       }).catch(function(err){if(current()){target.textContent='Could not load verified emails: '+err.message;updateVerifiedPicker();}});

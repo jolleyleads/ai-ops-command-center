@@ -80,6 +80,25 @@ body{overflow:hidden;background:#fff;color:#161616;-webkit-font-smoothing:antial
 .research-contact-sources a{display:inline-block;max-width:100%;padding:5px 0;color:#276b55}.research-observed{font-size:11px!important;color:#888;margin:4px 0!important}
 .research-person-scope{font-size:12px!important;color:#737373}.research-contact-alternative{font-size:13px;color:#666;margin:10px 0}.research-contact-alternative summary{cursor:pointer;padding:7px 0}
 @media(max-width:600px){.research-contact-list{padding-left:21px;font-size:16px}.research-contact-result h3{font-size:18px}.research-contact-list>.research-contact-result{padding-left:2px}.research-contact-sources a{min-height:40px;padding:10px 0}}
+
+/* Mobile-first verified recipient picker. Keep long addresses legible and controls tappable. */
+#verified-workflow-picker{width:100%;min-width:0;max-width:100%;margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+#verified-workflow-picker>summary{display:list-item;white-space:normal;overflow-wrap:anywhere;line-height:1.5;padding:4px 0;cursor:pointer}
+#verified-workflow-picker-items{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;width:100%;max-height:min(50vh,450px);overflow-y:auto;overflow-x:hidden;gap:0}
+#workspace-panel #verified-workflow-picker-items label.verified-workflow-option{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:start;gap:12px;min-width:0;width:100%;margin:0;padding:12px 8px;border-bottom:1px solid var(--line);cursor:pointer}
+#workspace-panel #verified-workflow-picker-items input[type=checkbox]{width:20px;height:20px;min-width:20px;flex:none;margin:2px 0 0;padding:0}
+.verified-workflow-details{min-width:0;overflow-wrap:anywhere;word-break:normal;line-height:1.45}
+.verified-workflow-details b,.verified-workflow-details .meta{display:block;min-width:0;max-width:100%;overflow-wrap:anywhere;white-space:normal}
+#verified-workflow-picker .email-workflow-entry-actions{display:flex;flex-wrap:wrap;gap:8px;min-width:0;padding-top:12px}
+#verified-workflow-picker .email-workflow-entry-actions button{flex:1 1 150px;min-width:0;white-space:normal;line-height:1.35;min-height:44px}
+#workspace-panel #workflow-emails{display:block;width:100%;min-width:0;max-width:100%;font-size:16px;overflow-wrap:anywhere}
+@media(max-width:600px){
+  #verified-workflow-picker{padding:12px 10px;margin-inline:0}
+  #workspace-panel #verified-workflow-picker-items label.verified-workflow-option{grid-template-columns:22px minmax(0,1fr);gap:10px;padding:13px 2px}
+  #verified-workflow-picker .email-workflow-entry-actions{flex-direction:column;align-items:stretch}
+  #verified-workflow-picker .email-workflow-entry-actions button{flex:0 0 auto;width:100%;min-height:46px}
+  #verified-workflow-picker-items{max-height:45vh}
+}
 </style></head><body>
 <div class="app"><main class="main"><header class="top"><a href="/" aria-label="Go to AutoMake AI homepage" title="Home" style="display:inline-flex;align-items:center;gap:6px;color:#202123;text-decoration:none;font-size:13px;font-weight:600;padding:8px 10px;border:1px solid #e5e5e5;border-radius:10px;white-space:nowrap">⌂ <span>Home</span></a><div class="top-brand"><img class="brand-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div>
 <details id="workspace-menu"><summary aria-label="Open menu" title="Open AutoMake AI menu"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 15h11"/></svg><img class="menu-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt="AutoMake AI"></summary><div class="menu-sheet" id="workspace-navigation"><div class="sidebar-brand"><img src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div><div class="menu-scroll">
