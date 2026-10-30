@@ -58,7 +58,14 @@
         .catch(function(error){message(error.message,true);return load();})
         .finally(function(){busy=false;if(current())renderRows();});
     }
-    var verifiedChoices=[],verifiedSelected=new Set();
+    var verifiedChoices=[],verifiedSelected=new Set(),pickerInserted=new Set();
+    function syncVerifiedToEntry(){
+      var currentEmails=window.parseWorkflowEmails(input.value);
+      var original=currentEmails.filter(function(email){return !pickerInserted.has(email);});
+      var chosen=verifiedChoices.filter(function(row){return verifiedSelected.has(row.email);}).map(function(row){return row.email;});
+      input.value=Array.from(new Set(original.concat(chosen))).join('\\n');
+      pickerInserted=new Set(chosen.filter(function(email){return original.indexOf(email)<0;}));
+    }
     function updateVerifiedPicker(){
       var count=verifiedSelected.size;
       panel.querySelector('#verified-workflow-picker-count').textContent=count+' selected · '+verifiedChoices.length+' verified emails available';
@@ -83,12 +90,12 @@
       var email=event.target.dataset.verifiedWorkflowEmail;
       if(!email)return;
       if(event.target.checked)verifiedSelected.add(email);else verifiedSelected.delete(email);
-      updateVerifiedPicker();
+      syncVerifiedToEntry();updateVerifiedPicker();
     };
     panel.querySelector('#verified-workflow-picker-select-all').onclick=function(){
       verifiedChoices.forEach(function(row){verifiedSelected.add(row.email);});
       panel.querySelectorAll('[data-verified-workflow-email]').forEach(function(box){box.checked=true;});
-      updateVerifiedPicker();
+      syncVerifiedToEntry();updateVerifiedPicker();
     };
     panel.querySelector('#verified-workflow-picker-refresh').onclick=loadVerifiedPicker;
     panel.querySelector('#verified-workflow-picker-add').onclick=function(){
@@ -96,7 +103,7 @@
       if(!candidates.length)return;
       var existing=window.parseWorkflowEmails(input.value);
       input.value=Array.from(new Set(existing.concat(candidates))).join('\n');
-      verifiedSelected.clear();updateVerifiedPicker();
+      verifiedSelected.clear();pickerInserted.clear();updateVerifiedPicker();
       message(candidates.length+' verified email'+(candidates.length===1?'':'s')+' placed in the entry box. Choose Add email addresses, then activate your selected workflows.');
       input.focus();
     };
