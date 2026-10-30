@@ -158,10 +158,14 @@ def _public_contact_evidence(result, *, use_provider=True):
         phones=list(dict.fromkeys(m.group(0) for m in re.finditer(r"(?<!\d)(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)",visible) if not is_fax_number(visible,m.group(0)) and contact_context_matches(visible,m.group(0),location)))
         checkpoint("contact_page_people")
         sections=contact_sections(contact_html)
+        # A mailto link is published evidence even when its visible label is
+        # merely "Email". Preserve its actual HTML-card association in the
+        # fetched source text; do not relocate every address to the page footer.
+        source_text=visible+'\n'+'\n'.join(section for section in sections if section not in visible)
         # Identity-only primary pages are still useful when Hunter has an
         # address that is not printed on the current company website.
         if proof:
-            entry={**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":visible[:120000],"page_text":visible[:120000],"contact_sections":contact_sections(contact_html),"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"}
+            entry={**metadata,"candidate_name":company,"title":"Public company contact page","subtitle":" ".join(emails[:3]+phones[:3]),"text":source_text[:120000],"page_text":source_text[:120000],"contact_sections":sections,"directly_fetched":True,"http_status":200,"url":final,"source":"public_company_contact_page","company_identity":proof,"observed_at":datetime.now(timezone.utc).isoformat(),"contact_location":location,"validated_emails":emails,"validated_phone":phones[0] if phones else "","validated_phones":phones,"identity_version":"company-domain-v1"}
             if emails or phones or PAIR.search(visible) or any(CARD_PAIR.search(card) for card in sections):rows.append(entry)
             elif not location or location_matches(visible,location):identity_rows.append(entry)
             # Card-local evidence may disambiguate an email on a multi-office page.

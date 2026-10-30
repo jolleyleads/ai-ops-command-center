@@ -81,6 +81,16 @@ def test_real_fetch_can_skip_provider_even_when_hunter_is_enabled(setup,monkeypa
     assert rows and receipt['attempted'] and 'hello@acmeelectrical.example' in rows[0]['validated_emails']
 
 
+def test_mailto_buttons_remain_attached_to_the_person_profile_that_publishes_them(setup,monkeypatch):
+    raw='<html><title>Acme Electrical</title><main><p>Acme Electrical in Norfolk, VA.</p><section><h2>Jane Doe</h2><p>CEO</p><a href="mailto:jane@acmeelectrical.example">Email Jane</a></section></main></html>'
+    monkeypatch.setattr(bridge,'public_get',lambda url,**kw:SimpleNamespace(status_code=200,url=url,text=raw,headers={'content-type':'text/html'}))
+    rows,_=bridge._public_contact_evidence(COMPANY,use_provider=False)
+    assert any('Jane Doe CEO jane@acmeelectrical.example Email Jane' in ' '.join(row['page_text'].split()) for row in rows)
+    wire(monkeypatch,rows)
+    result,_,_=owned.run({**CAMPAIGN,'query':'Give me one electrical company with owner contact information'},save_contacts=False)
+    assert result['discovery']['results'][0]['decision_makers'][0]['email']=='jane@acmeelectrical.example'
+
+
 def test_discovery_uses_industry_and_territory_without_email_instructions(setup,monkeypatch):
     import universal_app,smart_search
     calls=[]
