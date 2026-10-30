@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer"><meta name="csrf-token" content="{{ csrf_token }}">
+  <title>OmniScope · AutoMake AI</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;color:#222;font:15px/1.6 system-ui,-apple-system,sans-serif;background:#fff}
+    button,input,select,textarea{font:inherit}button,a{touch-action:manipulation}button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+    header{height:74px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;padding:0 28px;gap:16px}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:650}.brand img{width:30px;height:30px}a{color:#276b55;text-decoration:none}a:hover{text-decoration:underline}
+    main{max-width:940px;margin:auto;padding:42px 24px}h1{font-size:34px;letter-spacing:-1.1px;font-weight:550;margin:0}p{margin:8px 0 18px;color:#737373}
+    .status{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0}.badge{font-size:12px;border:1px solid #e9e9e9;background:#fafafa;border-radius:20px;padding:5px 11px;color:#626262}
+    .controls{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #eee;padding-bottom:20px;margin-top:26px}
+    label{font-size:12px;color:#737373}select{margin-left:10px;border:1px solid #ddd;background:#fff;padding:8px 12px;border-radius:10px;color:#222}
+    button{border:1px solid #ddd;background:white;border-radius:11px;padding:9px 15px;color:#333}.primary{background:#242424;color:white;border-color:#242424}
+    #messages{min-height:230px;padding:22px 0}.message{padding:17px 20px;border:1px solid #ececec;border-radius:16px;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}.user{background:#f7f7f7;margin-left:10%}.message small{display:block;color:#777;font-size:11px;margin-bottom:7px;text-transform:uppercase;letter-spacing:.05em}
+    #empty{text-align:center;margin:50px 0;color:#888}form{border:1px solid #dedede;border-radius:19px;padding:14px;box-shadow:0 4px 18px #00000006}textarea{display:block;width:100%;border:0;resize:vertical;min-height:75px;max-height:240px;padding:5px;outline-offset:4px;background:transparent;color:#222}
+    .form-footer{display:flex;align-items:center;justify-content:space-between;gap:16px}.hint{font-size:11px;color:#888}.error{color:#a13930!important}#notice{min-height:24px;font-size:13px}
+    .place,.contact{white-space:normal;margin-top:12px;padding-top:12px;border-top:1px solid #eee}.place p,.contact p{margin:3px 0;font-size:13px}.place a{display:inline-block;margin:6px 8px 0 0;font-size:13px}
+    .footnote{font-size:11px;color:#999;margin-top:16px}.provider{font-size:12px;color:#666} @media(max-width:600px){header{padding:0 16px;font-size:13px}main{padding:26px 16px}h1{font-size:29px}.controls{align-items:flex-start}select{display:block;margin:5px 0 0;max-width:100%}.hint{max-width:190px}.user{margin-left:5%}}
+  </style>
+</head>
+<body>
+  <header><div class="brand"><img src="/chat-operator/automake-logo.svg" alt="AutoMake AI">AutoMake AI <span aria-hidden="true">/</span> OmniScope</div><a href="/chat-operator">← Back to Workflow</a></header>
+  <main>
+    <h1>A clearer view.</h1><p>Direct answers, deeper analysis, and connected research tools.</p>
+    <div class="status" id="connections" aria-label="Integration status"><span class="badge">Checking connections…</span></div>
+    <div class="controls"><label for="mode">Choose a tool<select id="mode"><option value="chat">OmniScope chat</option><option value="places">Google Places</option><option value="people">Google Contacts</option></select></label><button type="button" id="new-chat">New chat</button></div>
+    <p id="tool-description">Ask a question. OmniScope separates evidence, assumptions, and uncertainty.</p>
+    <div id="messages" aria-live="polite" aria-relevant="additions"><div id="empty">What would you like to understand?</div></div>
+    <p id="notice" role="status"></p>
+    <form id="omniscope-form"><label for="prompt" id="prompt-label">Your question</label><textarea id="prompt" placeholder="Ask OmniScope…" maxlength="12000" required></textarea><div class="form-footer"><span class="hint" id="input-hint">Chat uses OpenAI. Live tools run only when selected.</span><button class="primary" id="submit" type="submit">Ask OmniScope ↗</button></div></form>
+    <p class="footnote">Conversation stays in this page's memory and is cleared when you leave. Images and code execution are not connected.</p>
+  </main>
+  <script src="/static/omniscope.js?v=1" defer></script>
+</body>
+</html>

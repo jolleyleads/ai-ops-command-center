@@ -65,6 +65,7 @@ import src.email_workflows  # noqa: F401
 import src.campaign_reporting  # noqa: F401
 import src.progressive_campaign  # noqa: F401
 import src.owned_research  # noqa: F401
+import omniscope_integration  # noqa: F401
 
 rag_research.init_rag_tables()
 
