@@ -121,3 +121,29 @@ def test_ui_renders_provider_output_as_text_and_clears_context():
     assert 'textContent=text' in source
     assert 'X-CSRF-Token' in source
     assert 'localStorage' not in source and 'sessionStorage' not in source
+
+
+def test_live_research_returns_sources_without_claiming_verification(client, monkeypatch):
+    import src.contact_sources as sources
+    monkeypatch.setattr(sources, 'search', lambda query: {
+        'results': [{'title': 'Public source', 'url': 'https://example.org/research',
+                     'snippet': 'Supporting excerpt'}]})
+    provider = Mock()
+    provider.return_value.responses.create.return_value.output_text = 'Supported finding [1].'
+    monkeypatch.setattr(omni, 'OpenAI', provider)
+    result = client.post('/api/chat/omniscope/research', headers=AUTH,
+                         json={'query': 'What do current sources say?'})
+    assert result.status_code == 200
+    assert result.json['sources'][0]['url'] == 'https://example.org/research'
+    assert result.json['verified'] is False
+    assert '[1]' in result.json['answer']
+    assert provider.return_value.responses.create.call_args.kwargs['store'] is False
+
+
+def test_live_research_rejects_invalid_input_before_provider(client, monkeypatch):
+    import src.contact_sources as sources
+    lookup = Mock(side_effect=AssertionError('No network call expected'))
+    monkeypatch.setattr(sources, 'search', lookup)
+    response = client.post('/api/chat/omniscope/research', headers=AUTH, json={'query': ' '})
+    assert response.status_code == 400
+    assert not lookup.called
