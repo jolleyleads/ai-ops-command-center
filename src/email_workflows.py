@@ -267,3 +267,34 @@ def run_email_workflows(data, job_id):
         results.append(result)
     checkpoint('activating_email_batch', email_workflows=results, batch_requested=len(results), batch_completed=len(results))
     return {'ok': True, 'email_workflows': results, 'outreach': {'sent': sum(item.get('sent') is True for item in results)}}, None, None
+
+
+@app.get('/api/chat/email-workflows/verified-available')
+def available_verified_workflow_contacts():
+    """Read-only picker: verified decision makers without prior outreach activation."""
+    if not _owner():
+        return jsonify(ok=False, error='Sign in to your workspace.'), 403
+    from src.verified_contacts import verified_contacts
+    results = []
+    for person in verified_contacts():
+        email = oa.normalize_email(person.get('email') or '')
+        if not email or not EMAIL_RE.fullmatch(email) or oa._is_suppressed(email):
+            continue
+        key = hashlib.sha256((OWNER+'\\0'+email).encode()).hexdigest()
+        row = db.session.get(EmailWorkflowContact, key)
+        if row and (row.last_job_id or not contact_view(row)['can_activate']):
+            continue
+        leads = oa.OutreachLead.query.filter_by(contact_email=email).filter(
+            scope(oa.OutreachLead, 'lead', OWNER)).all()
+        if any(lead.status in STOPPED or lead.gmail_message_id or lead.gmail_thread_id
+               or lead.sent_at or lead.follow_up_count for lead in leads):
+            continue
+        prior = oa.OutreachSendAttempt.query.filter_by(recipient=email, kind='initial').join(
+            oa.OutreachLead, oa.OutreachLead.id == oa.OutreachSendAttempt.lead_id).filter(
+            scope(oa.OutreachLead, 'lead', OWNER)).first()
+        if prior:
+            continue
+        results.append({key: person.get(key) for key in ('email', 'name', 'role', 'company', 'checked_at')})
+    response = jsonify(ok=True, contacts=results, count=len(results))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
