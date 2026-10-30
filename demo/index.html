@@ -68,6 +68,18 @@ body{overflow:hidden;background:#fff;color:#161616;-webkit-font-smoothing:antial
   #workspace-panel.verified-contacts-view .workspace-heading>div{min-width:0;width:100%}
   #workspace-panel.verified-contacts-view .workspace-heading>button{min-height:44px;width:100%;margin:0}
 }
+
+/* Source-led contact answers read like a conversation at every screen width. */
+.research-contact-list{margin:20px 0;padding-left:25px;max-width:100%;font-size:16px;line-height:1.7}
+.research-contact-list>.research-contact-result{padding:0 0 22px 5px;margin:0 0 24px;border-bottom:1px solid #eee;min-width:0;overflow-wrap:anywhere;word-break:normal}
+.research-contact-result::marker{font-weight:650}.research-contact-result h3{font-size:19px;line-height:1.4;margin:0 0 6px;font-weight:650}
+.research-contact-result .research-location{color:#737373;font-size:13px;margin:0 0 14px}
+.research-person{margin:14px 0 18px}.research-person>p{margin:0 0 8px}.research-contact-fields{list-style:none;margin:8px 0;padding:0}.research-contact-fields>li{margin:8px 0;padding:0;min-width:0}
+.research-contact-fields a{overflow-wrap:anywhere;word-break:normal}.research-contact-fields small{display:block;color:#777;font-size:12px;line-height:1.5;margin-top:3px}
+.research-contact-result .research-contact-sources{display:flex;gap:8px 14px;flex-wrap:wrap;margin:12px 0 5px;font-size:12px;line-height:1.6}
+.research-contact-sources a{display:inline-block;max-width:100%;padding:5px 0;color:#276b55}.research-observed{font-size:11px!important;color:#888;margin:4px 0!important}
+.research-person-scope{font-size:12px!important;color:#737373}.research-contact-alternative{font-size:13px;color:#666;margin:10px 0}.research-contact-alternative summary{cursor:pointer;padding:7px 0}
+@media(max-width:600px){.research-contact-list{padding-left:21px;font-size:16px}.research-contact-result h3{font-size:18px}.research-contact-list>.research-contact-result{padding-left:2px}.research-contact-sources a{min-height:40px;padding:10px 0}}
 </style></head><body>
 <div class="app"><main class="main"><header class="top"><a href="/" aria-label="Go to AutoMake AI homepage" title="Home" style="display:inline-flex;align-items:center;gap:6px;color:#202123;text-decoration:none;font-size:13px;font-weight:600;padding:8px 10px;border:1px solid #e5e5e5;border-radius:10px;white-space:nowrap">⌂ <span>Home</span></a><div class="top-brand"><img class="brand-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div>
 <details id="workspace-menu"><summary aria-label="Open menu" title="Open AutoMake AI menu"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 15h11"/></svg><img class="menu-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt="AutoMake AI"></summary><div class="menu-sheet" id="workspace-navigation"><div class="sidebar-brand"><img src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div><div class="menu-scroll">
@@ -138,7 +150,7 @@ return m?(words.indexOf(m[1].toLowerCase())>=0?words.indexOf(m[1].toLowerCase())
 }
 window.requestedLeadCount=requestedLeadCount;
 window.requestedTerritory=function(query,fallback){var match=String(query||'').match(/\b(?:in|near|around)\s+(.+?)(?=\b(?:but|with|that|who|use|using|enrich|verify|verified)\b|[.;]|$)/i);return match?match[1].trim().replace(/[, ]+$/,''):fallback;};
-function deepSearch(q){return Promise.resolve(window.workspaceAccessReady).then(function(access){return access&&access.drafting_available?campaignSearch(q):publicResearch(q);});}
+function deepSearch(q){return publicResearch(q);}
 function publicResearch(q){
 var requested=window.requestedLeadCount(q),location=window.requestedTerritory(q,document.getElementById("territory").value);
 var body=JSON.stringify({prompt:q,location:location,target_count:requested});
@@ -156,24 +168,45 @@ return workspaceMutation('/api/chat/campaigns/prepare',{method:'POST',headers:{'
 
 window.renderResearchTable=function(d){
  var fields=(d.research_intent&&d.research_intent.fields)||[];
- var has=function(f){return fields.indexOf(f)!==-1;};
- var link=function(url,label){return /^https?:\/\//i.test(String(url||''))?'<a target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">'+esc(label)+'</a>':esc(label);};
- var headings=['Company'];
- if(has('decision_maker'))headings.push('Decision-maker');
- if(has('email'))headings.push('Email');
- if(has('phone'))headings.push('Phone number');
- headings.push('Sources');
+ var has=function(field){return fields.indexOf(field)!==-1;};
+ var link=function(url,label,kind){return /^https?:\/\//i.test(String(url||''))?'<a class="research-source" target="_blank" rel="noopener noreferrer" href="'+esc(url)+'"'+(kind?' data-source-kind="'+esc(kind)+'"':'')+'>'+esc(label)+'</a>':'';};
+ var field=function(label,value){return '<li><b>'+esc(label)+':</b> '+value+'</li>';};
+ var email=function(value,status){return '<a href="mailto:'+esc(value)+'">'+esc(value)+'</a> <small>'+esc(status||'Published · Mailbox not verified')+'</small>';};
+ var phone=function(value,label){var dial=String(value).replace(/[^+0-9]/g,'');return '<a href="tel:'+esc(dial)+'">'+esc(value)+'</a>'+(label?' <small>'+esc(label)+'</small>':'');};
  var rows=(d.research_presentation||[]).map(function(item){
-  var cells=[link(item.source_url,item.company)+(item.location?'<br><small>'+esc(item.location)+'</small>':'')];
-  var people=item.decision_makers||[];
-  if(has('decision_maker'))cells.push(people.length?people.map(function(p){return '<b>'+esc(p.name)+'</b> — '+esc(p.role)+(p.email?'<br>'+esc(p.email)+' ('+esc(p.email_status||'Published with this person')+')':'')+(p.direct_phone?'<br>'+esc(p.direct_phone)+' (published direct / mobile)':'')+(p.scope?'<br><small>'+esc(p.scope)+'</small>':'')+'<br>'+link(p.source_url,'Role source');}).join('<br><br>'):esc(item.decision_maker||'Not publicly found')+(item.decision_maker_role?' — '+esc(item.decision_maker_role):''));
-  if(has('email'))cells.push(item.email?esc(item.email)+'<br><small>'+esc(item.email_type||'Published contact')+' · '+esc(item.email_status||'Mailbox not verified')+'</small>':link(item.source_url,'Company website / contact route')+'<br><small>No public email found</small>');
-  if(has('phone')){var phone=item.phone||item.business_phone||'',dial=String(phone).replace(/[^+0-9]/g,'');cells.push(phone?'<a href="tel:'+esc(dial)+'">'+esc(phone)+'</a><br><small>'+(item.phone?'Published direct line':'Company main line')+'</small>':'Not publicly found');}
-  var sources=(item.sources||[]).map(function(s){return link(s.url,s.label);}).join('<br>');
-  cells.push(sources+(item.observed_at?'<br><small>Checked '+esc(String(item.observed_at).slice(0,10))+'</small>':'')+(item.contact_issue?'<br><small>'+esc(item.contact_issue)+'</small>':''));
-  return '<tr>'+cells.map(function(c){return '<td style="vertical-align:top;padding:12px;border-bottom:1px solid #ddd">'+c+'</td>';}).join('')+'</tr>';
+  var people=item.decision_makers||[],wantsPeople=has('decision_maker');
+  if(wantsPeople&&!people.length&&item.decision_maker)people=[{name:item.decision_maker,role:item.decision_maker_role,source_url:(item.sources||[]).find(function(s){return s.label==='Decision-maker source';})?.url}];
+  var content='<h3>'+esc(item.company)+'</h3>'+(item.location?'<p class="research-location">'+esc(item.location)+'</p>':'');
+  if(wantsPeople){
+    content+=people.length?people.map(function(person){
+      var sourceFor=function(label){return ((item.sources||[]).find(function(s){return s.label===label;})||{}).url;};
+      var name=person.name||'',direct=person.direct_phone||((people.length===1&&item.phone)?item.phone:'');
+      var ownEmail=person.email||((name===item.decision_maker&&/named|decision-maker/i.test(item.email_type||''))?item.email:'');
+      var detail='<section class="research-person"><p><strong>'+esc(name)+'</strong>'+(person.role?' — '+esc(person.role):'')+'</p><ul class="research-contact-fields">';
+      if(has('email'))detail+=field('Email',ownEmail?email(ownEmail,person.email_status||(ownEmail===item.email?item.email_status:'')):'No published person-specific email found.');
+      if(has('phone'))detail+=field('Phone',direct?phone(direct,'Published direct line'):'No published person-specific phone found.');
+      detail+='</ul>'+(person.scope?'<p class="research-person-scope">'+esc(person.scope)+'</p>':'')+'<p class="research-contact-sources">'+link(person.source_url,person.source_kind==='provider_record'?'Hunter contact record':person.source_kind==='provider_cited_page'?'Source supplied by Hunter':'Name & role source','person');
+      if(has('email')&&ownEmail)detail+=' '+link(person.email_source_url||(person.email?person.source_url:sourceFor('Email source'))||person.source_url,'Email source','email');
+      if(has('phone')&&direct)detail+=' '+link(person.phone_source_url||(person.direct_phone?person.source_url:sourceFor('Phone source'))||person.source_url,'Phone source','phone');
+      return detail+'</p></section>';
+    }).join(''):'<p>No named decision-maker was confirmed in the sources collected.</p>';
+  }else{
+    content+='<ul class="research-contact-fields">';
+    if(has('email'))content+=field('Email',item.email?email(item.email,item.email_status):'No published email found.');
+    if(has('phone')){var number=item.phone||item.business_phone;content+=field('Phone',number?phone(number,item.phone?'Published direct line':'Company main line'):'No published phone found.');}
+    content+='</ul>';
+  }
+  if(has('website'))content+='<p>'+link(item.website||item.source_url,'Company website','website')+'</p>';
+  var alternative=[];
+  if(wantsPeople&&has('phone')&&item.business_phone)alternative.push(field('Company main line',phone(item.business_phone,'Not confirmed as the decision-maker’s number')));
+  if(wantsPeople&&has('email')&&item.email&&!people.some(function(p){return p.email===item.email;})&&!/named|decision-maker/i.test(item.email_type||''))alternative.push(field('Company email',email(item.email,item.email_type)));
+  if(alternative.length)content+='<details class="research-contact-alternative"><summary>Other company contact options</summary><ul class="research-contact-fields">'+alternative.join('')+'</ul></details>';
+  var sources=(item.sources||[]).map(function(source){var kind=/email/i.test(source.label)?'email':/phone/i.test(source.label)?'phone':'person';if(kind==='email'&&!has('email')||kind==='phone'&&!has('phone'))return '';return link(source.url,source.label,kind);}).filter(Boolean).join(' ');
+  if(!wantsPeople||!people.length||alternative.length)content+='<p class="research-contact-sources">'+(sources||link(item.source_url,'Company source','company'))+'</p>';
+  if(item.observed_at)content+='<p class="research-observed">Source checked '+esc(String(item.observed_at).slice(0,10))+'</p>';
+  return '<li class="research-contact-result">'+content+'</li>';
  });
- return '<p>Decision-maker contacts and sources. Company main numbers and inboxes are labeled; mailbox verification is shown beside each email.</p><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;text-align:left"><thead><tr>'+headings.map(function(h){return '<th style="padding:12px">'+esc(h)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
+ return '<ol class="research-contact-list">'+rows.join('')+'</ol>';
 };
 
 function run(){
@@ -259,4 +292,4 @@ window.openResearchLink=function(){
 window.addEventListener('load',window.openResearchLink);
 
 
-</script><script src="/chat-operator/dashboard.js?v=verified-contacts-mobile-1" defer></script><script src="/chat-operator/access.js?v=message-preview-activity-3"></script><script src="/static/email-workflows.js?v=email-workflow-desk-1" defer></script></body></html>
+</script><script src="/chat-operator/dashboard.js?v=verified-contacts-mobile-1" defer></script><script src="/chat-operator/access.js?v=source-led-research-1"></script><script src="/static/email-workflows.js?v=email-workflow-desk-1" defer></script></body></html>

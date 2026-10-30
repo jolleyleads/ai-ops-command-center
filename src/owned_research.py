@@ -22,8 +22,13 @@ from src.research_policy import COUNT_WORDS
 def accepts(query):
     from src.hunter_research import is_contact_list_query
     from src.job_evidence import is_hiring_query
-    owner_request=bool(re.search(r'\b(?:owners?|decision[ -]?makers?|ceos?)\b',query,re.I)) and not is_hiring_query(query) and not re.search(r'\b(?:needing|seeking|looking for)\b',query,re.I)
-    return (is_contact_list_query(query) or owner_request) and bool(re.search(r'\b(?:emails?|contacts?|enrich\w*|hunter|auto\s*hunt|phones?|telephone|numbers?|decision[ -]?makers?|owners?|presidents?|ceos?)\b',query,re.I))
+    from src.research_intent import parse_research_request
+    intent=parse_research_request(query)
+    owner_request=('decision_maker' in intent['fields'] and not is_hiring_query(query)
+        and not re.search(r'\b(?:needing|seeking)\b|\b(?:companies|businesses|firms)\s+looking for\b',query,re.I))
+    return (is_contact_list_query(query) or owner_request) and bool(
+        set(intent['fields']).intersection({'email','phone','decision_maker'})
+        or re.search(r'\b(?:contacts?|enrich\w*|hunter|auto\s*hunt)\b',query,re.I))
 
 
 def request_filters(query, location):
@@ -31,8 +36,9 @@ def request_filters(query, location):
     clean=re.sub(r'(?i)\b(?:use|using|with)\s+auto\s*hunt\b|\bauto\s*hunt\b',' ',query)
     prefix=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',clean,1,flags=re.I)[0]
     prefix=re.split(r'\b(?:in|near|around|with|that|who)\b',prefix,1,flags=re.I)[0]
-    stop=set('i give find show list research get me us please up to only a an the local nearby business businesses owners owner contacts contact decision maker makers decisionmaker decisionmakers decision-maker decision-makers phone phones email emails numbers number ceo ceos'.split())|set(COUNT_WORDS)
+    stop=set('i give find show list research get me us please up to only a an the local nearby business businesses owners owner founders founder presidents president managers manager directors director contacts contact decision maker makers decisionmaker decisionmakers decision-maker decision-makers phone phones telephone mobile cellphone cellphones email emails numbers number ceo ceos'.split())|set(COUNT_WORDS)
     terms=[t for t in re.findall(r'[a-z][a-z-]+',prefix.lower()) if t not in stop]
+    terms=[t for t in terms if t not in {'i','m','im','am','we','re','are','looking','for','need','want','their'}]
     # These conditions need their own evidence, not a keyword match on a site.
     extra=bool(re.search(r'\b(?:revenue|employees?|headcount|rating|rated|stars?|over|under|at least|more than|less than|without|excluding|except|open 24|family.owned|women.owned|veteran.owned)\b',query,re.I))
     tail=re.split(r'\b(?:business(?:es)?|compan(?:y|ies)|prospects?|leads?)\b',query,1,flags=re.I)
@@ -71,7 +77,7 @@ def _primary_seed(raw):
 
 def discover(filters, limit, cached=()):
     from universal_app import _search_businesses
-    from smart_search import _exa_search
+    from src.contact_sources import search as search_sources
     from src.research_intent import parse_research_request
     wants_people='decision_maker' in parse_research_request(filters['query'])['fields']
     companies=[];seen=set();diagnostics=[];leadership_domains=[]
@@ -96,7 +102,7 @@ def discover(filters, limit, cached=()):
     if len(companies)<limit or wants_people:
         checkpoint('researching_more_sources',requested=limit)
         try:
-            result=_exa_search(topic+(' owner president CEO leadership official company website' if wants_people else ' official company website'),filters['location'])
+            result=search_sources(topic+(' owner president CEO leadership official company website' if wants_people else ' official company website'),filters['location'])
             if result.get('message'):diagnostics.append(result['message'])
             for raw in result.get('results') or []:
                 checkpoint('reviewing_company_source')
@@ -131,6 +137,23 @@ def _published_direct_phone(person):
     return match.group(1) if match else ''
 
 
+def _published_person_email(person, website):
+    """Preserve a published profile email for research without granting send authority."""
+    from src.contact_assessment import EMAIL, PAIR, CARD_PAIR, email_name_consistent, current_email_context
+    text=str(person.get('evidence_excerpt') or '')
+    name=person.get('name') or ''
+    if not name or not owned_host(person.get('source_url') or '',website):return ''
+    matches=list(PAIR.finditer(text)) or list(CARD_PAIR.finditer(text))
+    if len(matches)!=1 or matches[0].group(1)!=name:return ''
+    # Sentence punctuation is not part of a published address. Keep internal
+    # domain dots intact and leave the shared bounded address matcher unchanged.
+    address_text=re.sub(r'\.(?=\s|$)',' ',text)
+    emails=list(dict.fromkeys(email.lower() for email in EMAIL.findall(address_text)
+        if email_on_domain(email,website) and not is_shared_email(email)
+        and email_name_consistent(email,name) and current_email_context(text,email)))
+    return emails[0] if len(emails)==1 else ''
+
+
 def supplement_research_contacts(record,company,intent):
     """Provider-associated contacts are research evidence, not send permission."""
     from src import hunter_mailbox, hunter_discovery
@@ -139,7 +162,7 @@ def supplement_research_contacts(record,company,intent):
     enrichment=record.get('enrichment') or {}
     if not hunter_mailbox.enabled() or enrichment.get('identity_status')!='source_bound':return
     people=enrichment.get('decision_maker_candidates') or []
-    if any(p.get('email') for p in people) or ('email' not in intent['fields'] and people):return
+    if any(p.get('email') or _published_person_email(p,company['website']) for p in people) or ('email' not in intent['fields'] and people):return
     checkpoint('hunter_contact_lookup')
     receipt=hunter_discovery.discover_contacts(company['website'],decision_makers=True)
     record['research_provider']={k:v for k,v in receipt.items() if k!='contacts'}
@@ -151,8 +174,10 @@ def supplement_research_contacts(record,company,intent):
             or not email_on_domain(email,company['website']) or not _purpose_mailbox_allowed(email)):continue
         check=verify_mailbox(email,provider='hunter',research_only=True) if 'email' in intent['fields'] else {}
         if check.get('mailbox_status')=='provider_rejected':continue
+        cited=next((url for url in contact.get('source_urls') or [] if owned_host(url,company['website'])),None)
         contacts.append({'name':name,'role':role,'email':email if 'email' in intent['fields'] else '',
-            'source_url':'https://hunter.io/domain-search?domain='+host(company['website']),
+            'source_url':cited or 'https://hunter.io/domain-search?domain='+host(company['website']),
+            'source_kind':'provider_cited_page' if cited else 'provider_record',
             'observed_at':receipt.get('checked_at'),'scope':'Hunter company-associated contact',
             'mailbox_validation':check,'email_status':'Verified' if current(check,email) else 'Email found · Mailbox not verified'})
         if len(contacts)>=3:break
@@ -178,7 +203,7 @@ def view(lead, record=None):
     named=bool(address and person_email_supported(assessment,address))
     person=(fields.get('decision_maker') or {})
     business_matched=(record.get('business_research') or {}).get('filter_status')=='matched'
-    people=[{'name':p['name'],'role':p['title'],'email':p.get('email') or '',
+    people=[{'name':p['name'],'role':p['title'],'email':p.get('email') or _published_person_email(p,lead.source_url),
              'source_url':p['source_url'],'observed_at':p.get('observed_at'),
              'direct_phone':_published_direct_phone(p),
              'scope':'Local role supported' if p.get('status')=='source_supported' else 'Company leadership'}
@@ -314,13 +339,16 @@ def run(campaign, *, save_contacts=True):
                     snapshots[host(lead.source_url)]=record
     companies,diagnostics=discover(filters,limit,cached)
     checkpoint('business_results_ready',businesses=[{**c,'owned_contact_research':True,'provider_contact_research':True,
-        'research_source':'AutoHunt','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit)
+        'research_source':'AutoHunt','contact_status':'Collecting public contacts'} for c in companies[:limit]],discovered=len(companies),requested=limit,research_intent=intent)
     wants_people='decision_maker' in intent['fields']
     def ready(row):
-        return bool(row.get('contact_name') or row.get('decision_makers')) and (
-            'phone' not in intent['fields'] or bool(row.get('contact_phone') or row.get('direct_phone'))) and (
-            'email' not in intent['fields'] or bool(row.get('contact_email') or any(p.get('email') for p in row.get('decision_makers') or [])))
+        people=row.get('decision_makers') or []
+        named=bool(row.get('contact_name') or people)
+        phone=bool(row.get('direct_phone_verified') and row.get('direct_phone')) or any(p.get('direct_phone') for p in people)
+        email=any(p.get('email') for p in people) or bool((row.get('contact_check') or {}).get('named_contact') and row.get('contact_email'))
+        return named and ('phone' not in intent['fields'] or phone) and ('email' not in intent['fields'] or email)
     for company in companies:
+        deadline_hit=False
         if (sum(ready(row) for row in views)>=limit if wants_people else len(views)>=limit):break
         try:
             checkpoint('collecting_public_contacts',businesses=views,requested=limit)
@@ -337,17 +365,17 @@ def run(campaign, *, save_contacts=True):
         if wants_people:
             try:supplement_research_contacts(record,company,intent)
             except TimeoutError:
-                if views:
-                    diagnostics.append('Showing contacts collected before the search time limit.')
-                    break
-                raise
+                diagnostics.append('Optional contact lookup timed out; showing the public sources already collected.')
+                deadline_hit=True
             except Exception:
                 diagnostics.append('Contact provider unavailable; showing collected public contacts.')
         lead=OutreachLead.query.filter_by(company=company['company'],source_url=company['website']).filter(scope(OutreachLead,'lead',OWNER)).first() if save_contacts else None
         if lead and (lead.sent_at or lead.gmail_message_id or lead.status!='needs_evidence'):
             # Do not change active, stopped, or previously prepared conversations.
             shown=view(lead) if snapshot(lead) else view(OutreachLead(company=company['company'],source_url=company['website'],location=location),record)
-            views.append(shown);continue
+            views.append(shown)
+            if deadline_hit:break
+            continue
         if not lead:
             lead=OutreachLead(company=company['company'],source_url=company['website'],location=location,status='needs_evidence',score=0,verification='CANDIDATE')
         address=(record['enrichment'].get('fields',{}).get('email') or {}).get('value') or ''
@@ -361,9 +389,13 @@ def run(campaign, *, save_contacts=True):
         field=record['enrichment'].get('fields',{}).get('email') or {}
         assessment=record['enrichment'].setdefault('contact_assessment',{})
         check=assessment.get('mailbox_validation') or {}
-        if verify_emails and address and field.get('validated') and not (check.get('provider')=='hunter' and current(check,address)):
-            checkpoint('verifying_research_mailbox',businesses=views,requested=limit)
-            check=verify_mailbox(address,provider='hunter',research_only=True)
+        if not deadline_hit and verify_emails and address and field.get('validated') and not (check.get('provider')=='hunter' and current(check,address)):
+            try:
+                checkpoint('verifying_research_mailbox',businesses=views,requested=limit)
+                check=verify_mailbox(address,provider='hunter',research_only=True)
+            except TimeoutError:
+                check={};deadline_hit=True
+                diagnostics.append('Mailbox verification timed out; published contact details remain available.')
             assessment['mailbox_validation']=check
             field['mailbox_status']=check.get('mailbox_status','unconfirmed')
             field['deliverability_status']=check.get('deliverability_status','unconfirmed')
@@ -379,8 +411,10 @@ def run(campaign, *, save_contacts=True):
                 db.session.add(lead);db.session.flush();claim('lead',lead.id,OWNER);attribute_new_lead(lead)
             db.session.commit();saved.append(lead.id)
         views.append(view(lead,record))
+        if deadline_hit:break
         checkpoint('public_contacts_collected',businesses=views,discovered=len(views),requested=limit,
-            contacts_verified=sum(v['contact_check']['mailbox_verified'] for v in views))
+            contacts_verified=sum(v['contact_check']['mailbox_verified'] for v in views),
+            research_intent=intent,research_presentation=format_research_results(views,intent))
     # A company-only row must not displace a researched decision-maker when
     # the user asked for people. Keep partial results when sources run out.
     if wants_people:views.sort(key=lambda row:(ready(row),bool(row.get('contact_name') or row.get('decision_makers'))),reverse=True)

@@ -39,6 +39,18 @@ def test_interrupted_read_only_job_is_recovered(env,monkeypatch):
     assert job.status=="completed"
 
 
+@pytest.mark.parametrize('workspace,expected',[('matthew-owner-workspace',True),('customer-isolated',False),('public-anonymous',False)])
+def test_source_research_saves_contacts_only_for_the_job_owner_workspace(env,monkeypatch,workspace,expected):
+    from src import owned_research
+    from workspace_security import claim
+    job=jobs.ResearchJob(id='owned-contact-search',prompt_text='Find five HVAC owner contacts',target_count=5)
+    jobs.db.session.add(job);claim('research',job.id,workspace);jobs.db.session.commit()
+    run=__import__('unittest.mock',fromlist=['Mock']).Mock(return_value=({'ok':True,'discovery':{'results':[]}},None,None))
+    monkeypatch.setattr(owned_research,'run',run)
+    assert jobs.process_next_research_job()['ok']
+    assert run.call_args.kwargs['save_contacts'] is expected
+
+
 def test_ranking_removes_duplicates_and_downgrades_stale_sources():
     rows=[dict(title="Acme",promotion_status="verified",published_at="2020-01-01T00:00:00Z"),dict(title="Fresh",promotion_status="verified",url="https://fresh.example",published_at=datetime.utcnow().isoformat()),dict(title="Fresh",promotion_status="candidate")]
     result=search.rank_research_results(rows)
