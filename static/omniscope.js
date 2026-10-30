@@ -28,12 +28,12 @@
     if(data.more_available)text(box,'p','Showing the first 25 contacts.');
   }
   function switchMode(){
-    const people=mode.value==='people',places=mode.value==='places';
-    $('prompt').hidden=people;$('prompt-label').hidden=people;$('prompt').required=!people;$('prompt').maxLength=places?512:12000;
+    const people=mode.value==='people',places=mode.value==='places',research=mode.value==='research';
+    $('prompt').hidden=people;$('prompt-label').hidden=people;$('prompt').required=!people;$('prompt').maxLength=(places||research)?512:12000;
     $('prompt').placeholder=places?'Find HVAC companies in Chesapeake, Virginia…':'Ask OmniScope…';
-    $('submit').textContent=people?'Load my contacts':places?'Search places ↗':'Ask OmniScope ↗';
-    $('tool-description').textContent=people?'Read contacts from your separately authorized Google account. This is not a public people-search database.':places?'Search current business listings and place locations with Google Places.':'Ask a question. OmniScope separates evidence, assumptions, and uncertainty.';
-    $('input-hint').textContent=people?'Requires Google People authorization.':places?'Searches use your workspace’s Google Places connection.':'Chat uses OpenAI. Live tools run only when selected.';
+    $('submit').textContent=people?'Load my contacts':places?'Search places ↗':research?'Research live web ↗':'Ask OmniScope ↗';
+    $('tool-description').textContent=people?'Read contacts from your separately authorized Google account. This is not a public people-search database.':places?'Search current business listings and place locations with Google Places.':research?'Research public web sources with explicit evidence links.':'Ask a question. OmniScope separates evidence, assumptions, and uncertainty.';
+    $('input-hint').textContent=people?'Requires Google People authorization.':places?'Searches use your workspace’s Google Places connection.':research?'Searches use configured Exa or web providers; results may be incomplete.':'Chat uses OpenAI. Live tools run only when selected.';
     $('notice').textContent='';$('notice').className='';
   }
   $('new-chat').addEventListener('click',()=>{if(busy)return;history=[];messages.replaceChildren();const empty=document.createElement('div');empty.id='empty';empty.textContent='What would you like to understand?';messages.appendChild(empty);$('notice').textContent='';});
@@ -46,6 +46,11 @@
       if(selected==='chat'){
         const data=await api('/api/chat/omniscope/chat',{message:value,history:history});
         message('You',value,'user');message('OmniScope',data.answer);history=history.concat([{role:'user',content:value},{role:'assistant',content:data.answer}]).slice(-16);$('prompt').value='';
+      }else if(selected==='research'){
+        const data=await api('/api/chat/omniscope/research',{query:value});
+        message('You',value,'user');const card=message('OmniScope live research',data.answer);
+        (data.sources||[]).forEach((source,i)=>safeLink(card,'['+(i+1)+'] '+source.title,source.url));
+        $('prompt').value='';
       }else if(selected==='places')displayPlaces(await api('/api/chat/omniscope/places',{query:value}));
       else displayContacts(await api('/api/chat/omniscope/people',{}));
       $('notice').textContent='';
