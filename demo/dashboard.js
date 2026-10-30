@@ -18,6 +18,7 @@
   function open(name){
     if(name!==view)leadOffset=0;
     view=labels[name]?name:'chat';var version=++requestVersion;
+    panel.classList.toggle('verified-contacts-view',view==='verified-emails');
     if(window.closeWorkspaceMenu)window.closeWorkspaceMenu(false);else menu.open=false;
     document.getElementById('feed').hidden=view!=='chat';panel.hidden=view==='chat';
     document.querySelector('.composer-shell').hidden=view!=='chat';
@@ -42,7 +43,12 @@
         var term=document.getElementById('verified-contact-search').value.toLowerCase();
         var rows=(result.contacts||[]).filter(function(c){return [c.name,c.role,c.company,c.email,c.phone].join(' ').toLowerCase().includes(term);});
         document.getElementById('verified-contact-count').textContent=rows.length+' verified '+(rows.length===1?'decision-maker':'decision-makers');
-        document.getElementById('verified-contact-results').innerHTML=rows.length?'<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-collapse:collapse"><thead><tr>'+['Decision-maker','Company','Verified email','Direct phone','Verification'].map(function(h){return '<th style="padding:12px">'+e(h)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.map(function(c){var phone=c.phone?'<a href="tel:'+e(c.phone.replace(/[^+0-9]/g,''))+'">'+e(c.phone)+'</a>':'No person-specific number found';return '<tr>'+['<b>'+e(c.name)+'</b><br>'+e(c.role),e(c.company),'<a href="mailto:'+e(c.email)+'">'+e(c.email)+'</a>',phone,e(c.provider||'Verified')+'<br>'+e(String(c.verified_on||'').slice(0,10))+'<br>'+link(c.source_url,'Contact source')].map(function(v){return '<td style="padding:12px;vertical-align:top;border-bottom:1px solid #eee">'+v+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>':'<div class="workspace-empty"><b>No verified decision-maker emails found</b><p>Verified owner and decision-maker contacts from your saved research will appear here. Company inboxes, expired verifications and main office numbers are excluded.</p></div>';
+        var columns=['Decision-maker','Company','Verified email','Direct phone','Verification'];
+        document.getElementById('verified-contact-results').innerHTML=rows.length?'<div class="verified-contact-table-wrap"><table class="verified-contact-table" role="table"><caption class="verified-contact-caption">Verified decision-maker contact details</caption><thead role="rowgroup"><tr role="row">'+columns.map(function(h){return '<th scope="col" role="columnheader">'+e(h)+'</th>';}).join('')+'</tr></thead><tbody role="rowgroup">'+rows.map(function(c){
+          var phone=c.phone?'<a class="verified-phone" href="tel:'+e(c.phone.replace(/[^+0-9]/g,''))+'">'+e(c.phone)+'</a>':'No person-specific number found';
+          var values=['<b class="verified-contact-name">'+e(c.name)+'</b><span class="verified-contact-role">'+e(c.role)+'</span>',e(c.company),'<a class="verified-email" href="mailto:'+e(c.email)+'">'+e(c.email)+'</a>',phone,'<span>'+e(c.provider||'Verified')+'</span><span class="verified-contact-date">'+e(String(c.verified_on||'').slice(0,10))+'</span><span class="verified-contact-source">'+link(c.source_url,'Contact source')+'</span>'];
+          return '<tr role="row">'+values.map(function(value,index){return '<td role="cell"><span class="verified-field-label" aria-hidden="true">'+e(columns[index])+'</span><div class="verified-field-value">'+value+'</div></td>';}).join('')+'</tr>';
+        }).join('')+'</tbody></table></div>':'<div class="workspace-empty"><b>No verified decision-maker emails found</b><p>Verified owner and decision-maker contacts from your saved research will appear here. Company inboxes, expired verifications and main office numbers are excluded.</p></div>';
       }
       document.getElementById('verified-contact-search').addEventListener('input',render);render();
     }).catch(function(err){if(version===requestVersion)error(err);});

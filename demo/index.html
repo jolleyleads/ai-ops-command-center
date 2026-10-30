@@ -41,6 +41,33 @@ body{overflow:hidden;background:#fff;color:#161616;-webkit-font-smoothing:antial
 .msg>.bubble{min-width:0;max-width:100%;overflow-wrap:break-word;word-break:normal}.leadtop{flex-wrap:wrap}.leadtop>b{min-width:0}.research-details,.send-details{font-size:12px;color:var(--muted);margin:10px 0}.research-details>summary,.send-details>summary{cursor:pointer}.send-details p{overflow-wrap:anywhere}.outreach-workflow>.outreach-reason:empty{display:none}@media(max-width:900px){.score-badge{white-space:normal}.outreach-workflow{padding:12px}.bubble .lead{margin:12px 0}.msg{gap:0}}
 .working-activity{margin:14px 0;padding:12px 16px;background:#f8f8f8;border-radius:14px;font-size:13px;color:#595959}.working-activity p{margin-bottom:8px}.working-activity ol{margin:0;padding-left:20px}.working-activity li{padding:3px 0}.working-activity [aria-current="step"]{color:#171717;font-weight:600}.working-activity [aria-current="step"]::marker{content:'◌  '}.working-activity time{font-size:10px;color:#888;margin-left:6px}.message-preview{margin:12px 0;padding:14px;border:1px solid #e7e7e7;border-radius:12px}.message-preview p{overflow-wrap:anywhere}
 .crm-submenu>summary{display:flex;align-items:center;gap:12px;padding:10px 12px;cursor:pointer;font-size:14px;border-radius:9px;list-style:none}.crm-submenu>summary::-webkit-details-marker{display:none}.crm-submenu>summary:after{content:"▾";margin-left:auto}.crm-submenu[open]>summary:after{content:"▴"}.crm-submenu>summary:hover{background:#ebebeb}.crm-submenu-items{padding-left:29px}.crm-submenu-items button{font-size:13px!important}.email-workflow-entry{padding:22px}.email-workflow-entry textarea{display:block;width:100%;resize:vertical;min-height:100px;margin:14px 0;padding:15px;border:1px solid var(--line);border-radius:14px;background:#fafafa;color:var(--ink);font:inherit;line-height:1.6}.email-workflow-entry-actions,.email-workflow-row-actions,.email-workflow-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.email-workflow-entry-actions{justify-content:space-between}.email-workflows-primary{background:var(--ink)!important;color:white!important;border-color:var(--ink)!important}.email-workflow-toolbar{padding:14px 2px;border-bottom:1px solid var(--line)}#workspace-panel .email-workflow-toolbar>label,#workspace-panel .email-workflow-recipient{display:flex;flex-direction:row;align-items:center;gap:12px}.email-workflow-toolbar button{margin-left:auto}.email-workflow-recipient{min-width:0;overflow-wrap:anywhere}.email-workflow-recipient input,.email-workflow-toolbar input{width:17px;height:17px;accent-color:#202123;flex-shrink:0}.email-workflow-row{padding:20px!important}.email-workflow-row-actions{margin-top:15px}.email-workflow-preview:empty{display:none}.email-workflow-preview .message-preview{margin-top:18px}#workspace-panel input[data-email-workflow-select],#workspace-panel #select-email-workflows{width:17px;height:17px;flex:0 0 17px;margin:0}@media(max-width:600px){.email-workflow-entry{padding:16px}.email-workflow-entry-actions button{flex:1}.workspace-heading:has(+.email-workflow-entry){align-items:stretch;flex-direction:column}.workspace-heading:has(+.email-workflow-entry)>button{width:100%}.email-workflow-recipient b{font-size:14px}}
+
+/* Verified contacts keep their reading width instead of squeezing five columns. */
+.verified-contact-table-wrap{width:100%;max-width:100%;overflow-x:auto}
+.verified-contact-table{width:100%;min-width:820px;text-align:left;border-collapse:collapse;font-size:14px;line-height:1.6}
+.verified-contact-table th,.verified-contact-table td{padding:14px 12px;vertical-align:top;border-bottom:1px solid var(--line)}
+.verified-contact-table th{font-size:12px;font-weight:600;color:#666}
+.verified-contact-table td{max-width:240px;word-break:normal;overflow-wrap:anywhere}
+.verified-contact-caption{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.verified-field-label{display:none}.verified-field-value{min-width:0;max-width:100%;line-height:1.6}
+.verified-contact-name{display:block;font-weight:600}.verified-contact-role,.verified-contact-date,.verified-contact-source{display:block;margin-top:4px}
+.verified-contact-role,.verified-contact-date{color:#666}.verified-phone{white-space:nowrap}
+@media(max-width:900px){
+  .verified-contact-table-wrap{overflow:visible}
+  .verified-contact-table,.verified-contact-table tbody{display:block;min-width:0;width:100%}
+  .verified-contact-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .verified-contact-table tr{display:block;width:100%;min-width:0;padding:18px;border:1px solid #e5e5e5;border-radius:16px;background:#fff;margin:0 0 18px}
+  .verified-contact-table td{display:block;width:100%;max-width:none;border:0;padding:0;margin:0 0 18px;font-size:16px;line-height:1.6}
+  .verified-contact-table td:last-child{margin-bottom:0}
+  .verified-field-label{display:block;margin-bottom:5px;font-size:12px;font-weight:600;letter-spacing:.02em;color:#737373}
+  .verified-contact-name{font-size:18px;line-height:1.4}.verified-contact-role{font-size:15px;margin-top:6px}
+  .verified-contact-table a{display:inline-block;max-width:100%;min-height:44px;padding:8px 0;overflow-wrap:anywhere;word-break:normal}
+  .verified-contact-table .verified-phone{white-space:normal}
+  #workspace-panel.verified-contacts-view input{font-size:16px;min-height:48px}
+  #workspace-panel.verified-contacts-view .workspace-heading{align-items:flex-start;flex-direction:column;gap:14px}
+  #workspace-panel.verified-contacts-view .workspace-heading>div{min-width:0;width:100%}
+  #workspace-panel.verified-contacts-view .workspace-heading>button{min-height:44px;width:100%;margin:0}
+}
 </style></head><body>
 <div class="app"><main class="main"><header class="top"><a href="/" aria-label="Go to AutoMake AI homepage" title="Home" style="display:inline-flex;align-items:center;gap:6px;color:#202123;text-decoration:none;font-size:13px;font-weight:600;padding:8px 10px;border:1px solid #e5e5e5;border-radius:10px;white-space:nowrap">⌂ <span>Home</span></a><div class="top-brand"><img class="brand-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div>
 <details id="workspace-menu"><summary aria-label="Open menu" title="Open AutoMake AI menu"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 15h11"/></svg><img class="menu-logo" src="/chat-operator/automake-logo.svg?v=a9c9992" alt="AutoMake AI"></summary><div class="menu-sheet" id="workspace-navigation"><div class="sidebar-brand"><img src="/chat-operator/automake-logo.svg?v=a9c9992" alt=""><b>AutoMake AI</b></div><div class="menu-scroll">
@@ -232,4 +259,4 @@ window.openResearchLink=function(){
 window.addEventListener('load',window.openResearchLink);
 
 
-</script><script src="/chat-operator/dashboard.js?v=message-preview-activity-3" defer></script><script src="/chat-operator/access.js?v=message-preview-activity-3"></script><script src="/static/email-workflows.js?v=email-workflow-desk-1" defer></script></body></html>
+</script><script src="/chat-operator/dashboard.js?v=verified-contacts-mobile-1" defer></script><script src="/chat-operator/access.js?v=message-preview-activity-3"></script><script src="/static/email-workflows.js?v=email-workflow-desk-1" defer></script></body></html>
