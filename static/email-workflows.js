@@ -95,7 +95,7 @@
       var candidates=verifiedChoices.filter(function(row){return verifiedSelected.has(row.email);}).map(function(row){return row.email;});
       if(!candidates.length)return;
       var existing=window.parseWorkflowEmails(input.value);
-      input.value=Array.from(new Set(existing.concat(candidates))).join('\\n');
+      input.value=Array.from(new Set(existing.concat(candidates))).join('\n');
       verifiedSelected.clear();updateVerifiedPicker();
       message(candidates.length+' verified email'+(candidates.length===1?'':'s')+' placed in the entry box. Choose Add email addresses, then activate your selected workflows.');
       input.focus();
