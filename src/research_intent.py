@@ -7,8 +7,8 @@ from src.research_policy import COUNT_WORDS
 
 _FIELDS = {
     "email": r"\b(?:emails?|e-mails?|email addresses?)\b",
-    "phone": r"\b(?:phones?|phone numbers?|telephone|numbers?|call(?:ing)?)\b",
-    "decision_maker": r"\b(?:decision[ -]?makers?|owners?|founders?|presidents?|ceos?|managers?|directors?)\b",
+    "phone": r"\b(?:phones?|phone numbers?|telephone|numbers?|call(?:ing)?|mobile|cellphones?|cell numbers?)\b",
+    "decision_maker": r"\b(?:decision[\s\u2010-\u2015-]*makers?|owners?|founders?|presidents?|ceos?|managers?|directors?)\b",
     "website": r"\b(?:websites?|domains?|urls?)\b",
 }
 _OUTREACH = re.compile(r"\b(?:send|email them|start outreach|activate (?:the )?workflow|launch campaign)\b", re.I)

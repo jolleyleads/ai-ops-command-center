@@ -92,9 +92,9 @@ def _public_contact_evidence(result, *, use_provider=True):
     if roots and result.get('decision_maker_research'):
         # Search discovers paths such as /team.html and /meet-the-team/ that
         # guessed URLs miss. Search snippets never become contact evidence.
-        from smart_search import _exa_search
+        from src.contact_sources import search as search_sources
         checkpoint('finding_decision_maker_sources')
-        hints=_exa_search('site:'+_host(roots[0])+' '+company+' owner president CEO manager team contact',location)
+        hints=search_sources('site:'+_host(roots[0])+' '+company+' owner president CEO manager team contact',location)
         leadership_sources=list(dict.fromkeys(hit.get('url') for hit in hints.get('results') or []
             if hit.get('url') and owned_host(hit['url'],roots[0])))[:3]
         started=time.monotonic()

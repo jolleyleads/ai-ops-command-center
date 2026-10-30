@@ -309,6 +309,18 @@ def test_another_persons_name_cannot_bless_an_unrelated_direct_number():
     assert not owned._published_direct_phone({'name':'Jane Doe','evidence_excerpt':'Mary Jones, CEO. Direct: (757) 555-7777'})
 
 
+def test_optional_provider_timeout_keeps_first_company_public_contact_sources(setup,monkeypatch):
+    wire(monkeypatch,[page('Acme Electrical in Norfolk, VA. Jane Doe, CEO. Direct: (757) 555-7777.')])
+    monkeypatch.setattr(owned,'supplement_research_contacts',lambda *a:(_ for _ in ()).throw(TimeoutError()))
+    result,stage,error=owned.run({**CAMPAIGN,'query':'Give me one electrical company with owner phone numbers'},save_contacts=False)
+    assert not stage and not error
+    assert result['research_presentation'][0]['decision_maker']=='Jane Doe'
+    assert result['research_presentation'][0]['phone']=='(757) 555-7777'
+    assert result['research_presentation'][0]['sources']
+    assert result['outreach']['sent']==0
+    assert any('timed out' in message for message in result['discovery']['diagnostics'])
+
+
 def test_people_discovery_searches_leadership_sources_before_settling_for_map_listings(setup,monkeypatch):
     import universal_app,smart_search
     calls=[]
@@ -402,7 +414,8 @@ def test_hunter_fills_missing_owner_email_without_hiding_unverified_contacts(set
     calls=[]
     def discover(website,**kw):
         calls.append((website,kw))
-        return {'contacts':[{'name':'Jane Doe','title':'Owner','type':'personal','email':'jane@acmeelectrical.example'}],
+        return {'contacts':[{'name':'Jane Doe','title':'Owner','type':'personal','email':'jane@acmeelectrical.example',
+                             'source_urls':['https://unrelated.example/profile','https://acmeelectrical.example/team/jane']}],
                 'checked_at':datetime.now(timezone.utc).isoformat(),'reason_codes':[]}
     monkeypatch.setattr(hunter_discovery,'discover_contacts',discover)
     def verify(email,**kw):
@@ -421,6 +434,7 @@ def test_hunter_fills_missing_owner_email_without_hiding_unverified_contacts(set
     assert lead.contact_email=='hello@acmeelectrical.example'  # Research cannot replace a sending recipient.
     assert lead.status=='needs_evidence' and not lead.sent_at
     assert result['research_presentation'][0]['decision_maker']=='Jane Doe'
+    assert row['email_source_url']=='https://acmeelectrical.example/team/jane'
 
 
 def test_company_leader_is_visible_without_outreach_or_local_role_qualification(setup,monkeypatch):

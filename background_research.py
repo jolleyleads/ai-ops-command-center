@@ -80,8 +80,11 @@ def process_next_research_job():
             from src.owned_research import accepts as owned_request, run as run_owned_research
             from src.hunter_research import use_native_contact_search, run_contact_research, ContactResearchUnavailable
             if owned_request(job.prompt_text):
+                from workspace_security import ResourceOwnership, OWNER
+                ownership=db.session.get(ResourceOwnership,('research',job.id))
+                save_owned=bool(ownership and ownership.workspace_id==OWNER)
                 result,stage,error=run_owned_research({'query':job.prompt_text,'territory':job.location,
-                    'target_count':job.target_count,'offer':''},save_contacts=False)
+                    'target_count':job.target_count,'offer':''},save_contacts=save_owned)
                 if error:raise ContactResearchUnavailable(error)
             elif use_native_contact_search(job.prompt_text):
                 result,stage,error=run_contact_research({'query':job.prompt_text,'territory':job.location,
