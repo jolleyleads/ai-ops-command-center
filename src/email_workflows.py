@@ -298,3 +298,23 @@ def available_verified_workflow_contacts():
     response = jsonify(ok=True, contacts=results, count=len(results))
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@app.get('/api/chat/email-workflows/<contact_id>/curiosity-preview')
+def preview_curiosity_email_workflow(contact_id):
+    """Draft-only strategy preview; does not grant sending authorization."""
+    if not _owner():
+        return jsonify(ok=False, error='Sign in first.'), 403
+    row = db.session.get(EmailWorkflowContact, contact_id)
+    if not row or row.workspace_id != OWNER:
+        return jsonify(ok=False, error='Email contact not found.'), 404
+    lead = db.session.get(oa.OutreachLead, row.lead_id)
+    if not lead or not owns('lead', lead.id, OWNER):
+        return jsonify(ok=False, error='Contact unavailable.'), 404
+    from src.curiosity_outreach import render_sequence
+    name = (lead.contact_name or '').split(' ')[0] or 'there'
+    company = lead.company if lead.company != 'Email contact' else 'your company'
+    sequence = render_sequence(company, name)
+    response = jsonify(ok=True, recipient=row.email, preview=sequence)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
