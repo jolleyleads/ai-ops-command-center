@@ -34,7 +34,7 @@ try{const fd=new FormData(form);fd.set('consent','true');const res=await fetch('
 if(!res.ok)throw Error(typeof info.detail==='string'?info.detail:JSON.stringify(info.detail));
 let job=info,failures=0;
 while(job.status==='queued'||job.status==='processing'){
-  status.textContent='Rendering · '+job.progress+'%';
+  status.textContent=(job.stage||'Rendering')+' · '+job.progress+'%';
   await sleep(3000);
   try{
     const r=await fetch('/api/jobs/'+job.id,{cache:'no-store'});

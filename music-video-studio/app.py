@@ -77,7 +77,7 @@ def preview(photo,audio,out,work):
         "-crf","27","-pix_fmt","yuv420p","-r","12",
         "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart",out)
 
-def lipsync(photo,audio,out,work):
+def lipsync(photo,audio,out,work,job_id=None):
     """Chunk-driven MuseTalk 1.5. A dedicated GPU Space is required for full songs."""
     space=os.getenv("HF_SPACE_ID","").strip()
     endpoint=os.getenv("HF_API_NAME","/generate").strip()
@@ -101,6 +101,8 @@ def lipsync(photo,audio,out,work):
     chunk_seconds=int(os.getenv("LIPSYNC_CHUNK_SECONDS","12"))
     if not 4<=chunk_seconds<=30: raise RuntimeError("LIPSYNC_CHUNK_SECONDS must be from 4 to 30.")
     parts=[]
+    total_chunks=int((length+chunk_seconds-0.0001)//chunk_seconds)+1 if length%chunk_seconds else int(length//chunk_seconds)
+    total_chunks=max(total_chunks,1)
     for index,start in enumerate(range(0,int(length+0.9999),chunk_seconds)):
         remaining=length-start
         if remaining<=0:break
@@ -110,8 +112,19 @@ def lipsync(photo,audio,out,work):
         # Verified upstream function signature:
         # generate(audio_path, video_path, bbox_shift, extra_margin, parsing_mode,
         #          left_cheek_width, right_cheek_width).
-        response=client.predict(handle_file(str(segment)),handle_file(str(photo)),
-            0,10,"jaw",90,90,api_name=endpoint)
+        if job_id:
+            update(job_id, progress=min(90,20+int(65*index/total_chunks)),
+                stage=f"AI singing: segment {index+1} of {total_chunks} — waiting for GPU")
+        try:
+            future=client.submit(handle_file(str(segment)),handle_file(str(photo)),
+                0,10,"jaw",90,90,api_name=endpoint)
+            response=future.result(timeout=int(os.getenv("LIPSYNC_SEGMENT_TIMEOUT","300")))
+        except TimeoutError:
+            try:future.cancel()
+            except Exception:pass
+            raise RuntimeError("Hugging Face GPU did not finish the clip before the timeout. The public GPU may be overloaded. Try the 8-second test later or use a dedicated GPU.")
+        except Exception as exc:
+            raise RuntimeError("The Hugging Face lip-sync model failed: "+str(exc)[:300]) from exc
         generated=mp4_from(response)
         if not generated or not Path(generated).is_file():
             raise RuntimeError(f"MuseTalk returned no local MP4 for segment {index+1}. Check Space API and quota.")
@@ -135,16 +148,16 @@ def lipsync(photo,audio,out,work):
 def work_job(job,photo,audio,mode):
     folder=DATA/job
     try:
-        update(job,status="processing",progress=15)
+        update(job,status="processing",progress=15,stage="Preparing media")
         output=folder/"music_video.mp4"
         if mode=="lipsync_sample":
             sample=folder/"sample_audio.wav"
             run("ffmpeg","-y","-hide_banner","-loglevel","error","-i",audio,"-t","8","-vn","-ac","1","-ar","16000",sample)
-            lipsync(photo,sample,output,folder)
-        elif mode=="lipsync": lipsync(photo,audio,output,folder)
+            lipsync(photo,sample,output,folder,job_id=job)
+        elif mode=="lipsync": lipsync(photo,audio,output,folder,job_id=job)
         else: preview(photo,audio,output,folder)
         if not output.exists() or output.stat().st_size<1024: raise RuntimeError("Empty render output")
-        update(job,status="complete",progress=100,download=f"/api/jobs/{job}/download")
+        update(job,status="complete",progress=100,stage="Finished",download=f"/api/jobs/{job}/download")
     except Exception as exc:
         update(job,status="failed",error=str(exc)[:500],progress=0)
 

@@ -46,3 +46,10 @@ def test_job_status_recovery_after_restart(tmp_path,monkeypatch):
     studio.recover_jobs()
     assert studio.jobs[key]["status"]=="failed"
     assert "server restarted" in studio.jobs[key]["error"]
+
+def test_lipsync_provider_missing(monkeypatch,tmp_path):
+    import app as studio
+    monkeypatch.delenv("HF_SPACE_ID",raising=False)
+    import pytest
+    with pytest.raises(RuntimeError,match="GPU"):
+        studio.lipsync(tmp_path/"portrait.png",tmp_path/"song.wav",tmp_path/"out.mp4",tmp_path)
