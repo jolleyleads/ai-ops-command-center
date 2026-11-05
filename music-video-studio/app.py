@@ -2,7 +2,6 @@ import os, uuid, json, shutil, subprocess, threading
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 
 BASE=Path(__file__).resolve().parent
@@ -10,6 +9,9 @@ DATA=Path(os.getenv("DATA_DIR",str(BASE/"data")))
 DATA.mkdir(parents=True,exist_ok=True)
 MAX_IMAGE=15*1024*1024
 MAX_AUDIO=150*1024*1024
+JOB_LIMIT=1
+JOB_TTL_SECONDS=3600
+
 app=FastAPI(title="AI Music Video Studio",version="0.1.0")
 jobs={}
 lock=threading.Lock()
@@ -45,34 +47,59 @@ def preview(photo,audio,out,work):
         "-shortest","-movflags","+faststart",out)
 
 def lipsync(photo,audio,out,work):
+    """Chunk-driven MuseTalk 1.5. A dedicated GPU Space is required for full songs."""
     space=os.getenv("HF_SPACE_ID","").strip()
-    endpoint=os.getenv("HF_API_NAME","").strip()
-    if not space or not endpoint:
-        raise RuntimeError("Lip-sync GPU provider is not configured. Set HF_SPACE_ID and HF_API_NAME for a tested MuseTalk Gradio Space.")
+    endpoint=os.getenv("HF_API_NAME","/generate").strip()
+    if not space:
+        raise RuntimeError("AI singing needs a connected GPU model. Render has no configured HF_SPACE_ID.")
     from gradio_client import Client,handle_file
     client=Client(space,token=os.getenv("HF_TOKEN") or None)
-    # The target Space must expose a documented API taking image and audio file inputs in this order.
-    # This fails explicitly for incompatible Spaces rather than pretending a still video is lip-synced.
-    result=client.predict(handle_file(str(photo)),handle_file(str(audio)),api_name=endpoint)
-    def find_mp4(value):
-        if isinstance(value,str) and value.lower().endswith(".mp4"): return value
-        if isinstance(value,dict):
-            for v in value.values():
-                got=find_mp4(v)
-                if got:return got
-        if isinstance(value,(tuple,list)):
-            for v in value:
-                got=find_mp4(v)
-                if got:return got
+    def mp4_from(response):
+        if isinstance(response,str) and response.lower().split("?")[0].endswith(".mp4"):
+            return response
+        if isinstance(response,dict):
+            for value in response.values():
+                candidate=mp4_from(value)
+                if candidate:return candidate
+        if isinstance(response,(list,tuple)):
+            for value in response:
+                candidate=mp4_from(value)
+                if candidate:return candidate
         return None
-    generated=find_mp4(result)
-    if not generated or not Path(generated).is_file():
-        raise RuntimeError("Lip-sync provider did not return a local MP4. Check its API contract.")
-    # Preserve original song rather than using provider audio, and normalize to 9:16.
-    run("ffmpeg","-y","-hide_banner","-loglevel","error","-stream_loop","-1","-i",generated,"-i",audio,
-        "-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,format=yuv420p",
-        "-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","24",
-        "-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart",out)
+    length=duration(audio)
+    chunk_seconds=int(os.getenv("LIPSYNC_CHUNK_SECONDS","12"))
+    if not 4<=chunk_seconds<=30: raise RuntimeError("LIPSYNC_CHUNK_SECONDS must be from 4 to 30.")
+    parts=[]
+    for index,start in enumerate(range(0,int(length+0.9999),chunk_seconds)):
+        remaining=length-start
+        if remaining<=0:break
+        segment=work/f"audio_{index:04d}.wav"
+        run("ffmpeg","-y","-hide_banner","-loglevel","error","-ss",start,"-t",min(chunk_seconds,remaining),
+            "-i",audio,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",segment)
+        # Verified upstream function signature:
+        # generate(audio_path, video_path, bbox_shift, extra_margin, parsing_mode,
+        #          left_cheek_width, right_cheek_width).
+        response=client.predict(handle_file(str(segment)),handle_file(str(photo)),
+            0,10,"jaw",90,90,api_name=endpoint)
+        generated=mp4_from(response)
+        if not generated or not Path(generated).is_file():
+            raise RuntimeError(f"MuseTalk returned no local MP4 for segment {index+1}. Check Space API and quota.")
+        clip=work/f"clip_{index:04d}.mp4"
+        run("ffmpeg","-y","-hide_banner","-loglevel","error","-i",generated,
+            "-t",min(chunk_seconds,remaining),"-an",
+            "-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,format=yuv420p",
+            "-c:v","libx264","-preset","veryfast","-crf","25",clip)
+        parts.append(clip)
+    if not parts: raise RuntimeError("No lip-sync video segments returned")
+    manifest=work/"clips.txt"
+    manifest.write_text("".join("file '"+str(p.resolve()).replace("'","'\\''")+"'\\n" for p in parts))
+    joined=work/"joined.mp4"
+    run("ffmpeg","-y","-hide_banner","-loglevel","error","-f","concat","-safe","0","-i",manifest,
+        "-c","copy",joined)
+    # Last step uses original full-resolution soundtrack, replacing chunk audio.
+    run("ffmpeg","-y","-hide_banner","-loglevel","error","-i",joined,"-i",audio,
+        "-map","0:v:0","-map","1:a:0","-c:v","copy","-c:a","aac","-b:a","192k",
+        "-shortest","-movflags","+faststart",out)
 
 def work_job(job,photo,audio,mode):
     folder=DATA/job
@@ -90,7 +117,7 @@ def work_job(job,photo,audio,mode):
 def home(): return (BASE/"index.html").read_text()
 
 @app.get("/health")
-def health(): return {"ok":True,"lip_sync_configured":bool(os.getenv("HF_SPACE_ID") and os.getenv("HF_API_NAME"))}
+def health(): return {"ok":True,"lip_sync_configured":bool(os.getenv("HF_SPACE_ID")),"render_modes":["preview"]+(["lipsync"] if os.getenv("HF_SPACE_ID") else [])}
 
 async def save_upload(upload,path,limit):
     count=0
@@ -110,6 +137,11 @@ async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=
     if photo.content_type not in ("image/jpeg","image/png","image/webp"):raise HTTPException(415,"Use JPG, PNG or WebP.")
     if song.content_type not in ("audio/mpeg","audio/mp3","audio/mp4","audio/x-m4a","audio/wav","audio/x-wav","audio/ogg","application/octet-stream"):
         raise HTTPException(415,"Use MP3, WAV or M4A.")
+    with lock:
+        active=sum(1 for j in jobs.values() if j["status"] in ("queued","processing"))
+        if active>=JOB_LIMIT:raise HTTPException(429,"Another render is running. Try again later.")
+    if mode=="lipsync" and not os.getenv("HF_SPACE_ID"):
+        raise HTTPException(503,"Lip-sync GPU provider not configured yet. Use Photo-motion preview.")
     job=uuid.uuid4().hex
     folder=DATA/job;folder.mkdir()
     p=folder/"input_photo";a=folder/"input_audio"

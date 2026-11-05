@@ -1,0 +1,35 @@
+name: Music video studio checks
+on:
+  push:
+    branches: [music-video-studio-mvp]
+    paths: ['music-video-studio/**', '.github/workflows/music-video-studio.yml']
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install -r music-video-studio/requirements.txt pytest httpx
+      - run: python -m pytest music-video-studio/tests -q
+        working-directory: .
+      - name: Render FFmpeg smoke video
+        run: |
+          cd music-video-studio
+          python - <<'PY'
+          import subprocess, tempfile
+          from pathlib import Path
+          from PIL import Image
+          from app import preview, duration
+          with tempfile.TemporaryDirectory() as d:
+              p=Path(d)
+              Image.new("RGB",(320,480),"#314260").save(p/"p.png")
+              subprocess.run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=420:duration=2","-c:a","pcm_s16le",str(p/"sound.wav")],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+              preview(p/"p.png",p/"sound.wav",p/"result.mp4",p)
+              assert (p/"result.mp4").stat().st_size > 1000
+              assert 1.5<duration(p/"result.mp4")<2.5
+              print("Preview smoke video passed")
+          PY

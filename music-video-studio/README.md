@@ -23,7 +23,7 @@ HF_SPACE_ID=your-org/your-musetalk-space
 HF_API_NAME=/your_verified_endpoint
 HF_TOKEN=optional_token_for_private_space
 ```
-The general Gradio protocol is implemented, but **no particular Space endpoint is pre-verified**. This is an integration point, not proof that the chosen Space can produce a 4-minute song. Some providers impose execution limits; production must chunk long audio and stitch segments. Do not send private audio to unknown third-party Spaces.
+The Gradio adapter now matches the upstream MuseTalk 1.5 parameter order and sends sequential audio clips (12 seconds default). The exact endpoint and GPU availability remain **unverified**. This is an integration point, not proof that the chosen Space can produce a 4-minute song. Some providers impose execution limits; production must chunk long audio and stitch segments. Do not send private audio to unknown third-party Spaces.
 
 ## Deploy to Render as separate service
 - Source: jolleyleads/ai-ops-command-center, branch `music-video-studio-mvp`
@@ -36,3 +36,9 @@ The general Gradio protocol is implemented, but **no particular Space endpoint i
 
 ## Safety
 The user confirms ownership or consent for portrait/voice/music. Add authentication, per-user isolation, retention enforcement, quotas, rate limiting, malware scanning and billing before public launch.
+
+## Provider integration note (2026-11-04)
+Upstream MuseTalk 1.5 Gradio `generate` expects `(audio, reference_image, bbox_shift, extra_margin, parsing_mode, left_cheek_width, right_cheek_width)`. The adapter uses `HF_API_NAME=/generate` and segments tracks to 12-second WAV requests, concatenates generated clips and muxes original audio. This was checked against upstream source, not by running GPU inference. A public ZeroGPU Space has quotas and is **not** an assured production backend. Set HF_SPACE_ID only for a Space you own or whose operator authorizes use, after confirming privacy rules. Users should not upload sensitive content to unknown public Spaces.
+
+## Deployment gating
+Lip-sync option is disabled in the UI when no GPU Space is configured; its API returns 503. This is deliberate to avoid pretending previews contain real lip-sync. Current threading, memory-only job state and ephemeral uploads are not suitable for a multi-user commercial deployment.
