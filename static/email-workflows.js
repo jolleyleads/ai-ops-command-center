@@ -18,12 +18,14 @@
       '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div>'+ 
       '<details id="verified-workflow-picker" class="email-workflow-entry"><summary style="cursor:pointer;font-weight:650">✓ Select from Verified Emails</summary><p class="meta">Select verified decision-makers who have never had an outreach workflow activated. Adding an address will not send an email.</p><div id="verified-workflow-picker-items" role="group" aria-label="Available verified emails"></div><div class="email-workflow-entry-actions"><button class="ghost" type="button" id="verified-workflow-picker-select-all">Select all available</button><button class="ghost email-workflows-primary" type="button" id="verified-workflow-picker-add">Add selected to email box</button><button class="ghost" type="button" id="verified-workflow-picker-refresh">Refresh</button></div><p class="meta" id="verified-workflow-picker-count" role="status"></p></details>'+ 
       '<p class="meta" id="email-voice-status" role="status">You can say “name at company dot com.” Review the address before adding it.</p></section>'+
-      '<section class="lead" aria-label="Email outreach strategy"><label for="email-outreach-strategy"><b>Email Outreach Strategy</b></label><select id="email-outreach-strategy" style="display:block;max-width:100%;width:100%;padding:12px;margin-top:8px;border:1px solid #ddd;border-radius:10px"><option value="curiosity">Curiosity-Based Outreach (preview only)</option><option value="legacy">Existing professional introduction (live sending)</option></select><p class="meta">Curiosity emails are review-only until safe sending is integrated. No résumé is attached to curiosity previews.</p></section>'+\n      '<div class="email-workflow-toolbar"><label><input type="checkbox" id="select-email-workflows"> Select all</label><span class="meta" id="email-workflow-count" aria-live="polite"></span><button class="ghost" type="button" id="refresh-email-workflows">Refresh</button></div>'+
+      '<section class="lead" aria-label="Email outreach strategy"><label for="email-outreach-strategy"><b>Email Outreach Strategy</b></label><select id="email-outreach-strategy" style="display:block;max-width:100%;width:100%;padding:12px;margin-top:8px;border:1px solid #ddd;border-radius:10px"><option value="curiosity">Curiosity-Based Outreach (preview only)</option><option value="legacy">Existing professional introduction (live sending)</option></select><p class="meta">Curiosity emails are review-only until safe sending is integrated. No résumé is attached to curiosity previews.</p></section>'+
+      '<div class="email-workflow-toolbar"><label><input type="checkbox" id="select-email-workflows"> Select all</label><span class="meta" id="email-workflow-count" aria-live="polite"></span><button class="ghost" type="button" id="refresh-email-workflows">Refresh</button></div>'+
       '<p class="meta">The existing introduction option sends an email and résumé. Curiosity drafts are preview-only, not enabled for sending.</p><p id="email-workflow-notice" role="status" aria-live="polite"></p><div id="email-workflow-list"><span class="loading"></span> Loading your email workflows…</div>';
     var input=panel.querySelector('#workflow-emails'),notice=panel.querySelector('#email-workflow-notice');
     function current(){return generation===mount&&panel.querySelector('#workflow-emails')===input&&!panel.hidden;}
     function message(value,error){if(!current())return;notice.textContent=value||'';notice.className=error?'error':'meta';}
-    function eligible(){return contacts.filter(function(row){return row.can_activate;});}\n    function curiositySelected(){return panel.querySelector('#email-outreach-strategy').value==='curiosity';}
+    function eligible(){return contacts.filter(function(row){return row.can_activate;});}
+    function curiositySelected(){return panel.querySelector('#email-outreach-strategy').value==='curiosity';}
     function updateSelection(){
       var ready=eligible(),count=ready.filter(function(row){return selected.has(row.id);}).length;
       panel.querySelector('#email-workflow-count').textContent=count+' selected · '+contacts.length+' email '+(contacts.length===1?'address':'addresses');
@@ -50,7 +52,8 @@
       }).catch(function(error){if(!current())return;message(error.message,true);panel.querySelector('#email-workflow-list').innerHTML='<div class="workspace-empty"><p>Sign in to your connected workspace to see your email workflows.</p><a href="/login">Sign in</a></div>';});
     }
     function activate(ids){
-      if(busy||!ids.length)return;\n      if(curiositySelected()){message('Curiosity outreach is draft-only. No emails have been sent.',true);return;}
+      if(busy||!ids.length)return;
+      if(curiositySelected()){message('Curiosity outreach is draft-only. No emails have been sent.',true);return;}
       busy=true;renderRows();message('Activating '+ids.length+' selected '+(ids.length===1?'workflow':'workflows')+'…');
       var offer=document.getElementById('customer-offer');
       workspaceMutation('/api/chat/email-workflows/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activate:true,ids:ids,offer:offer?offer.value:''})})
@@ -117,7 +120,8 @@
         .then(function(result){input.value='';(result.contacts||[]).forEach(function(row){if(row.can_activate)selected.add(row.id);seen.add(row.id);});message(result.message);return load();})
         .catch(function(error){message(error.message,true);}).finally(function(){button.disabled=false;});
     };
-    panel.querySelector('#email-outreach-strategy').onchange=function(){renderRows();message(curiositySelected()?'Preview the sequence; sending is locked pending integration.':'Existing introductions may attach a résumé. Review before activation.');};\n    panel.querySelector('#select-email-workflows').onchange=function(){var checked=this.checked;eligible().forEach(function(row){if(checked)selected.add(row.id);else selected.delete(row.id);});renderRows();};
+    panel.querySelector('#email-outreach-strategy').onchange=function(){renderRows();message(curiositySelected()?'Preview the sequence; sending is locked pending integration.':'Existing introductions may attach a résumé. Review before activation.');};
+    panel.querySelector('#select-email-workflows').onchange=function(){var checked=this.checked;eligible().forEach(function(row){if(checked)selected.add(row.id);else selected.delete(row.id);});renderRows();};
     panel.querySelector('#activate-email-workflows').onclick=function(){activate(eligible().filter(function(row){return selected.has(row.id);}).map(function(row){return row.id;}));};
     panel.querySelector('#refresh-email-workflows').onclick=load;
     panel.querySelector('#email-workflow-list').onchange=function(event){var id=event.target.dataset.emailWorkflowSelect;if(!id)return;if(event.target.checked)selected.add(id);else selected.delete(id);updateSelection();};
