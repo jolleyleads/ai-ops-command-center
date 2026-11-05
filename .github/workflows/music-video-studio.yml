@@ -33,3 +33,27 @@ jobs:
               assert 1.5<duration(p/"result.mp4")<2.5
               print("Preview smoke video passed")
           PY
+
+  provider-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect MuseTalk Space API contract
+        run: |
+          python - <<'PY'
+          import json, urllib.request, urllib.error
+          urls=["https://huggingface.co/api/spaces/henrybit/musetalk-1-5", "https://henrybit-musetalk-1-5.hf.space/config"]
+          for url in urls:
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"AI-Music-Video-Studio/0.1"}),timeout=20) as response:
+                      body=response.read(200000)
+                      d=json.loads(body)
+                      if url.endswith("/config"):
+                          print("status",response.status,"api_prefix",d.get("api_prefix"),"version",d.get("version"))
+                          for dep in d.get("dependencies",[]):
+                              print("api_name",dep.get("api_name"),"inputs",dep.get("inputs"),"outputs",dep.get("outputs"))
+                      else:
+                          print("status",response.status,"runtime",d.get("runtime"),"private",d.get("private"),"disabled",d.get("disabled"))
+              except Exception as e:
+                  print("FAILED",url,type(e).__name__,str(e)[:300])
+          PY
