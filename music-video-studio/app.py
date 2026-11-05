@@ -25,8 +25,34 @@ def run(*args):
 def duration(file):
     return float(json.loads(run("ffprobe","-v","error","-show_entries","format=duration","-of","json",file))["format"]["duration"])
 
+def write_status(job):
+    folder=DATA/job
+    folder.mkdir(parents=True,exist_ok=True)
+    tmp=folder/"status.json.tmp"
+    tmp.write_text(json.dumps(jobs[job]))
+    tmp.replace(folder/"status.json")
+
 def update(job,**kwargs):
-    with lock: jobs[job].update(kwargs)
+    with lock:
+        jobs[job].update(kwargs)
+        write_status(job)
+
+def recover_jobs():
+    # A worker restart cannot resume an in-process video render; mark it interrupted.
+    for path in DATA.iterdir():
+        state=path/"status.json"
+        if not path.is_dir() or not state.exists():continue
+        try:
+            payload=json.loads(state.read_text())
+            if payload.get("id") != path.name:continue
+            if payload.get("status") in ("queued","processing"):
+                payload.update(status="failed",progress=0,error="Rendering stopped when the server restarted. Please submit the video again.")
+                state.write_text(json.dumps(payload))
+            jobs[path.name]=payload
+        except (ValueError,OSError):
+            continue
+
+recover_jobs()
 
 def portrait(photo, output):
     with Image.open(photo) as im:
@@ -41,10 +67,15 @@ def portrait(photo, output):
 def preview(photo,audio,out,work):
     still=work/"portrait.jpg"
     portrait(photo,still)
-    run("ffmpeg","-y","-hide_banner","-loglevel","error","-loop","1","-framerate","25","-i",still,"-i",audio,
-        "-filter_complex","[0:v]zoompan=z='min(zoom+0.00012,1.07)':d=1:s=720x1280:fps=25,format=yuv420p[v]",
-        "-map","[v]","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","25","-c:a","aac","-b:a","192k",
-        "-shortest","-movflags","+faststart",out)
+    # The previous 25fps 720p zoompan pipeline exceeded Render's 512MB RAM.
+    # Loop a precomposed frame and encode with one thread, avoiding zoompan's
+    # large per-frame buffers. 720x1280 9:16 MP4, original song preserved.
+    run("ffmpeg","-y","-hide_banner","-loglevel","error",
+        "-loop","1","-framerate","12","-i",still,"-i",audio,
+        "-map","0:v:0","-map","1:a:0","-c:v","libx264",
+        "-threads","1","-preset","ultrafast","-tune","stillimage",
+        "-crf","27","-pix_fmt","yuv420p","-r","12",
+        "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart",out)
 
 def lipsync(photo,audio,out,work):
     """Chunk-driven MuseTalk 1.5. A dedicated GPU Space is required for full songs."""
@@ -88,7 +119,7 @@ def lipsync(photo,audio,out,work):
         run("ffmpeg","-y","-hide_banner","-loglevel","error","-i",generated,
             "-t",min(chunk_seconds,remaining),"-an",
             "-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=25,format=yuv420p",
-            "-c:v","libx264","-preset","veryfast","-crf","25",clip)
+            "-c:v","libx264","-threads","1","-preset","ultrafast","-crf","27",clip)
         parts.append(clip)
     if not parts: raise RuntimeError("No lip-sync video segments returned")
     manifest=work/"clips.txt"
@@ -154,8 +185,11 @@ async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=
         await save_upload(song,a,MAX_AUDIO)
         with Image.open(p) as im: im.verify()
         with Image.open(p) as im:
+            if im.width*im.height > 36000000: raise HTTPException(413,"Image resolution too large")
+            # Decode a downsampled portrait before allocating full RGB buffers.
+            im.draft("RGB",(1280,1920))
+            im.thumbnail((1280,1920),Image.Resampling.LANCZOS)
             clean=ImageOps.exif_transpose(im).convert("RGB")
-            if clean.width*clean.height > 25000000: raise HTTPException(413,"Image resolution too large")
             clean.save(folder/"normalized.png",format="PNG")
         (folder/"normalized.png").replace(p)
         seconds=duration(a)
@@ -164,13 +198,15 @@ async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=
         shutil.rmtree(folder,ignore_errors=True);raise
     except Exception:
         shutil.rmtree(folder,ignore_errors=True);raise HTTPException(400,"Invalid photo or audio.")
-    with lock:jobs[job]={"id":job,"status":"queued","progress":0,"mode":mode,"duration_seconds":round(seconds,1)}
+    with lock:
+        jobs[job]={"id":job,"status":"queued","progress":0,"mode":mode,"duration_seconds":round(seconds,1)}
+        write_status(job)
     threading.Thread(target=work_job,args=(job,p,a,mode),daemon=True).start()
     return jobs[job]
 
 @app.get("/api/jobs/{job}")
 def get_job(job:str):
-    if job not in jobs: raise HTTPException(404,"Unknown job")
+    if job not in jobs: raise HTTPException(404,"This job is no longer available, possibly after a server restart.")
     return jobs[job]
 
 @app.get("/api/jobs/{job}/download")
