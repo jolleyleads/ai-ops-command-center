@@ -92,7 +92,7 @@ def lipsync(photo,audio,out,work):
         parts.append(clip)
     if not parts: raise RuntimeError("No lip-sync video segments returned")
     manifest=work/"clips.txt"
-    manifest.write_text("".join("file '"+str(p.resolve()).replace("'","'\\''")+"'\\n" for p in parts))
+    manifest.write_text("".join("file '" + str(p.resolve()) + "'" + chr(10) for p in parts))
     joined=work/"joined.mp4"
     run("ffmpeg","-y","-hide_banner","-loglevel","error","-f","concat","-safe","0","-i",manifest,
         "-c","copy",joined)
