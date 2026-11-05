@@ -106,7 +106,11 @@ def work_job(job,photo,audio,mode):
     try:
         update(job,status="processing",progress=15)
         output=folder/"music_video.mp4"
-        if mode=="lipsync": lipsync(photo,audio,output,folder)
+        if mode=="lipsync_sample":
+            sample=folder/"sample_audio.wav"
+            run("ffmpeg","-y","-hide_banner","-loglevel","error","-i",audio,"-t","8","-vn","-ac","1","-ar","16000",sample)
+            lipsync(photo,sample,output,folder)
+        elif mode=="lipsync": lipsync(photo,audio,output,folder)
         else: preview(photo,audio,output,folder)
         if not output.exists() or output.stat().st_size<1024: raise RuntimeError("Empty render output")
         update(job,status="complete",progress=100,download=f"/api/jobs/{job}/download")
@@ -117,7 +121,7 @@ def work_job(job,photo,audio,mode):
 def home(): return (BASE/"index.html").read_text()
 
 @app.get("/health")
-def health(): return {"ok":True,"lip_sync_configured":bool(os.getenv("HF_SPACE_ID")),"render_modes":["preview"]+(["lipsync"] if os.getenv("HF_SPACE_ID") else [])}
+def health(): return {"ok":True,"lip_sync_configured":bool(os.getenv("HF_SPACE_ID")),"render_modes":["preview"]+(["lipsync_sample","lipsync"] if os.getenv("HF_SPACE_ID") else [])}
 
 async def save_upload(upload,path,limit):
     count=0
@@ -132,7 +136,7 @@ async def save_upload(upload,path,limit):
 
 @app.post("/api/jobs",status_code=202)
 async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=Form("preview"),consent:str=Form("false")):
-    if mode not in ("preview","lipsync"):raise HTTPException(400,"Invalid mode")
+    if mode not in ("preview","lipsync_sample","lipsync"):raise HTTPException(400,"Invalid mode")
     if consent!="true":raise HTTPException(400,"Confirm you have rights to the face, voice and music.")
     if photo.content_type not in ("image/jpeg","image/png","image/webp"):raise HTTPException(415,"Use JPG, PNG or WebP.")
     if song.content_type not in ("audio/mpeg","audio/mp3","audio/mp4","audio/x-m4a","audio/wav","audio/x-wav","audio/ogg","application/octet-stream"):
@@ -140,7 +144,7 @@ async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=
     with lock:
         active=sum(1 for j in jobs.values() if j["status"] in ("queued","processing"))
         if active>=JOB_LIMIT:raise HTTPException(429,"Another render is running. Try again later.")
-    if mode=="lipsync" and not os.getenv("HF_SPACE_ID"):
+    if mode in ("lipsync","lipsync_sample") and not os.getenv("HF_SPACE_ID"):
         raise HTTPException(503,"Lip-sync GPU provider not configured yet. Use Photo-motion preview.")
     job=uuid.uuid4().hex
     folder=DATA/job;folder.mkdir()

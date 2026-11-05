@@ -42,3 +42,6 @@ Upstream MuseTalk 1.5 Gradio `generate` expects `(audio, reference_image, bbox_s
 
 ## Deployment gating
 Lip-sync option is disabled in the UI when no GPU Space is configured; its API returns 503. This is deliberate to avoid pretending previews contain real lip-sync. Current threading, memory-only job state and ephemeral uploads are not suitable for a multi-user commercial deployment.
+
+## Short proof mode and demo provider
+The UI offers an 8-second singing sample before full-song inference, to avoid wasting GPU quota. Both lip-sync modes transfer user-approved photos/audio to the configured Space. The user must explicitly consent in the upload form. A public ZeroGPU Space is a demo only; it has quotas and is not suitable for reliable full-song commercial rendering.
