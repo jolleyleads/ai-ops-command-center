@@ -14,9 +14,8 @@ jobs:
           python-version: '3.11'
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: python -m pip install -r music-video-studio/requirements.txt pytest httpx
-      - run: python -m pytest music-video-studio/tests -q
-        env:
-          PYTHONPATH: music-video-studio
+      - run: python -m pytest tests -q
+        working-directory: music-video-studio
       - name: Render FFmpeg smoke video
         run: |
           cd music-video-studio

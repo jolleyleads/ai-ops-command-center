@@ -144,11 +144,16 @@ async def new_job(photo:UploadFile=File(...),song:UploadFile=File(...),mode:str=
         raise HTTPException(503,"Lip-sync GPU provider not configured yet. Use Photo-motion preview.")
     job=uuid.uuid4().hex
     folder=DATA/job;folder.mkdir()
-    p=folder/"input_photo";a=folder/"input_audio"
+    p=folder/"input_photo.png";a=folder/"input_audio"
     try:
         await save_upload(photo,p,MAX_IMAGE)
         await save_upload(song,a,MAX_AUDIO)
         with Image.open(p) as im: im.verify()
+        with Image.open(p) as im:
+            clean=ImageOps.exif_transpose(im).convert("RGB")
+            if clean.width*clean.height > 25000000: raise HTTPException(413,"Image resolution too large")
+            clean.save(folder/"normalized.png",format="PNG")
+        (folder/"normalized.png").replace(p)
         seconds=duration(a)
         if not 1<=seconds<=600:raise HTTPException(400,"Song must be 1 second to 10 minutes.")
     except HTTPException:
