@@ -1,7 +1,7 @@
 /* A separate workspace desk for explicitly entered email recipients. */
 (function(){
   'use strict';
-  var mount=0,timer=null,recognition=null,selected=new Set(),seen=new Set(),contacts=[],busy=false;
+  var mount=0,timer=null,recognition=null,selected=new Set(),seen=new Set(),imported=new Set(),contacts=[],busy=false;
   var names={idle:'Not activated',queued:'Queued',running:'Activating…',active:'Workflow active',held:'Needs attention',review:'Check send status',stopped:'Stopped'};
   function esc(value){return window.esc(value);}
   window.parseWorkflowEmails=function(value){
@@ -10,10 +10,10 @@
       .replace(/\s*([@._+\-])\s*/g,'$1');
     return Array.from(new Set(normalized.split(/[\s,;]+/).filter(Boolean).map(function(email){return email.toLowerCase();})));
   };
-  window.renderEmailWorkflowDesk=function(panel){
+  window.renderEmailWorkflowDesk=function(panel,importOnly){
     var generation=++mount;
     clearTimeout(timer);if(recognition){recognition.stop();recognition=null;}
-    panel.innerHTML='<div class="workspace-heading"><div><h1>Email workflows</h1><p class="meta">Add email addresses, choose your recipients, and activate their workflows.</p></div><button class="ghost email-workflows-primary" type="button" id="activate-email-workflows" disabled>Activate all workflows</button></div>'+
+    panel.innerHTML='<div class="workspace-heading"><div><h1>'+(importOnly?'Import Leads':'Email workflows')+'</h1><p class="meta">'+(importOnly?'Upload a lead PDF or paste contact details, then choose which leads to activate.':'Add email addresses, choose your recipients, and activate their workflows.')+'</p></div><button class="ghost email-workflows-primary" type="button" id="activate-email-workflows" disabled>Activate all workflows</button></div>'+
       '<section class="email-workflow-entry lead"><label for="workflow-emails"><b>Type or say an email address</b></label><textarea id="workflow-emails" rows="3" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="name@company.com&#10;Add more addresses on separate lines"></textarea>'+
       '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div>'+ 
       '<details class="email-workflow-entry" id="lead-import"><summary><b>Import lead list or PDF</b></summary>'+
@@ -27,6 +27,13 @@
       '<div class="email-workflow-toolbar"><label><input type="checkbox" id="select-email-workflows"> Select all</label><span class="meta" id="email-workflow-count" aria-live="polite"></span><button class="ghost" type="button" id="refresh-email-workflows">Refresh</button></div>'+
       '<p class="meta">Activation sends your outreach email and résumé, then handles follow-ups and books a calendar meeting once the lead agrees to a time.</p><p id="email-workflow-notice" role="status" aria-live="polite"></p><div id="email-workflow-list"><span class="loading"></span> Loading your email workflows…</div>';
     var input=panel.querySelector('#workflow-emails'),notice=panel.querySelector('#email-workflow-notice');
+    if(importOnly){
+      var importSection=panel.querySelector('#lead-import');
+      var emailEntry=importSection.parentElement;
+      emailEntry.before(importSection);
+      emailEntry.hidden=true;
+      importSection.open=true;
+    }
     function current(){return generation===mount&&panel.querySelector('#workflow-emails')===input&&!panel.hidden;}
     function message(value,error){if(!current())return;notice.textContent=value||'';notice.className=error?'error':'meta';}
     function eligible(){return contacts.filter(function(row){return row.can_activate;});}
@@ -43,14 +50,14 @@
         return '<article class="lead email-workflow-row"><div class="leadtop"><label class="email-workflow-recipient"><input type="checkbox" data-email-workflow-select="'+esc(row.id)+'"'+(selected.has(row.id)&&row.can_activate?' checked':'')+(!row.can_activate||busy?' disabled':'')+'><b>'+esc(row.email)+'</b></label><span class="tag">'+esc(names[row.status]||row.status)+'</span></div><p class="meta">Added by you'+[row.name,row.company,row.phone].filter(Boolean).map(function(value){return ' · '+esc(value);}).join('')+(row.follow_up_due_at?' · Follow-up '+esc(new Date(row.follow_up_due_at).toLocaleString()):'')+'</p>'+
           '<div class="email-workflow-row-actions"><button type="button" class="ghost" data-email-workflow-activate="'+esc(row.id)+'"'+(!row.can_activate||busy?' disabled':'')+'>'+esc(row.status==='active'?'Workflow active':row.status==='queued'||row.status==='running'?'Activating…':'Activate workflow')+'</button><button type="button" class="ghost" data-email-workflow-preview="'+esc(row.id)+'">View email &amp; résumé</button></div>'+
           (row.reason?'<p class="meta">'+esc(row.reason)+'</p>':'')+'<div class="email-workflow-preview" data-email-preview-for="'+esc(row.id)+'"></div></article>';
-      }).join(''):'<div class="workspace-empty"><h2>Your email workflows will appear here</h2><p>Add one or more email addresses above. Each address gets its own workflow and selection box.</p></div>';
+      }).join(''):importOnly?'<div class="workspace-empty"><h2>Your imported leads will appear here</h2><p>Add reviewed leads above to select and activate them. Saved workflows are also available in Email workflows.</p></div>':'<div class="workspace-empty"><h2>Your email workflows will appear here</h2><p>Add one or more email addresses above. Each address gets its own workflow and selection box.</p></div>';
       updateSelection();
     }
     function load(){
       clearTimeout(timer);
       return requestJSON(API+'/api/chat/email-workflows',{cache:'no-store'}).then(function(data){
         if(!current())return;
-        contacts=data.contacts||[];contacts.forEach(function(row){if(!seen.has(row.id)&&row.can_activate)selected.add(row.id);seen.add(row.id);});
+        contacts=(data.contacts||[]).filter(function(row){return !importOnly||imported.has(row.id);});contacts.forEach(function(row){if(!seen.has(row.id)&&row.can_activate)selected.add(row.id);seen.add(row.id);});
         renderRows();
         if(contacts.some(function(row){return ['queued','running'].includes(row.status);}))timer=setTimeout(load,2500);
       }).catch(function(error){if(!current())return;message(error.message,true);panel.querySelector('#email-workflow-list').innerHTML='<div class="workspace-empty"><p>Sign in to your connected workspace to see your email workflows.</p><a href="/login">Sign in</a></div>';});
@@ -159,7 +166,7 @@
       addLeads.disabled=true;
       workspaceMutation('/api/chat/email-workflows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:rows})})
         .then(function(result){
-          leadRows.value='';(result.contacts||[]).forEach(function(row){if(row.can_activate)selected.add(row.id);seen.add(row.id);});
+          leadRows.value='';(result.contacts||[]).forEach(function(row){imported.add(row.id);if(row.can_activate)selected.add(row.id);seen.add(row.id);});
           message(result.message);return load();
         }).catch(function(error){message(error.message,true);}).finally(function(){addLeads.disabled=false;});
     };
