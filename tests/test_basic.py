@@ -20,11 +20,11 @@ def test_main_domain_opens_public_homepage():
     client = commercial_app.app.test_client()
     page = client.get('/')
     assert page.status_code == 200
-    assert b'Less busywork.' in page.data
+    assert b'Find the right people.' in page.data
     assert b'Book a Demo' in page.data
     assert b'href="/login"' in page.data
-    assert b'id="book-demo"' in page.data
-    assert b'mailto:jolleyleads@gmail.com' in page.data
+    assert b'id="demo"' in page.data
+    assert b'mailto:info@automake.live' in page.data
     assert b'not a real customer review' not in page.data
     assert client.get('/static/home.css').status_code == 200
     assert client.get('/static/home.js').status_code == 200

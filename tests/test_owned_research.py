@@ -172,7 +172,7 @@ def test_mailbox_verification_is_explicit_owned_and_does_not_send(setup,monkeypa
     calls=[]
     def verify(email,**kw):
         calls.append((email,kw));return {'email':email,'mailbox_status':'provider_verified',
-            'checked_at':datetime.now(timezone.utc).isoformat(),'provider_verified_on':'2026-10-25'}
+            'checked_at':datetime.now(timezone.utc).isoformat(),'provider_verified_on':datetime.now(timezone.utc).date().isoformat()}
     monkeypatch.setattr(hunter_mailbox,'verify_mailbox',verify)
     client=app.test_client();path='/api/chat/contacts/verify'
     assert client.post(path,json={'lead_id':lead.id}).status_code==401 and not calls
