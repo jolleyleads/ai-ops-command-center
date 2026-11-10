@@ -12,6 +12,7 @@ import outreach_automation as oa
 from campaign_jobs import CampaignExecutionJob, enqueue_execution, _view
 from workspace_security import OWNER, current_workspace, owns, claim, scope
 from src.outreach_execution import EMAIL_RE
+from src.lead_pdf_import import MAX_PDF_BYTES, extract_contacts
 
 _active = ContextVar('provided_email_send', default=None)
 POLICY = 'user-provided-email-v1'
@@ -128,10 +129,34 @@ def contact_view(row):
     unsafe = any(a.status in {'pending', 'uncertain', 'failed'} for a in attempts)
     if unsafe and state not in {'active', 'queued', 'running', 'stopped'}:
         state, reason = 'review', 'An earlier send attempt needs review. No email will be resent automatically.'
-    return {'id': row.id, 'email': row.email, 'lead_id': row.lead_id, 'status': state, 'reason': reason,
+    metadata = next((entry for entry in oa._server_qualification_inputs(lead)[2]
+                     if entry.get('source') == 'user_provided_email'), {}) if lead else {}
+    return {'name': lead.contact_name if lead else '', 'phone': metadata.get('phone', ''),
+            'company': lead.company if lead and lead.company != 'Email contact' else '',
+            'id': row.id, 'email': row.email, 'lead_id': row.lead_id, 'status': state, 'reason': reason,
             'can_activate': state in {'idle', 'held'} and _usable(lead) and not unsafe,
             'job_id': row.last_job_id, 'source': 'Added by you',
             'follow_up_due_at': lead.follow_up_due_at.isoformat()+'Z' if lead and lead.follow_up_due_at else None}
+
+
+@app.post('/api/chat/email-workflows/pdf-preview')
+def preview_lead_pdf():
+    if not _owner():
+        return jsonify(ok=False, error='Sign in to the connected workspace to import leads.'), 403
+    if request.content_length and request.content_length > MAX_PDF_BYTES + 65536:
+        return jsonify(ok=False, error='Use a PDF up to 5 MB.'), 413
+    upload = request.files.get('pdf')
+    raw = upload.read(MAX_PDF_BYTES + 1) if upload else b''
+    if len(raw) > MAX_PDF_BYTES:
+        return jsonify(ok=False, error='Use a PDF up to 5 MB.'), 413
+    from pypdf.errors import PyPdfError
+    try:
+        rows = extract_contacts(raw)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except (PyPdfError, OSError, OverflowError, RecursionError):
+        return jsonify(ok=False, error='This PDF could not be read. Try another copy or paste your leads.'), 400
+    return jsonify(ok=True, contacts=rows)
 
 
 @app.route('/api/chat/email-workflows', methods=['GET', 'POST'])
@@ -142,15 +167,24 @@ def email_workflow_contacts():
         rows = EmailWorkflowContact.query.filter_by(workspace_id=OWNER).order_by(EmailWorkflowContact.created_at.desc()).limit(500).all()
         return jsonify(ok=True, contacts=[contact_view(row) for row in rows])
     data = request.get_json(silent=True) or {}
-    addresses = data.get('emails') if isinstance(data, dict) else None
-    if not isinstance(addresses, list) or not 1 <= len(addresses) <= 100:
-        return jsonify(ok=False, error='Add between 1 and 100 email addresses at a time.'), 400
-    emails = list(dict.fromkeys(oa.normalize_email(value) for value in addresses if isinstance(value, str)))
-    if len(emails) == 0 or any(len(value) > 254 or not EMAIL_RE.fullmatch(value) for value in emails) or len(emails) != len(set(oa.normalize_email(value) for value in addresses)):
-        return jsonify(ok=False, error='Check the email addresses before adding them. Nothing was activated.'), 400
+    supplied = data.get('contacts') if isinstance(data, dict) else None
+    if supplied is None and isinstance(data, dict) and isinstance(data.get('emails'), list):
+        supplied = [{'email': email} for email in data['emails']]
+    if not isinstance(supplied, list) or not 1 <= len(supplied) <= 100:
+        return jsonify(ok=False, error='Add between 1 and 100 contacts at a time.'), 400
+    contacts = {}
+    fields = {'email': 254, 'name': 300, 'phone': 80, 'company': 300}
+    for item in supplied:
+        if not isinstance(item, dict) or any(not isinstance(item.get(field, ''), str) for field in fields):
+            return jsonify(ok=False, error='Check the contact fields before adding them.'), 400
+        details = {field: ' '.join(item.get(field, '').split()) for field in fields}
+        email = oa.normalize_email(details['email'])
+        if not EMAIL_RE.fullmatch(email) or any(len(details[field]) > limit for field, limit in fields.items()):
+            return jsonify(ok=False, error='Check the email addresses and contact field lengths.'), 400
+        contacts.setdefault(email, details)
     rows = []
     from v1_orchestration import discovery_lock
-    for email in emails:
+    for email, details in contacts.items():
         key = hashlib.sha256((OWNER+'\0'+email).encode()).hexdigest()
         with discovery_lock('provided-email-contact', email) as acquired:
             if not acquired:
@@ -160,13 +194,27 @@ def email_workflow_contacts():
                 existing = oa.OutreachLead.query.filter_by(contact_email=email).filter(scope(oa.OutreachLead, 'lead', OWNER)).order_by(oa.OutreachLead.id).all()
                 lead = next((lead for lead in existing if lead.gmail_message_id), existing[0] if existing else None)
                 if not lead:
-                    lead = oa.OutreachLead(company='Email contact', source_url='', contact_email=email, status='needs_evidence',
-                                           verification='USER_PROVIDED', score=0, evidence_json=json.dumps([{'source': 'user_provided_email', 'email': email}]))
+                    lead = oa.OutreachLead(company=details['company'] or 'Email contact', source_url='',
+                                           contact_email=email, contact_name=details['name'], status='needs_evidence',
+                                           verification='USER_PROVIDED', score=0, evidence_json=json.dumps([
+                                               {'source': 'user_provided_email', 'email': email, 'phone': details['phone']}]))
                     db.session.add(lead); db.session.flush(); claim('lead', lead.id, OWNER)
                 row = EmailWorkflowContact(id=key, workspace_id=OWNER, email=email, lead_id=lead.id)
-                db.session.add(row); db.session.commit()
+                db.session.add(row)
+            lead = db.session.get(oa.OutreachLead, row.lead_id)
+            if (lead and lead.verification == 'USER_PROVIDED' and any(details[field] for field in ('name', 'phone', 'company'))
+                    and contact_view(row)['status'] == 'idle'):
+                lead.contact_name = lead.contact_name or details['name']
+                if lead.company == 'Email contact' and details['company']:
+                    lead.company = details['company']
+                evidence = oa._server_qualification_inputs(lead)[2]
+                for entry in evidence:
+                    if entry.get('source') == 'user_provided_email' and not entry.get('phone'):
+                        entry['phone'] = details['phone']
+                lead.evidence_json = json.dumps(evidence)
+            db.session.commit()
             rows.append(contact_view(row))
-    return jsonify(ok=True, contacts=rows, message='Email addresses added. No workflow was activated.')
+    return jsonify(ok=True, contacts=rows, message='Contacts added and ready to review.')
 
 
 @app.get('/api/chat/email-workflows/<contact_id>/preview')

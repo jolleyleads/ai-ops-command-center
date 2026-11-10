@@ -188,3 +188,25 @@ def test_existing_gmail_history_cannot_be_resent_without_an_attempt_row(client,c
     assert row['status']==('active' if complete else 'review') and not row['can_activate']
     assert activate(client,[row['id']]).status_code==409
     assert jobs.CampaignExecutionJob.query.count()==0
+
+
+def test_import_directory_contact_details_without_activating(client):
+    from src.lead_pdf_import import parse_directory
+
+    contacts = parse_directory(
+        '  1    Example Cooling    757-555-0100    owner@example.com\n'
+        '       Casey Example, owner\n\n'
+        'General email: office@example.org\n'
+    )
+    assert contacts == [
+        {'email': 'owner@example.com', 'company': 'Example Cooling', 'name': 'Casey Example', 'phone': '757-555-0100'},
+        {'email': 'office@example.org'},
+    ]
+    response = client.post('/api/chat/email-workflows', headers=HEADERS, json={'contacts': contacts})
+    assert response.status_code == 200
+    rows = {row['email']: row for row in response.json['contacts']}
+    assert all(rows['owner@example.com'][key] == value for key, value in contacts[0].items())
+    assert all(row['status'] == 'idle' for row in rows.values())
+    assert jobs.CampaignExecutionJob.query.count() == 0
+    assert client.post('/api/chat/email-workflows/pdf-preview').status_code == 401
+    assert client.post('/api/chat/email-workflows/pdf-preview', headers=HEADERS).status_code == 400
