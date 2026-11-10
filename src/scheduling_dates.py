@@ -17,6 +17,9 @@ SPOKEN_HOURS={"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eig
 MONTH_NAMES={name.lower():i for i,name in enumerate(MONTHS,1)}
 
 def _natural_date_text(raw, local_now, prior_date=None):
+    raw=re.sub(r"\bSept\.?(?=\s+\d{1,2}\b)","September",raw,flags=re.I)
+    raw=re.sub(r"\b("+"|".join(name[:3] for name in MONTHS)+r")\.?(?=\s+\d{1,2}\b)",
+        lambda m:next(name for name in MONTHS if name[:3].lower()==m.group(1).lower()),raw,flags=re.I)
     def hour_word(match):
         hour=SPOKEN_HOURS.get(match.group(1).lower())
         return f"{hour} {match.group(2)}" if hour else match.group(0)
@@ -70,7 +73,7 @@ def interpret_booking(text,now=None,prior_date=None):
     if re.search(r"\b(?:ET|Eastern(?: time)?)\b",unscoped,re.I):zones.add("America/New_York")
     if len(zones)>1:return fail("MULTIPLE_TIMEZONES")
     if re.search(r"\b(?:EST|EDT|PST|PDT|CST|CDT|MST|MDT|HST|AKST|AKDT|BST|IST|CET|CEST|EET|JST|AST|ADT|Pacific|Central|Mountain)\b(?!/)",ZONE.sub("",raw),re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
-    zone=next(iter(zones),os.getenv("BOOKING_TIMEZONE","America/New_York"))
+    zone=next(iter(zones),getattr(getattr(prior_date,"tzinfo",None),"key",None) or os.getenv("BOOKING_TIMEZONE","America/New_York"))
     try:tz=ZoneInfo(zone)
     except (ValueError,ZoneInfoNotFoundError):return fail("INVALID_TIMEZONE")
     raw=_natural_date_text(raw,now.astimezone(tz),prior_date=prior_date)
@@ -91,6 +94,23 @@ def interpret_booking(text,now=None,prior_date=None):
             if partial:
                 return {**empty,"ready":False,"reason":"MISSING_YEAR","clarification":f"What year do you mean for {partial.group(0)}? Please confirm the full date, keeping your proposed time and timezone."}
         if len(FULL_DATE.findall(raw))!=1:return fail("ONE_FULL_DATE_AND_TIME_REQUIRED")
+        # Retain an explicit date while asking for the missing time. This is
+        # scheduling context only, never a calendar-write request.
+        if not re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",raw,re.I):
+            date_text=FULL_DATE.search(raw).group(0)
+            try:
+                normalized=re.sub(r"(\d)(?:st|nd|rd|th)\b",r"\1",date_text,flags=re.I).replace(",", "")
+                date=datetime.strptime(normalized,"%Y-%m-%d" if normalized[:4].isdigit() else "%B %d %Y").replace(tzinfo=tz)
+            except ValueError:return fail("INVALID_DATE_OR_TIME")
+            if date.date()<now.astimezone(tz).date():return fail("PAST_OR_INVALID_INTERVAL")
+            weekdays={d.lower() for d in re.findall(r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b",raw,re.I)}
+            if weekdays and weekdays!={date.strftime("%A").lower()}:return fail("WEEKDAY_DATE_CONFLICT")
+            # Do not save a date if a malformed/ambiguous time was also supplied.
+            if re.search(r"\d{1,2}:\d{2}|\b(?:at|noon|midnight|morning|afternoon|evening)\b",FULL_DATE.sub("",raw),re.I):
+                return fail("ONE_FULL_DATE_AND_TIME_REQUIRED")
+            return {**empty,"ready":False,"reason":"MISSING_TIME","pending_date":date.isoformat(),"pending_timezone":zone,
+                "clarification":f"What time on {date.strftime('%B')} {date.day}, {date.year} works for you? Please include AM/PM and your timezone. I’ll check availability before confirming."}
+
         month=r"("+"|".join(MONTHS)+r")"
         time=r"\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b"
         options=[]
