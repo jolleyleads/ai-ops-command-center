@@ -90,10 +90,21 @@ def scheduling_request(text):
     # Only the new reply supplies intent; quoted invitations are not proposals.
     text = re.split(r"\s+On\s+.{0,500}?wrote:\s*", str(text or ""), maxsplit=1, flags=re.I|re.S)[0]
     text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+    # Availability questions are scheduling intent, even with no proposed date.
+    # Match a complete narrow request so unrelated questions still require review.
+    availability = re.fullmatch(
+        r"(?:i[’']?m interested[,.!]?\s+|i am interested[,.!]?\s+)?"
+        r"(?:when (?:will you be|are you|would you be) (?:available|free)|"
+        r"(?:are you|will you be) (?:available|free)|"
+        r"what (?:times? (?:are you|would you be) (?:available|free)|is your availability))"
+        r"[?.!\s]*", text, re.I)
+    if availability:return True
     if routine_answer(text) or re.search(r"\b(?:price|pricing|cost|how much|what|how|where|who|security|guarantee)\b", text, re.I):
         return False
     # A calendar date paired with a time is a scheduling proposal in its own
     # right. Recognizing intent does not waive date/availability validation.
-    date = re.search(r"\b(?:20\d{2}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?|today|tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", text, re.I)
+    date = re.search(r"\b(?:20\d{2}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2}(?:st|nd|rd|th)?|today|tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", text, re.I)
     time = re.search(r"\b(?:\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)|noon|midnight)\b", text, re.I)
-    return bool(date and time) or bool(re.search(r"\b(?:schedule|reschedule|book|move (?:the |our )?call)\b", text, re.I)) or bool(re.search(r"\b(?:meeting|available)\b", text, re.I) and re.search(r"\b(?:am|pm|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)\b", text, re.I))
+    date_only = bool(date and (re.fullmatch(r"\s*"+re.escape(date.group(0))+r"(?:[,]?\s+20\d{2})?[.!\s]*",text,re.I)
+        or re.search(r"\blet[’']?s do\b",text,re.I)))
+    return date_only or bool(date and time) or bool(re.search(r"\b(?:schedule|reschedule|book|move (?:the |our )?call)\b", text, re.I)) or bool(re.search(r"\b(?:meeting|available)\b", text, re.I) and re.search(r"\b(?:am|pm|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)\b", text, re.I))

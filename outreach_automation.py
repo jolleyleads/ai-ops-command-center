@@ -635,14 +635,27 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
     previous_unavailable=OutreachBookingAttempt.query.filter_by(
         lead_id=lead.id,status="failed"
     ).order_by(OutreachBookingAttempt.updated_at.desc()).first() if lead.status=="booking_ready" else None
-    time_only=bool(previous_unavailable and re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",text,re.I))
+    pending_date=None
+    # Date-only clarification context is scoped to this lead and the immediately
+    # preceding persisted prospect message. An unrelated reply cannot borrow it.
+    current=OutreachReplyEvidence.query.filter_by(lead_id=lead.id,message_id=_clean(item.get("message_id"),255)).first()
+    previous=OutreachReplyEvidence.query.filter(OutreachReplyEvidence.lead_id==lead.id,
+        OutreachReplyEvidence.id < current.id).order_by(OutreachReplyEvidence.id.desc()).first() if current else None
+    context=OperatorAuditEvent.query.filter_by(lead_id=lead.id,action="scheduling_date_pending").order_by(OperatorAuditEvent.id.desc()).first()
+    if previous and context:
+        saved=json.loads(context.request_json or "{}")
+        if saved.get("message_id")==previous.message_id:
+            try:
+                from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+                pending_date=datetime.fromisoformat(saved["pending_date"]).astimezone(ZoneInfo(saved["timezone"]))
+            except (ValueError,KeyError,ZoneInfoNotFoundError):pass
     classification=classify_reply(text)
     if classification.get("classification")=="unclear":
         # Natural dates and clear typographical variants can be scheduling
         # intent even when the original keyword classifier does not recognize
         # the spelling. Never override opt-outs, negatives or questions.
         from src.scheduling_dates import interpret_booking
-        prior=None
+        prior=pending_date
         if previous_unavailable and previous_unavailable.start:
             try:prior=datetime.fromisoformat(previous_unavailable.start)
             except ValueError:pass
@@ -677,7 +690,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="QUALIFICATION_REQUIRED_FOR_BOOKING"
         return {"ok":False,"stage":"booking_blocked","classification":classification,"qualification":qualification}
     from src.scheduling_dates import interpret_booking
-    prior_date=None
+    prior_date=pending_date
     if previous_unavailable and previous_unavailable.start:
         try:prior_date=datetime.fromisoformat(previous_unavailable.start)
         except ValueError:pass
@@ -692,6 +705,9 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
         sent=_send_reply_for_message(lead,item,parsed["clarification"] or "What date and time works for you? I’ll check my calendar.")
         if not sent.get("ok"):lead.last_error="AUTOMATIC_REPLY_REQUIRES_REVIEW"
+        elif parsed.get("pending_date"):
+            _audit_actor(lead.id,"scheduling_date_pending",{"message_id":_clean(item.get("message_id"),255),
+                "pending_date":parsed["pending_date"],"timezone":parsed["pending_timezone"]},{"stage":"awaiting_time"},"system")
         return {"ok":sent.get("ok") is True,"stage":"interested","classification":classification,"booking_attempted":False,"reply":sent}
 
     reply_message_id=_clean(item.get("message_id"),255)

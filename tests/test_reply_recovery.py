@@ -252,3 +252,106 @@ def test_unactivated_provided_email_never_enters_inbound_recovery(env,monkeypatc
     oa.db.session.add(lead);oa.db.session.commit()
     monkeypatch.setattr(scanner,"_gmail_thread_reply_state",lambda *args:pytest.fail("Unsent email was monitored"))
     assert scanner.scan_real_inbound_replies()["checked"]==0
+
+
+@pytest.mark.parametrize('text', ["Let’s do nov 22", "Let's do November 22", "Nov. 22", "November 22"])
+def test_date_only_interest_asks_for_time_without_booking(text):
+    from src.scheduling_dates import interpret_booking
+    from datetime import timezone
+    assert classify_reply(text)['classification']=='interested'
+    result=interpret_booking(text,now=datetime(2026,11,10,tzinfo=timezone.utc))
+    assert result['reason']=='MISSING_TIME'
+    assert result['pending_date'].startswith('2026-11-22T00:00')
+    assert 'What time on November 22, 2026' in result['clarification']
+    assert not result['start'] and not result['ready']
+
+
+def test_date_then_time_completes_booking_from_same_lead(env,monkeypatch):
+    lead=oa.OutreachLead(company='Example',contact_email='owner@example.com',subject='Hello',status='sent',gmail_thread_id='thread')
+    oa.db.session.add(lead);oa.db.session.commit()
+    monkeypatch.setattr(oa,'_qualification_gate',lambda _:dict(ok=True))
+    sends=[];bookings=[]
+    monkeypatch.setattr(oa,'_safe_send',lambda *a,**kw:sends.append(kw) or dict(ok=True))
+    monkeypatch.setattr(oa,'check_availability',lambda req:dict(ok=True,available=True,checked_start=req['start'],checked_end=req['end']))
+    monkeypatch.setattr(oa,'_calendar_create_via_command',lambda lead,req,**kw:bookings.append(req) or dict(ok=True,event_id=kw['idempotency_key'],start=req['start'],end=req['end']))
+    def reply(mid,text):
+        oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id=mid,from_email=lead.contact_email,body_text=text))
+        oa.db.session.commit()
+        result=oa._route_persisted_reply(lead,{'reply_evidence':[{'message_id':mid,'text':text}]},datetime.utcnow())
+        oa.db.session.commit()
+        return result
+    first=reply('date-only',"Let's do Nov 22 2030")
+    assert first['ok'] and first['stage']=='interested' and not bookings
+    assert 'November 22, 2030' in sends[0]['body']
+    second=reply('time-only','3 PM')
+    assert second['ok'] and second['stage']=='booked',second
+    assert len(bookings)==1 and bookings[0]['start']=='2030-11-22T15:00:00-05:00'
+
+
+def test_outgoing_date_is_never_treated_as_prospect_reply(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company='Example',contact_email='owner@example.com',gmail_thread_id='thread',status='interested')
+    oa.db.session.add(lead);oa.db.session.commit()
+    monkeypatch.setattr(scanner,'_gmail_thread_reply_state',lambda _:{'ok':True,'replied':True,'reply_evidence':[
+        {'message_id':'sent-date','from_email':'jolleyleads@gmail.com','text':"Let's do Nov 22"}]})
+    monkeypatch.setattr(scanner,'_route_persisted_reply',lambda *a:pytest.fail('outgoing mail must not trigger scheduling'))
+    assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='no_prospect_reply'
+
+
+@pytest.mark.parametrize('text',["Thanks.\n> Let's do Nov 22",'No thanks. Nov 22','Nov 22 and how much does it cost?'])
+def test_date_only_preserves_quotes_stops_and_questions(text):
+    assert classify_reply(text)['classification']!='interested'
+
+
+def test_pending_date_does_not_cross_leads_or_intervening_reply(env,monkeypatch):
+    first=oa.OutreachLead(company='First',contact_email='first@example.com',subject='Hello',status='interested')
+    second=oa.OutreachLead(company='Second',contact_email='second@example.com',subject='Hello',status='interested')
+    oa.db.session.add_all([first,second]);oa.db.session.commit()
+    for lead,mid,text in [(first,'old-date','Nov 22 2030'),(first,'intervening','Thanks'),(first,'new-time','3 PM'),(second,'other-time','3 PM')]:
+        oa.db.session.add(oa.OutreachReplyEvidence(lead_id=lead.id,message_id=mid,body_text=text))
+    oa._audit_actor(first.id,'scheduling_date_pending',{'message_id':'old-date','pending_date':'2030-11-22T00:00:00-05:00','timezone':'America/New_York'},{'stage':'awaiting_time'},'system')
+    oa.db.session.commit()
+    monkeypatch.setattr(oa,'_safe_send',lambda *a,**kw:pytest.fail('no context means no automatic send'))
+    monkeypatch.setattr(oa,'check_availability',lambda *a:pytest.fail('no context means no booking'))
+    for lead,mid in [(first,'new-time'),(second,'other-time')]:
+        result=oa._route_persisted_reply(lead,{'reply_evidence':[{'message_id':mid,'text':'3 PM'}]},datetime.utcnow())
+        assert result['stage']=='unclear'
+
+
+def test_pending_date_retains_explicit_timezone():
+    from src.scheduling_dates import interpret_booking
+    from zoneinfo import ZoneInfo
+    from datetime import timezone
+    now=datetime(2026,11,10,tzinfo=timezone.utc)
+    partial=interpret_booking('Nov 22 Europe/London',now=now)
+    prior=datetime.fromisoformat(partial['pending_date']).astimezone(ZoneInfo(partial['pending_timezone']))
+    complete=interpret_booking('3 PM',now=now,prior_date=prior)
+    assert complete['start']=='2026-11-22T15:00:00+00:00'
+    assert complete['timezone']=='Europe/London'
+
+
+@pytest.mark.parametrize('text', ["I'm interested when will you be available?", 'When are you free?', 'What is your availability?', 'I’m interested. When are you available?'])
+def test_availability_questions_route_to_scheduling(text):
+    assert classify_reply(text)['classification']=='interested'
+
+
+@pytest.mark.parametrize('text', ['When are you free and how much does it cost?', 'When are you available? What security do you provide?', 'Unsubscribe. When are you free?'])
+def test_availability_question_does_not_override_stops_or_business_questions(text):
+    assert classify_reply(text)['classification']!='interested'
+
+
+def test_previously_held_availability_question_resumes_once(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company='Example',contact_email='prospect@example.com',gmail_thread_id='thread',status='question')
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa._audit_actor(lead.id,'inbound_processed',{'message_id':'availability'},{'stage':'question'},'scheduler');oa.db.session.commit()
+    monkeypatch.setattr(scanner,'_gmail_thread_reply_state',lambda _:{'ok':True,'replied':True,'reply_evidence':[
+        {'message_id':'availability','from_email':lead.contact_email,'text':"I'm interested when will you be available?"}]})
+    monkeypatch.setattr(oa,'_qualification_gate',lambda _:dict(ok=True))
+    sent=[]
+    monkeypatch.setattr(oa,'_safe_send',lambda *a,**kw:sent.append(kw) or dict(ok=True))
+    result=scanner.scan_real_inbound_replies()
+    assert result['processed'][0]['stage']=='interested',result
+    assert len(sent)==1 and 'date and time' in sent[0]['body']
+    assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='already_processed'
+    assert len(sent)==1
