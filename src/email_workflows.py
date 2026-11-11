@@ -29,6 +29,15 @@ class EmailWorkflowContact(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class EmailWorkflowContactDetails(db.Model):
+    """Imported address-book details, separate from send qualification evidence."""
+    __tablename__ = 'email_workflow_contact_details'
+    contact_id = db.Column(db.String(64), primary_key=True)
+    name = db.Column(db.String(300), default='')
+    phone = db.Column(db.String(80), default='')
+    company = db.Column(db.String(300), default='')
+
+
 with app.app_context():
     db.create_all()
 
@@ -107,6 +116,7 @@ def authorize(lead, job_id):
 
 def contact_view(row):
     lead = db.session.get(oa.OutreachLead, row.lead_id)
+    details = db.session.get(EmailWorkflowContactDetails, row.id)
     job = db.session.get(CampaignExecutionJob, row.last_job_id) if row.last_job_id else None
     state, reason = 'idle', ''
     confirmed = (oa.OutreachSendAttempt.query.filter_by(lead_id=row.lead_id, recipient=row.email, kind='initial', status='sent')
@@ -131,8 +141,9 @@ def contact_view(row):
         state, reason = 'review', 'An earlier send attempt needs review. No email will be resent automatically.'
     metadata = next((entry for entry in oa._server_qualification_inputs(lead)[2]
                      if entry.get('source') == 'user_provided_email'), {}) if lead else {}
-    return {'name': lead.contact_name if lead else '', 'phone': metadata.get('phone', ''),
-            'company': lead.company if lead and lead.company != 'Email contact' else '',
+    return {'name': (details.name if details else '') or (lead.contact_name if lead else ''),
+            'phone': (details.phone if details else '') or metadata.get('phone', ''),
+            'company': (details.company if details else '') or (lead.company if lead and lead.company != 'Email contact' else ''),
             'id': row.id, 'email': row.email, 'lead_id': row.lead_id, 'status': state, 'reason': reason,
             'can_activate': state in {'idle', 'held'} and _usable(lead) and not unsafe,
             'job_id': row.last_job_id, 'source': 'Added by you',
@@ -202,6 +213,14 @@ def email_workflow_contacts():
                 row = EmailWorkflowContact(id=key, workspace_id=OWNER, email=email, lead_id=lead.id)
                 db.session.add(row)
             lead = db.session.get(oa.OutreachLead, row.lead_id)
+            if any(details[field] for field in ('name', 'phone', 'company')):
+                saved_details = db.session.get(EmailWorkflowContactDetails, row.id)
+                if saved_details is None:
+                    saved_details = EmailWorkflowContactDetails(contact_id=row.id)
+                    db.session.add(saved_details)
+                for field in ('name', 'phone', 'company'):
+                    if details[field]:
+                        setattr(saved_details, field, details[field])
             if (lead and lead.verification == 'USER_PROVIDED' and any(details[field] for field in ('name', 'phone', 'company'))
                     and contact_view(row)['status'] == 'idle'):
                 lead.contact_name = lead.contact_name or details['name']

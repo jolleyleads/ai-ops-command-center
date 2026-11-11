@@ -11,19 +11,22 @@
     return Array.from(new Set(normalized.split(/[\s,;]+/).filter(Boolean).map(function(email){return email.toLowerCase();})));
   };
   window.renderEmailWorkflowDesk=function(panel,importOnly){
-    var generation=++mount;
+    var generation=++mount,pdfContacts=new Map();
     clearTimeout(timer);if(recognition){recognition.stop();recognition=null;}
     panel.innerHTML='<div class="workspace-heading"><div><h1>'+(importOnly?'Import Leads':'Email workflows')+'</h1><p class="meta">'+(importOnly?'Upload a lead PDF or paste contact details, then choose which leads to activate.':'Add email addresses, choose your recipients, and activate their workflows.')+'</p></div><button class="ghost email-workflows-primary" type="button" id="activate-email-workflows" disabled>Activate all workflows</button></div>'+
       '<section class="email-workflow-entry lead"><label for="workflow-emails"><b>Type or say an email address</b></label><textarea id="workflow-emails" rows="3" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="name@company.com&#10;Add more addresses on separate lines"></textarea>'+
-      '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div>'+ 
+      '<div class="email-workflow-entry-actions"><button class="ghost" type="button" id="dictate-workflow-email" aria-pressed="false">🎙 Dictate email</button><button class="ghost email-workflows-primary" type="button" id="add-workflow-emails">Add email addresses</button></div>'+
       '<details class="email-workflow-entry" id="lead-import"><summary><b>Import lead list or PDF</b></summary>'+
-      '<p class="meta">Drop a text-based lead PDF here or paste spreadsheet rows in the order email, name, phone, company.</p>'+
+      '<p class="meta">Upload a lead PDF. Email addresses go into the email workflow; names and phone numbers appear separately below.</p>'+
       '<label for="workflow-pdf">Choose a PDF</label> <input id="workflow-pdf" type="file" accept=".pdf,application/pdf">'+
-      '<p><label for="workflow-lead-rows">Review and edit leads before adding</label></p>'+
-      '<textarea id="workflow-lead-rows" rows="6" spellcheck="false" placeholder="email&#9;name&#9;phone&#9;company"></textarea>'+
-      '<button class="ghost email-workflows-primary" type="button" id="add-workflow-leads">Add reviewed leads</button></details>'+
-      '<details id="verified-workflow-picker" class="email-workflow-entry"><summary style="cursor:pointer;font-weight:650">✓ Select from Verified Emails</summary><p class="meta">Select verified decision-makers who have never had an outreach workflow activated. Adding an address will not send an email.</p><div id="verified-workflow-picker-items" role="group" aria-label="Available verified emails"></div><div class="email-workflow-entry-actions"><button class="ghost" type="button" id="verified-workflow-picker-select-all">Select all available</button><button class="ghost email-workflows-primary" type="button" id="verified-workflow-picker-add">Add selected to email box</button><button class="ghost" type="button" id="verified-workflow-picker-refresh">Refresh</button></div><p class="meta" id="verified-workflow-picker-count" role="status"></p></details>'+ 
+      '<div class="import-parts"><section class="import-email-part"><h2>Email addresses</h2><p class="meta">Only these email addresses enter the email workflow. Remove any you do not want to add.</p><label for="workflow-lead-rows">Review extracted emails</label>'+
+      '<textarea id="workflow-lead-rows" rows="6" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="owner@company.com&#10;manager@company.com"></textarea></section>'+
+      '<section class="import-phone-part"><h2>Names &amp; phone numbers</h2><p class="meta">Contact details from the same PDF. These stay separate from the email list and do not start calls or messages.</p><div id="import-contact-details" class="import-contact-details" role="group" aria-label="Extracted names and phone numbers"><p class="meta">Names and phone numbers will appear here after you upload a PDF.</p></div></section></div>'+
+      '<button class="ghost email-workflows-primary" type="button" id="add-workflow-leads">Add imported leads</button></details>'+
+      '<details id="verified-workflow-picker" class="email-workflow-entry"><summary style="cursor:pointer;font-weight:650">✓ Select from Verified Emails</summary><p class="meta">Select verified decision-makers who have never had an outreach workflow activated. Adding an address will not send an email.</p><div id="verified-workflow-picker-items" role="group" aria-label="Available verified emails"></div><div class="email-workflow-entry-actions"><button class="ghost" type="button" id="verified-workflow-picker-select-all">Select all available</button><button class="ghost email-workflows-primary" type="button" id="verified-workflow-picker-add">Add selected to email box</button><button class="ghost" type="button" id="verified-workflow-picker-refresh">Refresh</button></div><p class="meta" id="verified-workflow-picker-count" role="status"></p></details>'+
       '<p class="meta" id="email-voice-status" role="status">You can say “name at company dot com.” Review the address before adding it.</p></section>'+
+      '<section id="import-saved-contacts" class="lead email-workflow-entry"'+(importOnly?'':' hidden')+'><h2>Saved names &amp; phone numbers</h2><div id="import-contact-directory"></div></section>'+
+      '<h2 class="import-email-title"'+(importOnly?'':' hidden')+'>Email workflows</h2>'+
       '<div class="email-workflow-toolbar"><label><input type="checkbox" id="select-email-workflows"> Select all</label><span class="meta" id="email-workflow-count" aria-live="polite"></span><button class="ghost" type="button" id="refresh-email-workflows">Refresh</button></div>'+
       '<p class="meta">Activation sends your outreach email and résumé, then handles follow-ups and books a calendar meeting once the lead agrees to a time.</p><p id="email-workflow-notice" role="status" aria-live="polite"></p><div id="email-workflow-list"><span class="loading"></span> Loading your email workflows…</div>';
     var input=panel.querySelector('#workflow-emails'),notice=panel.querySelector('#email-workflow-notice');
@@ -47,10 +50,13 @@
       if(!current())return;
       panel.querySelector('#email-workflow-list').innerHTML=contacts.length?contacts.map(function(row){
         if(!row.can_activate)selected.delete(row.id);
-        return '<article class="lead email-workflow-row"><div class="leadtop"><label class="email-workflow-recipient"><input type="checkbox" data-email-workflow-select="'+esc(row.id)+'"'+(selected.has(row.id)&&row.can_activate?' checked':'')+(!row.can_activate||busy?' disabled':'')+'><b>'+esc(row.email)+'</b></label><span class="tag">'+esc(names[row.status]||row.status)+'</span></div><p class="meta">Added by you'+[row.name,row.company,row.phone].filter(Boolean).map(function(value){return ' · '+esc(value);}).join('')+(row.follow_up_due_at?' · Follow-up '+esc(new Date(row.follow_up_due_at).toLocaleString()):'')+'</p>'+
+        return '<article class="lead email-workflow-row"><div class="leadtop"><label class="email-workflow-recipient"><input type="checkbox" data-email-workflow-select="'+esc(row.id)+'"'+(selected.has(row.id)&&row.can_activate?' checked':'')+(!row.can_activate||busy?' disabled':'')+'><b>'+esc(row.email)+'</b></label><span class="tag">'+esc(names[row.status]||row.status)+'</span></div><p class="meta">Added by you'+(importOnly?[]:[row.name,row.company,row.phone]).filter(Boolean).map(function(value){return ' · '+esc(value);}).join('')+(row.follow_up_due_at?' · Follow-up '+esc(new Date(row.follow_up_due_at).toLocaleString()):'')+'</p>'+
           '<div class="email-workflow-row-actions"><button type="button" class="ghost" data-email-workflow-activate="'+esc(row.id)+'"'+(!row.can_activate||busy?' disabled':'')+'>'+esc(row.status==='active'?'Workflow active':row.status==='queued'||row.status==='running'?'Activating…':'Activate workflow')+'</button><button type="button" class="ghost" data-email-workflow-preview="'+esc(row.id)+'">View email &amp; résumé</button></div>'+
           (row.reason?'<p class="meta">'+esc(row.reason)+'</p>':'')+'<div class="email-workflow-preview" data-email-preview-for="'+esc(row.id)+'"></div></article>';
       }).join(''):importOnly?'<div class="workspace-empty"><h2>Your saved contacts will appear here</h2><p>Add reviewed leads above to select and activate them. Imported and manually added contacts are also available in Email workflows.</p></div>':'<div class="workspace-empty"><h2>Your email workflows will appear here</h2><p>Add one or more email addresses above. Each address gets its own workflow and selection box.</p></div>';
+      var directory=panel.querySelector('#import-contact-directory');
+      var details=contacts.filter(function(row){return row.name||row.phone;});
+      directory.innerHTML=details.length?details.map(function(row){return '<article class="import-saved-contact"><b>'+esc(row.name||row.company||'Contact')+'</b>'+(row.company&&row.name?'<span class="meta">'+esc(row.company)+'</span>':'')+'<span>'+esc(row.phone||'No phone number in PDF')+'</span></article>';}).join(''):'<p class="meta">Saved names and phone numbers will appear here.</p>';
       updateSelection();
     }
     function load(){
@@ -148,9 +154,13 @@
       workspaceMutation('/api/chat/email-workflows/pdf-preview',{method:'POST',body:form})
         .then(function(result){
           if(!current())return;
-          var rows=result.contacts.map(function(row){return [row.email,row.name,row.phone,row.company].map(function(value){return String(value||'').replace(/[\t\r\n]/g,' ');}).join('\t');}).join('\n');
-          leadRows.value+=(leadRows.value.trim()?'\n':'')+rows;
-          message(result.contacts.length+' email addresses found. Review the extracted details, then choose Add reviewed leads.');
+          pdfContacts=new Map(result.contacts.map(function(row){return [String(row.email).toLowerCase(),row];}));
+          leadRows.value=Array.from(pdfContacts.keys()).join('\n');
+          panel.querySelector('#import-contact-details').innerHTML=Array.from(pdfContacts.entries()).map(function(entry){
+            var email=entry[0],row=entry[1];
+            return '<article class="import-detail"><label>Name<input type="text" data-import-email="'+esc(email)+'" data-import-field="name" maxlength="300" value="'+esc(row.name||'')+'"></label><label>Phone number<input type="tel" data-import-email="'+esc(email)+'" data-import-field="phone" maxlength="80" value="'+esc(row.phone||'')+'"></label><label>Company<input type="text" data-import-email="'+esc(email)+'" data-import-field="company" maxlength="300" value="'+esc(row.company||'')+'"></label></article>';
+          }).join('');
+          message(pdfContacts.size+' email addresses extracted. Review emails and contact details in their separate sections, then choose Add imported leads.');
         }).catch(function(error){message(error.message,true);})
         .finally(function(){pdf.value='';pdf.disabled=false;addLeads.disabled=false;});
     }
@@ -161,19 +171,17 @@
       event.preventDefault();importBox.open=true;previewPdf(event.dataTransfer.files[0]);
     };
     addLeads.onclick=function(){
-      var lines=leadRows.value.split(/\r?\n/).filter(function(line){return line.trim();});
-      if(!lines.length){message('Paste lead rows or choose a PDF first.',true);return;}
-      if(lines.some(function(line){return line.split('\t').length>4;})){
-        message('Use up to four columns per row: email, name, phone and company.',true);return;
-      }
-      var rows=lines.map(function(line){
-        var fields=line.split('\t');
-        return {email:fields[0],name:fields[1]||'',phone:fields[2]||'',company:fields[3]||''};
+      var emails=window.parseWorkflowEmails(leadRows.value);
+      if(!emails.length){message('Paste email addresses or choose a PDF first.',true);return;}
+      if(emails.some(function(email){return email.length>254||! /^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$/i.test(email);})){message('Use email addresses only in the email section. Names and phone numbers belong in the separate contact details section.',true);return;}
+      panel.querySelectorAll('[data-import-field]').forEach(function(field){
+        var row=pdfContacts.get(field.dataset.importEmail);if(row)row[field.dataset.importField]=field.value.trim();
       });
+      var rows=emails.map(function(email){var details=pdfContacts.get(email)||{};return {email:email,name:details.name||'',phone:details.phone||'',company:details.company||''};});
       addLeads.disabled=true;
       workspaceMutation('/api/chat/email-workflows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:rows})})
         .then(function(result){
-          leadRows.value='';
+          leadRows.value='';pdfContacts.clear();panel.querySelector('#import-contact-details').innerHTML='<p class="meta">Contact details saved below. Upload another PDF to add more.</p>';
           var saved=result.contacts||[],byId=new Map(contacts.map(function(row){return [row.id,row];}));
           saved.forEach(function(row){byId.set(row.id,row);if(row.can_activate)selected.add(row.id);seen.add(row.id);});
           contacts=Array.from(byId.values());renderRows();
