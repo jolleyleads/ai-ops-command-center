@@ -234,3 +234,25 @@ def test_import_card_directory_preserves_decision_maker_details(client):
     assert result.status_code==200
     assert all(row['can_activate'] for row in result.json['contacts'])
     assert jobs.CampaignExecutionJob.query.count()==0
+
+
+def test_import_details_update_separately_after_workflow_is_active(client,monkeypatch):
+    row=add(client,'owner@example.com')[0]
+    lead=db.session.get(oa.OutreachLead,row['lead_id'])
+    lead.gmail_message_id='existing-message';lead.gmail_thread_id='existing-thread';lead.sent_at=datetime.utcnow()
+    original_evidence=lead.evidence_json;db.session.commit()
+    monkeypatch.setattr(oa,'_gmail_send',lambda *a:pytest.fail('Saving contact details must never send'))
+    response=client.post('/api/chat/email-workflows',headers=HEADERS,json={'contacts':[
+        {'email':'owner@example.com','name':'Casey Owner','phone':'757-555-0100','company':'Example Cooling'}]})
+    assert response.status_code==200
+    result=response.json['contacts'][0]
+    assert result['name']=='Casey Owner' and result['phone']=='757-555-0100'
+    assert result['status']=='active' and not result['can_activate']
+    db.session.refresh(lead)
+    assert lead.evidence_json==original_evidence
+    assert lead.gmail_message_id=='existing-message'
+    # Reopening and adding an email without details preserves the address book.
+    reopened=client.get('/api/chat/email-workflows',headers=HEADERS).json['contacts'][0]
+    assert reopened['phone']=='757-555-0100'
+    assert add(client,'owner@example.com')[0]['name']=='Casey Owner'
+    assert jobs.CampaignExecutionJob.query.count()==0
