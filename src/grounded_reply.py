@@ -99,6 +99,12 @@ def scheduling_request(text):
         r"what (?:times? (?:are you|would you be) (?:available|free)|is your availability))"
         r"[?.!\s]*", text, re.I)
     if availability:return True
+    # A day-only answer to a scheduling question still needs a clarification.
+    # Match the whole short response; unrelated questions must remain reviewable.
+    day = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|today|tomorrow)'
+    if re.fullmatch(r'(?:this |next |on )?'+day+
+                    r'(?: (?:works(?: for me)?|is (?:good|fine)|would work(?: for me)?))?[.!\s]*', text, re.I):
+        return True
     if routine_answer(text) or re.search(r"\b(?:price|pricing|cost|how much|what|how|where|who|security|guarantee)\b", text, re.I):
         return False
     # A calendar date paired with a time is a scheduling proposal in its own
