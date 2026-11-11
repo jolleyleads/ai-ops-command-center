@@ -355,3 +355,34 @@ def test_previously_held_availability_question_resumes_once(env,monkeypatch):
     assert len(sent)==1 and 'date and time' in sent[0]['body']
     assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='already_processed'
     assert len(sent)==1
+
+
+@pytest.mark.parametrize('text',['This Wednesday works for me.','Wednesday works','Next Monday is good','Friday would work for me'])
+def test_weekday_acceptance_asks_for_date_and_time(text):
+    from src.scheduling_dates import interpret_booking
+    assert classify_reply(text)['classification']=='interested'
+    parsed=interpret_booking(text)
+    assert not parsed['ready'] and not parsed['start']
+    assert 'calendar date' in parsed['clarification'] and 'AM/PM' in parsed['clarification']
+
+
+@pytest.mark.parametrize('text',['This Wednesday works for me, how much does it cost?','No thanks. Wednesday works.','Unsubscribe. Wednesday works for me.','Thanks\n> This Wednesday works for me.'])
+def test_weekday_acceptance_preserves_business_questions_and_optouts(text):
+    assert classify_reply(text)['classification']!='interested'
+
+
+def test_previously_unclear_weekday_reply_resumes_once(env,monkeypatch):
+    import v1_orchestration as scanner
+    lead=oa.OutreachLead(company='Example',contact_email='prospect@example.com',gmail_thread_id='thread',status='responded')
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa._audit_actor(lead.id,'inbound_processed',{'message_id':'weekday'},{'stage':'unclear'},'scheduler');oa.db.session.commit()
+    monkeypatch.setattr(scanner,'_gmail_thread_reply_state',lambda _:{'ok':True,'replied':True,'reply_evidence':[
+        {'message_id':'weekday','from_email':lead.contact_email,'text':'This Wednesday works for me.\n\nOn Tue, Nov 10, 2026 at 7:05 PM Matthew wrote:\n> What date and time works for you?'}]})
+    monkeypatch.setattr(oa,'_qualification_gate',lambda _:dict(ok=True))
+    monkeypatch.setattr(oa,'check_availability',lambda *a:pytest.fail('No exact date/time was confirmed'))
+    sent=[];monkeypatch.setattr(oa,'_safe_send',lambda *a,**kw:sent.append(kw) or dict(ok=True))
+    result=scanner.scan_real_inbound_replies()
+    assert result['processed'][0]['stage']=='interested',result
+    assert len(sent)==1 and 'Wednesday' in sent[0]['body'] and 'what time' in sent[0]['body']
+    assert scanner.scan_real_inbound_replies()['processed'][0]['stage']=='already_processed'
+    assert len(sent)==1

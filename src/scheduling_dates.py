@@ -88,6 +88,10 @@ def interpret_booking(text,now=None,prior_date=None):
             if any(dt.utcoffset()!=dt.astimezone(tz).utcoffset() for dt in (start,end)):return fail("OFFSET_TIMEZONE_CONFLICT")
         except ValueError:return fail("INVALID_DATE")
     else:
+        weekday = re.search(r'\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b', raw, re.I)
+        if weekday and not FULL_DATE.search(raw):
+            return {**empty, 'ready':False, 'reason':'RELATIVE_DATE_REQUIRES_CONFIRMATION',
+                    'clarification':f"What calendar date do you mean by {weekday[0].title()}, and what time works for you? Please include AM/PM and your timezone. I’ll check availability before confirming."}
         if re.search(r"\b(?:today|tomorrow|next\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",raw,re.I):return fail("RELATIVE_DATE_REQUIRES_CONFIRMATION")
         if not re.search(r"\b20\d{2}\b",raw):
             partial=re.search(r"\b(?:"+"|".join(MONTHS)+r")\s+\d{1,2}(?:st|nd|rd|th)?\b",raw,re.I)
