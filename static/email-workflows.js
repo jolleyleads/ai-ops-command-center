@@ -1,7 +1,7 @@
 /* A separate workspace desk for explicitly entered email recipients. */
 (function(){
   'use strict';
-  var mount=0,timer=null,recognition=null,selected=new Set(),seen=new Set(),imported=new Set(),contacts=[],busy=false;
+  var mount=0,timer=null,recognition=null,selected=new Set(),seen=new Set(),contacts=[],busy=false;
   var names={idle:'Not activated',queued:'Queued',running:'Activating…',active:'Workflow active',held:'Needs attention',review:'Check send status',stopped:'Stopped'};
   function esc(value){return window.esc(value);}
   window.parseWorkflowEmails=function(value){
@@ -50,17 +50,24 @@
         return '<article class="lead email-workflow-row"><div class="leadtop"><label class="email-workflow-recipient"><input type="checkbox" data-email-workflow-select="'+esc(row.id)+'"'+(selected.has(row.id)&&row.can_activate?' checked':'')+(!row.can_activate||busy?' disabled':'')+'><b>'+esc(row.email)+'</b></label><span class="tag">'+esc(names[row.status]||row.status)+'</span></div><p class="meta">Added by you'+[row.name,row.company,row.phone].filter(Boolean).map(function(value){return ' · '+esc(value);}).join('')+(row.follow_up_due_at?' · Follow-up '+esc(new Date(row.follow_up_due_at).toLocaleString()):'')+'</p>'+
           '<div class="email-workflow-row-actions"><button type="button" class="ghost" data-email-workflow-activate="'+esc(row.id)+'"'+(!row.can_activate||busy?' disabled':'')+'>'+esc(row.status==='active'?'Workflow active':row.status==='queued'||row.status==='running'?'Activating…':'Activate workflow')+'</button><button type="button" class="ghost" data-email-workflow-preview="'+esc(row.id)+'">View email &amp; résumé</button></div>'+
           (row.reason?'<p class="meta">'+esc(row.reason)+'</p>':'')+'<div class="email-workflow-preview" data-email-preview-for="'+esc(row.id)+'"></div></article>';
-      }).join(''):importOnly?'<div class="workspace-empty"><h2>Your imported leads will appear here</h2><p>Add reviewed leads above to select and activate them. Saved workflows are also available in Email workflows.</p></div>':'<div class="workspace-empty"><h2>Your email workflows will appear here</h2><p>Add one or more email addresses above. Each address gets its own workflow and selection box.</p></div>';
+      }).join(''):importOnly?'<div class="workspace-empty"><h2>Your saved contacts will appear here</h2><p>Add reviewed leads above to select and activate them. Imported and manually added contacts are also available in Email workflows.</p></div>':'<div class="workspace-empty"><h2>Your email workflows will appear here</h2><p>Add one or more email addresses above. Each address gets its own workflow and selection box.</p></div>';
       updateSelection();
     }
     function load(){
       clearTimeout(timer);
       return requestJSON(API+'/api/chat/email-workflows',{cache:'no-store'}).then(function(data){
         if(!current())return;
-        contacts=(data.contacts||[]).filter(function(row){return !importOnly||imported.has(row.id);});contacts.forEach(function(row){if(!seen.has(row.id)&&row.can_activate)selected.add(row.id);seen.add(row.id);});
+        contacts=data.contacts||[];contacts.forEach(function(row){if(!seen.has(row.id)&&row.can_activate)selected.add(row.id);seen.add(row.id);});
         renderRows();
+        if(notice.dataset.connectionError){delete notice.dataset.connectionError;message('Workflow status refreshed. Review the statuses below.');}
         if(contacts.some(function(row){return ['queued','running'].includes(row.status);}))timer=setTimeout(load,2500);
-      }).catch(function(error){if(!current())return;message(error.message,true);panel.querySelector('#email-workflow-list').innerHTML='<div class="workspace-empty"><p>Sign in to your connected workspace to see your email workflows.</p><a href="/login">Sign in</a></div>';});
+      }).catch(function(error){
+        if(!current())return;
+        notice.dataset.connectionError='true';
+        message(error.status===401||error.status===403?'Sign in to your connected workspace to load your contacts.':'Could not refresh workflow status. Your displayed contacts are kept. Tap Refresh to reconnect.',true);
+        if(contacts.length){renderRows();return;}
+        panel.querySelector('#email-workflow-list').innerHTML=error.status===401||error.status===403?'<div class="workspace-empty"><a href="/login">Sign in</a></div>':'<div class="workspace-empty"><p>Could not load saved contacts. Tap Refresh to try again.</p></div>';
+      });
     }
     function activate(ids){
       if(busy||!ids.length)return;
@@ -76,7 +83,7 @@
       var currentEmails=window.parseWorkflowEmails(input.value);
       var original=currentEmails.filter(function(email){return !pickerInserted.has(email);});
       var chosen=verifiedChoices.filter(function(row){return verifiedSelected.has(row.email);}).map(function(row){return row.email;});
-      input.value=Array.from(new Set(original.concat(chosen))).join('\\n');
+      input.value=Array.from(new Set(original.concat(chosen))).join('\n');
       pickerInserted=new Set(chosen.filter(function(email){return original.indexOf(email)<0;}));
     }
     function updateVerifiedPicker(){
@@ -166,7 +173,10 @@
       addLeads.disabled=true;
       workspaceMutation('/api/chat/email-workflows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:rows})})
         .then(function(result){
-          leadRows.value='';(result.contacts||[]).forEach(function(row){imported.add(row.id);if(row.can_activate)selected.add(row.id);seen.add(row.id);});
+          leadRows.value='';
+          var saved=result.contacts||[],byId=new Map(contacts.map(function(row){return [row.id,row];}));
+          saved.forEach(function(row){byId.set(row.id,row);if(row.can_activate)selected.add(row.id);seen.add(row.id);});
+          contacts=Array.from(byId.values());renderRows();
           message(result.message);return load();
         }).catch(function(error){message(error.message,true);}).finally(function(){addLeads.disabled=false;});
     };

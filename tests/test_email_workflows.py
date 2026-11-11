@@ -210,3 +210,27 @@ def test_import_directory_contact_details_without_activating(client):
     assert jobs.CampaignExecutionJob.query.count() == 0
     assert client.post('/api/chat/email-workflows/pdf-preview').status_code == 401
     assert client.post('/api/chat/email-workflows/pdf-preview', headers=HEADERS).status_code == 400
+
+
+def test_import_card_directory_preserves_decision_maker_details(client):
+    from src.lead_pdf_import import parse_directory
+    rows = parse_directory('''  01  Example Cooling                       Virginia Beach
+
+  Casey Example | Owner & President
+
+  owner@example.com                         757-555-0100
+  Company website
+  SOURCE: Open published listing
+
+  02  Second Heating                        Hampton
+  Sam Example | Manager
+  sam@example.org                           757-555-0101
+''')
+    assert rows == [
+        {'company':'Example Cooling','name':'Casey Example','email':'owner@example.com','phone':'757-555-0100'},
+        {'company':'Second Heating','name':'Sam Example','email':'sam@example.org','phone':'757-555-0101'},
+    ]
+    result=client.post('/api/chat/email-workflows',headers=HEADERS,json={'contacts':rows})
+    assert result.status_code==200
+    assert all(row['can_activate'] for row in result.json['contacts'])
+    assert jobs.CampaignExecutionJob.query.count()==0

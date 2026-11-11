@@ -251,7 +251,7 @@ def test_search_failure_distinguishes_empty_and_partial_results_and_connection_e
   assert(partial.innerHTML.includes('Results found so far are shown above.'));
   let calls=0;
   global.fetch=async()=>{calls++;throw new TypeError('Load failed');};
-  await assert.rejects(requestJSON('/api/chat/campaigns/prepare',{method:'POST'}),/Couldn’t connect to AutoMake AI/);
+  await assert.rejects(requestJSON('/api/chat/campaigns/prepare',{method:'POST'}),/Couldn’t confirm the server response/);
   assert.equal(calls,1); // Never automatically repeat a mutation after an ambiguous response.
   const options={method:'POST',headers:{'Idempotency-Key':'same-search-key'},body:'same search'};
   calls=0;const keys=[];
@@ -259,12 +259,14 @@ def test_search_failure_distinguishes_empty_and_partial_results_and_connection_e
   assert.equal((await requestJSON('/api/chat/campaigns/prepare',options)).job_id,'same-job');
   assert.equal(calls,2);assert.deepEqual(keys,['same-search-key','same-search-key']);
   calls=0;global.fetch=async()=>{calls++;throw new TypeError('Load failed');};
-  await assert.rejects(requestJSON('/api/research/jobs',options),/Couldn’t connect/);
+  await assert.rejects(requestJSON('/api/research/jobs',options),/Couldn’t confirm/);
   assert.equal(calls,4);
-  calls=0;await assert.rejects(requestJSON('/api/chat/leads/1/activate-outreach',options),/Couldn’t connect/);
+  calls=0;await assert.rejects(requestJSON('/api/chat/leads/1/activate-outreach',options),/Couldn’t confirm/);
   assert.equal(calls,1);
   calls=0;global.fetch=async()=>{calls++;return {ok:true,text:async()=>{throw new TypeError('Load failed');}};};
   await assert.rejects(requestJSON('/api/chat/campaign-settings'),/Couldn’t connect/);assert.equal(calls,4);
+  calls=0;global.fetch=async()=>{calls++;if(calls===1)throw new TypeError('Load failed');return {ok:true,text:async()=>' {"contacts":[]}'};};
+  assert.deepEqual((await requestJSON('/api/chat/email-workflows')).contacts,[]);assert.equal(calls,2);
   global.fetch=async()=>({ok:true,text:async()=>'<html>Application loading</html>'});
   await assert.rejects(requestJSON('/api/health'),/still loading/);
   calls=0;global.fetch=async()=>{calls++;return {ok:false,status:401,text:async()=>' {"error":"Sign in required"}'};};
