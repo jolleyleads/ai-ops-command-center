@@ -1,3 +1,4 @@
+import time
 import json
 import os
 import re
@@ -985,10 +986,23 @@ def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
     """Read full Gmail MIME bodies and deterministically detect inbound reply/opt-out."""
     try:
         token=gmail_access_token()
-        response=requests.get(
-            f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",
-            headers={"Authorization":f"Bearer {token}"},params={"format":"full"},timeout=30,
-        )
+        # Retry transient Gmail throttling without repeatedly hammering the API.
+        # Gmail may report per-user quota exhaustion as HTTP 403, not only 429.
+        response = None
+        for retry in range(3):
+            response=requests.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}",
+                headers={"Authorization":f"Bearer {token}"},params={"format":"full"},timeout=30,
+            )
+            quota_hit = response.status_code == 429 or (
+                response.status_code == 403 and any(
+                    marker in response.text.lower()
+                    for marker in ("ratelimitexceeded", "quota exceeded", "userratelimitexceeded")
+                )
+            )
+            if not quota_hit or retry == 2:
+                break
+            time.sleep(min(2 ** retry * 2, 8))
         if not response.ok:
             return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":f"Gmail thread lookup failed {response.status_code}: {response.text[:500]}"}
         rows=[message_to_evidence(message) for message in (response.json().get("messages") or [])]
