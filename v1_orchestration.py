@@ -391,12 +391,28 @@ def scan_real_inbound_replies():
     active_leads = [lead for lead in leads if lead.status not in
         {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}]
     batch_size = max(1, min(20, int(os.getenv("GMAIL_INBOUND_SCAN_BATCH_SIZE", "12"))))
-    if active_leads:
-        cycle = int(now.timestamp() // 300)
-        start = (cycle * batch_size) % len(active_leads)
-        scan_leads = (active_leads + active_leads)[start:start + min(batch_size, len(active_leads))]
-    else:
-        scan_leads = []
+    # Reserve scan capacity for conversations awaiting a date/time or booking
+    # confirmation. These leads must not wait behind unrelated cold outreach.
+    priority = [lead for lead in active_leads if lead.status in {"interested", "booking_ready"}]
+    standard = [lead for lead in active_leads if lead.status not in {"interested", "booking_ready"}]
+    cycle = int(now.timestamp() // 300)
+    def rotating_batch(rows, count):
+        if not rows or not count:
+            return []
+        start = (cycle * count) % len(rows)
+        return (rows + rows)[start:start + min(count, len(rows))]
+    priority_slots = min(len(priority), max(1, batch_size // 2))
+    scan_leads = rotating_batch(priority, priority_slots)
+    scan_leads += rotating_batch(standard, batch_size - len(scan_leads))
+    if len(scan_leads) < batch_size:
+        # Use spare capacity on the other queue without rechecking the same lead.
+        selected = {lead.id for lead in scan_leads}
+        for lead in rotating_batch(priority + standard, batch_size):
+            if lead.id not in selected:
+                scan_leads.append(lead)
+                selected.add(lead.id)
+            if len(scan_leads) >= batch_size:
+                break
     processed=[]
     for lead in scan_leads:
         if lead.status in {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}:
