@@ -96,8 +96,10 @@ def _run_scheduled_outreach_cycle():
     if not inbound.get("ok"):
         app.logger.warning("OUTREACH_INBOUND_SCHEDULER_ERROR %s", inbound.get("processed"))
 
-    # Never deliver follow-ups while inbox reads are failing.
-    followups = outreach_automation.process_due_followups() if inbound.get("ok") else {"ok":False,"processed":[],"error":"INBOUND_SCAN_FAILED"}
+    # The due-followup worker independently checks each Gmail thread both before
+    # drafting and before sending. A failure scanning an unrelated lead must not
+    # suppress every due follow-up; per-lead Gmail read failures still fail closed.
+    followups = outreach_automation.process_due_followups()
     # The legacy Gmail-wide scanner performs many message and thread reads.
     # Run it at most once per hour instead of every five-minute cycle; the
     # database-backed inbox scanner above remains the primary booking path.
