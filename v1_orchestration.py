@@ -385,8 +385,20 @@ def scan_real_inbound_replies():
         and_(OutreachLead.gmail_thread_id.isnot(None), OutreachLead.gmail_thread_id != ""),
         authorized_initial,
     )).distinct().order_by(OutreachLead.id.asc()).all()
+    # Spread Gmail thread reads across scheduled cycles rather than requesting
+    # every tracked conversation every five minutes. Rotate the starting point
+    # deterministically so no active lead is permanently starved.
+    active_leads = [lead for lead in leads if lead.status not in
+        {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}]
+    batch_size = max(1, min(20, int(os.getenv("GMAIL_INBOUND_SCAN_BATCH_SIZE", "12"))))
+    if active_leads:
+        cycle = int(now.timestamp() // 300)
+        start = (cycle * batch_size) % len(active_leads)
+        scan_leads = (active_leads + active_leads)[start:start + min(batch_size, len(active_leads))]
+    else:
+        scan_leads = []
     processed=[]
-    for lead in leads:
+    for lead in scan_leads:
         if lead.status in {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}:
             continue
         if not lead.gmail_thread_id:
@@ -459,7 +471,7 @@ def scan_real_inbound_replies():
             _audit_actor(lead.id,"inbound_processed",{"message_id":message_id},{"stage":routed.get("stage")},"scheduler")
         db.session.commit()
         processed.append({"lead_id":lead.id,"ok":routed.get("ok") is True,"stage":routed.get("stage"),"classification":(routed.get("classification") or {}).get("classification"),"thread_id":lead.gmail_thread_id})
-    return {"ok":all(x.get("ok") for x in processed) if processed else True,"checked":len(leads),"processed":processed}
+    return {"ok":all(x.get("ok") for x in processed) if processed else True,"checked":len(scan_leads),"tracked_total":len(active_leads),"processed":processed}
 
 
 @app.after_request
