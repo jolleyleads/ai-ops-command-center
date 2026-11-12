@@ -98,7 +98,14 @@ def _run_scheduled_outreach_cycle():
 
     # Never deliver follow-ups while inbox reads are failing.
     followups = outreach_automation.process_due_followups() if inbound.get("ok") else {"ok":False,"processed":[],"error":"INBOUND_SCAN_FAILED"}
-    legacy_followups = process_durable_followups() if inbound.get("ok") else {"ok":False,"processed":[]}
+    # The legacy Gmail-wide scanner performs many message and thread reads.
+    # Run it at most once per hour instead of every five-minute cycle; the
+    # database-backed inbox scanner above remains the primary booking path.
+    legacy_due = datetime.utcnow().minute < 5
+    legacy_followups = (
+        process_durable_followups() if inbound.get("ok") and legacy_due
+        else {"ok": True, "processed": [], "skipped": "hourly_cadence" if not legacy_due else "inbound_scan_failed"}
+    )
     # This durable cron also resumes searches after a web process restart,
     # even when the customer has closed the page. Research never sends mail.
     from background_research import process_next_research_job
