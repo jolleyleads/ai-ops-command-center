@@ -98,6 +98,8 @@ def protect_workspace_routes():
     if endpoint in PUBLIC:return None
     if endpoint in {'process_followups','process_inbound_replies'}:
         return None  # Both routes independently require the canonical cron token.
+    if endpoint == 'gmail_push' and request.method == 'POST':
+        return None  # The handler verifies the Google token and subscription.
     from src.acceptance_auth import acceptance_claims, request_key
     if endpoint in {'v11_acceptance_once','campaign_execution_status'}:
         claims=acceptance_claims()

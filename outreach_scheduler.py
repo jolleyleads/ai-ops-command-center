@@ -13,6 +13,7 @@ import gmail_outreach_state
 import outreach_automation
 from gmail_outreach_state import process_durable_followups
 from v1_orchestration import scan_real_inbound_replies
+from gmail_push import renew_gmail_watch
 
 # These modules import gmail_access_token by value. Bind them explicitly to the
 # persisted-refresh-token-aware resolver so cron workers cannot retain app.py's
@@ -86,6 +87,11 @@ def _oauth_diagnostics():
 def _run_scheduled_outreach_cycle():
     """Process real inbound replies before any follow-up work."""
     _oauth_diagnostics()
+    try:
+        renew_gmail_watch()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.warning("Gmail watch renewal failed: %s", type(exc).__name__)
     # Leave Gmail quota headroom for active campaign sends and final reply checks.
     inbound = scan_real_inbound_replies(gmail_read_interval=1.25)
     app.logger.info(
@@ -137,10 +143,14 @@ def run_scheduled_outreach_cycle():
         record_cycle(failure, failure, failure, failure)
         return failure
     finally:
-        db.session.rollback()
-        SchedulerLease.query.filter_by(name='outreach', token=token).update(
-            {'expires_at': datetime.utcnow()}, synchronize_session=False)
-        db.session.commit()
+        _release_cycle(token)
+
+
+def _release_cycle(token):
+    db.session.rollback()
+    SchedulerLease.query.filter_by(name='outreach', token=token).update(
+        {'expires_at': datetime.utcnow()}, synchronize_session=False)
+    db.session.commit()
 
 
 def _loop():
