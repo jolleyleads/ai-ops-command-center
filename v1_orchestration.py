@@ -363,7 +363,7 @@ def _send_prepared_lead(lead,summary):
     return True
 
 
-def scan_real_inbound_replies(*, gmail_read_interval=0):
+def scan_real_inbound_replies(*, gmail_read_interval=0, thread_ids=None):
     now=datetime.utcnow()
     # A saved status is display state, not proof that an authorized conversation
     # should stop being monitored. Recovery is limited to leads with an actual
@@ -380,12 +380,17 @@ def scan_real_inbound_replies(*, gmail_read_interval=0):
         OutreachSendAttempt.message_id.isnot(None),
         OutreachSendAttempt.message_id != "",
     )
-    leads=OutreachLead.query.outerjoin(
+    lead_query=OutreachLead.query.outerjoin(
         OutreachSendAttempt, OutreachSendAttempt.lead_id == OutreachLead.id
     ).filter(or_(
         and_(OutreachLead.gmail_thread_id.isnot(None), OutreachLead.gmail_thread_id != ""),
         authorized_initial,
-    )).distinct().order_by(OutreachLead.id.asc()).all()
+    ))
+    if thread_ids is not None:
+        if not thread_ids:
+            return {"ok": True, "checked": 0, "processed": []}
+        lead_query = lead_query.filter(OutreachLead.gmail_thread_id.in_(thread_ids))
+    leads = lead_query.distinct().order_by(OutreachLead.id.asc()).all()
     next_gmail_read = 0.0
 
     def pace_gmail_read():
