@@ -3,6 +3,7 @@ import os
 import re
 import hashlib
 import threading
+import time
 from contextlib import contextmanager
 from sqlalchemy import text as sql_text
 from datetime import datetime, timedelta, timezone
@@ -362,7 +363,7 @@ def _send_prepared_lead(lead,summary):
     return True
 
 
-def scan_real_inbound_replies():
+def scan_real_inbound_replies(*, gmail_read_interval=0):
     now=datetime.utcnow()
     # A saved status is display state, not proof that an authorized conversation
     # should stop being monitored. Recovery is limited to leads with an actual
@@ -385,6 +386,17 @@ def scan_real_inbound_replies():
         and_(OutreachLead.gmail_thread_id.isnot(None), OutreachLead.gmail_thread_id != ""),
         authorized_initial,
     )).distinct().order_by(OutreachLead.id.asc()).all()
+    next_gmail_read = 0.0
+
+    def pace_gmail_read():
+        nonlocal next_gmail_read
+        if not gmail_read_interval:
+            return
+        remaining = next_gmail_read - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+        next_gmail_read = time.monotonic() + gmail_read_interval
+
     processed=[]
     for lead in leads:
         if lead.status in {"opted_out","unsubscribed","archived","not_interested","rejected","closed"}:
@@ -403,6 +415,7 @@ def scan_real_inbound_replies():
                 processed.append({"lead_id":lead.id,"ok":False,"stage":"missing_authorized_send"})
                 continue
             try:
+                pace_gmail_read()
                 response=requests.get(
                     f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{attempt.message_id}",
                     headers={"Authorization":f"Bearer {gmail_access_token()}"},
@@ -420,6 +433,7 @@ def scan_real_inbound_replies():
                 db.session.rollback()
                 processed.append({"lead_id":lead.id,"ok":False,"stage":"thread_recovery_failed","reason":type(exc).__name__})
                 continue
+        pace_gmail_read()
         reply=_gmail_thread_reply_state(lead.gmail_thread_id)
         if not reply.get("ok"):
             processed.append({"lead_id":lead.id,"ok":False,"stage":"reply_check_failed","reason":reply.get("reason"),"error":reply.get("error")}); continue

@@ -86,7 +86,8 @@ def _oauth_diagnostics():
 def _run_scheduled_outreach_cycle():
     """Process real inbound replies before any follow-up work."""
     _oauth_diagnostics()
-    inbound = scan_real_inbound_replies()
+    # Leave Gmail quota headroom for active campaign sends and final reply checks.
+    inbound = scan_real_inbound_replies(gmail_read_interval=1.25)
     app.logger.info(
         "OUTREACH_INBOUND_SCHEDULER ok=%s checked=%s processed=%s",
         inbound.get("ok"),
