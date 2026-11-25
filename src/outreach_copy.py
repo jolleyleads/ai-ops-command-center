@@ -27,37 +27,46 @@ def initial_email(lead, evidence, quote=''):
     company = plain(lead.company) or 'your business'
     recipient = plain(lead.contact_name).split(' ')[0] if lead.contact_name else f'{company} team'
     quote = ' '.join(str(quote or '').split())
-    # AI may select an exact primary-source excerpt, never fabricate a compliment.
-    supported = 12 <= len(quote) <= 180 and not re.search(r'https?://|@|[\r\n]', quote)
+    sources = primary_copy_sources(lead, evidence)
+    # Only cite a fact when the excerpt actually appears in an owned source.
+    supported = 12 <= len(quote) <= 180 and not re.search(r'https?://|@|[“”\r\n]', quote)
     supported = supported and any(quote in ' '.join(str(row.get('page_text') or row.get('text') or '').split())
-                                  for row in primary_copy_sources(lead, evidence))
-    compliment = f'Your focus on “{plain(quote, 180)}” really caught my attention!' if supported else f'Your work at {company} really caught my attention!'
-    # Public company research does not measure private response rates or lost leads.
-    problem = ('But what really caught my eye is how easily a slower response can give your competition '
-               'a chance to win your leads and potential customers. If your response rate is lower than '
-               'it could be, that’s business you could be missing out on.')
+                                  for row in sources)
+    research = (
+        f'I looked into {company}, and this stood out to me on your website: “{quote}”.'
+        if supported else
+        f'I came across {company} and had a question about your customer outreach.'
+    )
     if getattr(lead, 'verification', '') == 'USER_PROVIDED':
         company = 'your business'
         recipient = plain(lead.contact_name).split(' ')[0] if lead.contact_name else 'there'
-        compliment = 'I wanted to introduce myself and share how I help businesses respond to inquiries and follow up with potential customers.'
-    body = f'''Hey {recipient} 👋
+        research = 'I wanted to introduce myself and ask about your customer outreach.'
+        supported = False
+    subject = f'{recipient}, a quick question about your business'[:160] if lead.contact_name else f'A quick question for {company}'[:160]
+    body = f'''Hey {recipient},
 
-{compliment}
+I'm Matt Jolley, the founder of AutoMake AI. This is a genuine business introduction, and you can reach me directly. I know you probably get flooded with sales emails and scams every day, so I'll keep this short.
 
-{problem}
+{research}
 
-That’s where I come into play. I help fix those gaps by getting prospects a faster response and making sure the follow up happens. My goal is to get those response numbers much higher in just a couple of weeks and turn more of that interest into booked appointments, without you lifting a finger. I handle the responses, follow ups, and scheduling so you can focus on running your business.
+It made me wonder: how many potential customers might be slipping through the cracks because you're too busy running your business to consistently follow up?
 
-The reason I’m reaching out is that I’d love to help you keep the business you’ve worked hard to earn. Would you be open to two quick questions so I can learn a little about how you’re handling inquiries now?
+I build systems that automate customer outreach, follow-ups and appointment booking, so businesses can turn more inquiries into booked jobs.
 
-{RESUME_LINE} You’re welcome to call or text me directly. I’d enjoy hearing about your business! 🙂
+I'm not asking you to buy anything today. I'd genuinely like to see if there's an opportunity to help your business capture more revenue.
 
-Matthew Jolley
-AutoMake AI
-757 840 9648'''
-    subject = 'A quick introduction from Matthew Jolley' if getattr(lead, 'verification', '') == 'USER_PROVIDED' else f'Something caught my eye about {company}'[:160]
+Would you be open to a quick conversation?
+
+{RESUME_LINE}
+
+Matt Jolley
+Founder | AutoMake AI
+automakeai.live
+757 840 9648
+
+If this isn't relevant, just reply and let me know.'''
     return {'subject': subject, 'body': body,
-            'template': 'matthew_personal_outreach_v1', 'compliment_source_backed': bool(supported)}
+            'template': 'matthew_personal_outreach_v2', 'compliment_source_backed': bool(supported)}
 
 
 def add_resume_attachment(message, body):
@@ -74,7 +83,7 @@ def add_resume_attachment(message, body):
 def matches_initial_email(lead, evidence, subject, body):
     """Recognize the approved template, allowing its source-backed compliment."""
     quote = ''
-    match = re.search(r'^Your focus on “(.+)” really caught my attention!$', str(body or ''), re.M)
+    match = re.search(r'^I looked into .+?, and this stood out to me on your website: “(.+)”\.$', str(body or ''), re.M)
     if match:
         quote = match.group(1)
     expected = initial_email(lead, evidence, quote)
