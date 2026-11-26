@@ -13,7 +13,7 @@ def test_explicit_human_date_and_quoted_history():
     assert result==dict(start="2030-10-11T14:00:00-04:00",end="2030-10-11T14:30:00-04:00",timezone="America/New_York")
 
 
-@pytest.mark.parametrize("text",["Yes, tomorrow at 2 pm", "October 32nd 2030 at 2 pm", "October 11th 2030 at 2 pm Pacific"])
+@pytest.mark.parametrize("text",["Yes, tomorrow at 2 pm", "October 32nd 2030 at 2 pm", "October 11th 2030 at 2 pm PST"])
 def test_ambiguous_dates_stay_pending(text):
     from src.automatic_reply_router import extract_explicit_booking
     assert not extract_explicit_booking(text)["start"]
@@ -58,7 +58,7 @@ def test_provider_reply_books_and_confirms_once(env,monkeypatch):
     assert env.OutreachReplyEvidence.query.one().message_id=="reply"
     assert env.OutreachBookingAttempt.query.one().status=="confirmed"
     assert len(sent)==1 and sent[0][3]=="thread"
-    assert env.OutreachSendAttempt.query.one().kind=="booking_confirmation"
+    assert env.OutreachSendAttempt.query.one().kind=="automatic_reply"
     assert imported.import_and_process(data)["duplicate_suppressed"] is True
     assert len(sent)==1
 
@@ -75,6 +75,21 @@ def test_import_rejects_wrong_provider_sender_and_unapproved_recipient(env,monke
 def test_import_endpoint_requires_authentication(env):
     client=env.app.test_client()
     assert client.post("/api/operator/conversation-import",json={}).status_code==401
+
+
+def test_provider_acceptance_registers_sent_thread(env,monkeypatch):
+    from scripts import provider_integration_acceptance as acceptance
+    import operator_conversation_import as importer
+    monkeypatch.setattr(acceptance,'gmail_access_token',lambda:'test-token')
+    monkeypatch.setattr(acceptance,'send_gmail',lambda *a:{'id':'original','threadId':'thread'})
+    monkeypatch.setattr(acceptance,'check_availability',lambda *a:{'ok':True,'available':True})
+    calls=[]
+    monkeypatch.setattr(importer,'import_and_process',lambda data:calls.append(data) or {'ok':True,'stage':'awaiting_real_reply','lead_id':10})
+    result=acceptance.run_provider_integration_acceptance('neyolabs@gmail.com')
+    assert result['ok'] and result['registration']['lead_id']==10
+    assert calls==[{'recipient':'neyolabs@gmail.com','thread_id':'thread','message_id':'original','company':'Controlled provider acceptance'}]
+    monkeypatch.setattr(importer,'import_and_process',lambda data:{'ok':False,'stage':'qualification_blocked'})
+    assert acceptance.run_provider_integration_acceptance('neyolabs@gmail.com')['stage']=='conversation_registration'
 
 def test_yearless_upcoming_date_is_understood():
     from src.scheduling_dates import interpret_booking

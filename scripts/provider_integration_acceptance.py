@@ -53,6 +53,18 @@ def run_provider_integration_acceptance(recipient=None):
         if not message_id or not thread_id:
             return _result(False, "gmail_send", reason="REAL_GMAIL_RECEIPT_REQUIRED", provider=sent)
 
+        # Register the real provider receipt through the existing controlled
+        # conversation gate. Otherwise the normal scheduler cannot see replies.
+        from operator_conversation_import import CONTROLLED_RECIPIENTS, import_and_process
+        if recipient in CONTROLLED_RECIPIENTS:
+            tracked = import_and_process({"recipient": recipient, "thread_id": thread_id,
+                "message_id": message_id, "company": "Controlled provider acceptance"})
+            if not tracked.get("ok"):
+                return _result(False, "conversation_registration", gmail_message_id=message_id,
+                    gmail_thread_id=thread_id, registration=tracked)
+        else:
+            tracked = {}
+
         local_tz = ZoneInfo('America/New_York')
         start = (datetime.now(local_tz) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
         end = start + timedelta(minutes=30)
@@ -60,7 +72,7 @@ def run_provider_integration_acceptance(recipient=None):
         if not isinstance(availability, dict) or availability.get("ok") is not True:
             return _result(False, "calendar_availability", reason="CALENDAR_AVAILABILITY_RECEIPT_REQUIRED", gmail_message_id=message_id, gmail_thread_id=thread_id, calendar=availability)
 
-        return _result(True, "awaiting_real_reply", recipient=recipient, gmail_message_id=message_id, gmail_thread_id=thread_id, calendar_availability=availability, next_required="Reply to this Gmail thread; production inbound processing must then produce durable reply evidence/classification and the booking path must produce a real Calendar event receipt.")
+        return _result(True, "awaiting_real_reply", recipient=recipient, gmail_message_id=message_id, gmail_thread_id=thread_id, calendar_availability=availability, registration=tracked, next_required="Reply to this Gmail thread; production inbound processing must then produce durable reply evidence/classification and the booking path must produce a real Calendar event receipt.")
 
 
 def main():

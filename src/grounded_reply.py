@@ -43,7 +43,7 @@ def _single_answer(text):
     if approved:return approved
     # Match complete questions, so an extra pricing/security question cannot
     # disappear behind a supported keyword in a mixed reply.
-    if re.fullmatch(r"(?:hi[,!]?\s*)?(?:how long (?:is|does|will) (?:the |a |our )?(?:call|meeting)(?: take| last)?|what(?:'s| is) (?:the )?(?:call|meeting) duration|how much time (?:does|will) (?:the |a )?(?:call|meeting) take)[?.!\s]*", text, re.I):
+    if re.fullmatch(r"(?:hi[,!]?\s*)?(?:how long (?:is|does|will) (?:the |a |our )?(?:call|meeting|appointment)(?: take| last)?|what(?:'s| is) (?:the )?(?:call|meeting|appointment) duration|how much time (?:does|will) (?:the |a )?(?:call|meeting|appointment) take)[?.!\s]*", text, re.I):
         import os
         try:duration=int(os.getenv('BOOKING_DURATION_MINUTES', '30'))
         except ValueError:return ""
@@ -67,6 +67,9 @@ def reply_parts(text):
 
 
 def routine_answer(text):
+    # A brief affirmative lead-in is not an unsupported business question.
+    # Strip only these explicit acknowledgements, not arbitrary concerns.
+    text = re.sub(r"^(?:i[’']m interested|i am interested|yes|sure|sounds good)[,.!;]+\s*", "", str(text or '').strip(), flags=re.I)
     single = _single_answer(text)
     if single:return single
     parts = reply_parts(text)

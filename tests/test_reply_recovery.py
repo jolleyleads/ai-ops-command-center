@@ -26,6 +26,14 @@ def test_scheduling_question_and_mixed_question_remain_distinct():
     assert not routine_answer("How long is the call, and what is your price?")
 
 
+def test_interested_prospect_duration_question_is_grounded(monkeypatch):
+    monkeypatch.setenv('BOOKING_DURATION_MINUTES','30')
+    text="I'm interested. How long does the appointment take?"
+    assert routine_answer(text)=="The call is scheduled for 30 minutes."
+    assert classify_reply(text)['classification']=='question'
+    assert not routine_answer(text+" What does it cost?")
+
+
 @pytest.mark.parametrize("text", [
     "Let’s do October 31 1:30 PM Eastern time",
     "October 31 2026 at 1:30 PM Eastern time",
