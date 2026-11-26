@@ -11,6 +11,7 @@ from app import app, db
 import gmail_connect  # noqa: F401
 import gmail_outreach_state
 import outreach_automation
+import gmail_reconciliation  # Same command-bound Gmail sender as the web service.
 from gmail_outreach_state import process_durable_followups
 from v1_orchestration import scan_real_inbound_replies
 

@@ -549,6 +549,23 @@ def _independent_mailbox_gate(lead):
     return {"ok":True,"mailbox_validation":mailbox}
 
 
+def _reply_mailbox_gate(lead, kind, sequence):
+    """A verified real reply is direct evidence of a live mailbox.
+
+    Only use this for a response to the exact persisted inbound message in
+    the already tracked thread. Initial outreach still requires verification.
+    """
+    if kind=="automatic_reply" and lead.gmail_thread_id and lead.gmail_message_id:
+        evidence=db.session.get(OutreachReplyEvidence,sequence)
+        if (evidence and evidence.lead_id==lead.id and evidence.thread_id==lead.gmail_thread_id
+                and normalize_email(evidence.from_email)==normalize_email(lead.contact_email)
+                and evidence.message_id and evidence.received_at and not evidence.opted_out):
+            from src.hunter_mailbox import processing_restriction_state
+            if processing_restriction_state(lead.contact_email)=='clear':
+                return {"ok":True,"basis":"provider_verified_inbound_reply"}
+    return _independent_mailbox_gate(lead)
+
+
 def _prospect_send_gate(lead, kind):
     from src.manual_outreach import permitted
     from src.email_workflows import permitted as provided_permitted
@@ -589,7 +606,7 @@ def _safe_send(lead: OutreachLead, *, kind: str, sequence: int, subject: str, bo
     if not ag.get("allowed"):
         return {"ok":False,"stage":"blocked","gate":{"ok":False,"reasons":[ag["reason"]]},"attempt_status":attempt.status if attempt else ""}
     # An explicit owner-provided recipient is not claimed to be an enriched or verified lead.
-    mailbox_gate={'ok':True} if provided else _independent_mailbox_gate(lead)
+    mailbox_gate={'ok':True} if provided else _reply_mailbox_gate(lead,kind,sequence)
     if not mailbox_gate.get("ok"):return mailbox_gate
     if attempt is None:
         attempt=OutreachSendAttempt(lead_id=lead.id,kind=kind,sequence=sequence,recipient=address,idempotency_key=key,status="pending")
@@ -632,7 +649,12 @@ def _send_reply_for_message(lead, item, body):
     existing=OutreachSendAttempt.query.filter_by(lead_id=lead.id,kind="automatic_reply",sequence=evidence.id,status="sent").first()
     if existing:return {"ok":True,"already_sent":True}
     subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
-    return _safe_send(lead,kind="automatic_reply",sequence=evidence.id,subject=subject,body=body)
+    result=_safe_send(lead,kind="automatic_reply",sequence=evidence.id,subject=subject,body=body)
+    if not result.get("ok"):
+        reasons=(result.get('gate') or {}).get('reasons') or (result.get('send_receipt') or {}).get('reasons') or []
+        lead.last_error='AUTOMATIC_REPLY_SEND_FAILED: '+','.join(str(x) for x in reasons) if reasons else 'AUTOMATIC_REPLY_SEND_FAILED: '+_clean(result.get('stage') or result.get('error'),200)
+        app.logger.warning('AUTOMATIC_REPLY_SEND_FAILED lead_id=%s reasons=%s attempt_status=%s',lead.id,reasons,result.get('attempt_status',''))
+    return result
 
 
 def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datetime) -> Dict[str, Any]:
@@ -756,7 +778,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
                 sent=_send_reply_for_message(lead,item,body)
                 if sent.get('ok'):
                     _audit_actor(lead.id,'scheduling_offer',{'message_id':_clean(item.get('message_id'),255),'slots':[proposal]},{'stage':'offered'},'system')
-                return {'ok':sent.get('ok') is True,'stage':'awaiting_confirmation'}
+                return {'ok':sent.get('ok') is True,'stage':'awaiting_confirmation','reply':sent,'classification':classification}
     # A prospect can accept a single explicitly offered slot without
     # retyping it. Multiple alternatives are never treated as consent.
     accepted=None

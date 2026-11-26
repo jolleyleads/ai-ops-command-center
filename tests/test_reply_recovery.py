@@ -34,6 +34,26 @@ def test_interested_prospect_duration_question_is_grounded(monkeypatch):
     assert not routine_answer(text+" What does it cost?")
 
 
+def test_live_reply_verifies_only_the_exact_already_contacted_mailbox(env,monkeypatch):
+    from src import hunter_mailbox
+    lead=oa.OutreachLead(company='Example',contact_email='owner@example.com',gmail_thread_id='thread',gmail_message_id='original',status='interested')
+    oa.db.session.add(lead);oa.db.session.commit()
+    evidence=oa.OutreachReplyEvidence(lead_id=lead.id,message_id='reply',thread_id='thread',from_email=lead.contact_email,received_at=datetime.utcnow(),body_text='Tomorrow at 3 PM')
+    oa.db.session.add(evidence);oa.db.session.commit()
+    monkeypatch.setattr(oa,'_independent_mailbox_gate',lambda _: {'ok':False,'stage':'blocked'})
+    monkeypatch.setattr(hunter_mailbox,'processing_restriction_state',lambda _:'clear')
+    assert oa._reply_mailbox_gate(lead,'automatic_reply',evidence.id)['ok']
+    assert not oa._reply_mailbox_gate(lead,'initial',evidence.id)['ok']
+    assert not oa._reply_mailbox_gate(lead,'automatic_reply',evidence.id+1)['ok']
+    evidence.from_email='other@example.com';oa.db.session.commit()
+    assert not oa._reply_mailbox_gate(lead,'automatic_reply',evidence.id)['ok']
+    evidence.from_email=lead.contact_email;evidence.opted_out=True;oa.db.session.commit()
+    assert not oa._reply_mailbox_gate(lead,'automatic_reply',evidence.id)['ok']
+    evidence.opted_out=False;oa.db.session.commit()
+    monkeypatch.setattr(hunter_mailbox,'processing_restriction_state',lambda _:'restricted')
+    assert not oa._reply_mailbox_gate(lead,'automatic_reply',evidence.id)['ok']
+
+
 @pytest.mark.parametrize("text", [
     "Let’s do October 31 1:30 PM Eastern time",
     "October 31 2026 at 1:30 PM Eastern time",
