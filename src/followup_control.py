@@ -26,7 +26,8 @@ def classify_inbound(messages:Iterable[Dict[str,Any]],sender_email:str="")->Dict
         if sender and parsed_from==sender:continue
         # Without a configured sender, require the caller to explicitly mark inbound.
         if not sender and msg.get("inbound") is not True:continue
-        text=_clean(msg.get("text") or msg.get("snippet") or msg.get("body"),8000)
+        from src.automatic_reply_router import current_reply_text
+        text=current_reply_text(msg.get("text") or msg.get("snippet") or msg.get("body"))[:8000]
         inbound.append({"message_id":_clean(msg.get("message_id") or msg.get("id"),255),"from":from_value,"from_email":parsed_from,"text":text,"thread_id":_clean(msg.get("thread_id"),255),"body_source":_clean(msg.get("body_source"),50),"internal_date":_clean(msg.get("internal_date"),50)})
     if not inbound:
         return {"ok":True,"replied":False,"opted_out":False,"stop":False,"reason":"NO_INBOUND_REPLY","reply_evidence":[]}

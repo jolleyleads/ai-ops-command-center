@@ -52,10 +52,10 @@ def _natural_date_text(raw, local_now, prior_date=None):
     raw=re.sub(r"\b("+"|".join(MONTHS)+r")\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*[,]?\s*20\d{2})",add_year,raw,flags=re.I)
     # A time-only answer can refer to the previous unavailable date, but never
     # invent a date without persisted context from this exact lead.
-    if prior_date and not FULL_DATE.search(raw):
+    if prior_date and not FULL_DATE.search(raw) and not re.search(r"\b(?:today|tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b",raw,re.I):
         m=re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",raw,re.I)
-        if m:
-            raw=prior_date.strftime("%B %d %Y")+" at "+m.group(0)
+        if m and len(re.findall(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",raw,re.I))==1:
+            raw=prior_date.strftime("%B %d %Y")+" at "+raw
     return raw
 
 def interpret_booking(text,now=None,prior_date=None):
@@ -72,11 +72,15 @@ def interpret_booking(text,now=None,prior_date=None):
     if re.search(r"\b(?:UTC|GMT)\b",unscoped,re.I):zones.add("UTC")
     if re.search(r"\b(?:ET|Eastern(?: time)?)\b",unscoped,re.I):zones.add("America/New_York")
     if len(zones)>1:return fail("MULTIPLE_TIMEZONES")
-    if re.search(r"\b(?:EST|EDT|PST|PDT|CST|CDT|MST|MDT|HST|AKST|AKDT|BST|IST|CET|CEST|EET|JST|AST|ADT|Pacific|Central|Mountain)\b(?!/)",ZONE.sub("",raw),re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
+    for pattern,name in [(r"\bPacific(?: time)?\b","America/Los_Angeles"),(r"\bCentral(?: time)?\b","America/Chicago"),(r"\bMountain(?: time)?\b","America/Denver")]:
+        if re.search(pattern,unscoped,re.I):zones.add(name)
+    if len(zones)>1:return fail("MULTIPLE_TIMEZONES")
+    if re.search(r"\b(?:EST|EDT|PST|PDT|CST|CDT|MST|MDT|HST|AKST|AKDT|BST|IST|CET|CEST|EET|JST|AST|ADT)\b(?!/)",ZONE.sub("",raw),re.I):return fail("AMBIGUOUS_TIMEZONE_ABBREVIATION")
     zone=next(iter(zones),getattr(getattr(prior_date,"tzinfo",None),"key",None) or os.getenv("BOOKING_TIMEZONE","America/New_York"))
     try:tz=ZoneInfo(zone)
     except (ValueError,ZoneInfoNotFoundError):return fail("INVALID_TIMEZONE")
     raw=_natural_date_text(raw,now.astimezone(tz),prior_date=prior_date)
+    if re.search(r"\b(?:can't|cannot|won't|not|might|maybe|tentative|if possible|instead of|unavailable|busy)\b",raw,re.I):return fail("UNCONFIRMED_TIME")
     stamps=ISO.findall(raw)
     if stamps:
         if len(stamps)!=2 or not zones:return fail("EXPLICIT_START_END_AND_TIMEZONE_REQUIRED")
@@ -137,3 +141,20 @@ def interpret_booking(text,now=None,prior_date=None):
     interval=end.astimezone(timezone.utc)-start.astimezone(timezone.utc)
     if start<=now or interval<=timedelta(0) or interval>timedelta(minutes=120):return fail("PAST_OR_INVALID_INTERVAL")
     return {"start":start.isoformat(),"end":end.isoformat(),"timezone":zone,"ready":True,"reason":"","clarification":""}
+
+
+def resolve_relative_proposal(text,received_ms):
+    """Resolve today/tomorrow against the reply timestamp, for an offer only."""
+    if not received_ms:return None
+    matches=list(re.finditer(r'\b(today|tomorrow)\b',text,re.I))
+    if len(matches)!=1:return None
+    try:
+        received=datetime.fromtimestamp(int(received_ms)/1000,timezone.utc)
+        zone=next(iter(ZONE.findall(text)),os.getenv('BOOKING_TIMEZONE','America/New_York'))
+        for pattern,name in [(r'\bEastern\b','America/New_York'),(r'\bPacific\b','America/Los_Angeles'),(r'\bCentral\b','America/Chicago'),(r'\bMountain\b','America/Denver')]:
+            if re.search(pattern,text,re.I):zone=name
+        day=received.astimezone(ZoneInfo(zone)).date()+timedelta(days=matches[0].group(0).lower()=='tomorrow')
+        absolute=text[:matches[0].start()]+day.isoformat()+text[matches[0].end():]
+        parsed=interpret_booking(absolute)
+        return {k:parsed[k] for k in ('start','end','timezone')} if parsed['ready'] else None
+    except (ValueError,TypeError,OverflowError,ZoneInfoNotFoundError):return None

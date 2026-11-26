@@ -73,8 +73,11 @@ def test_pending_or_uncertain_booking_reconciles_before_any_recreate(env,monkeyp
     creates=[]
     monkeypatch.setattr(oa,"create_event",lambda *a,**k:creates.append(1) or {"ok":True})
     monkeypatch.setattr(oa,"get_event",lambda event_id:{"ok":True,"found":True,"event_id":event_id,"start":attempt.start,"end":attempt.end,"event_url":"https://calendar.invalid/fake"})
+    confirmations=[]
+    monkeypatch.setattr(oa,"_send_reply_for_message",lambda *a: confirmations.append(a) or {"ok":True})
     second=oa._route_persisted_reply(x,reply,datetime.utcnow())
     assert second["ok"] is True and second.get("reconciled") is True
+    assert len(confirmations)==1
     assert creates==[]
 
 # keyring-ci-refresh

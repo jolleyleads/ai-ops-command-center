@@ -125,7 +125,7 @@ def test_health_reports_missing_stale_and_failed_workers(env):
 
 
 def test_reschedule_updates_existing_event_with_conditional_write(monkeypatch):
-    req={"start":"2026-11-11T14:00:00-05:00","end":"2026-11-11T14:30:00-05:00","timezone":"America/New_York","attendee_email":"owner@example.com"}
+    req={"start":"2030-11-11T14:00:00-05:00","end":"2030-11-11T14:30:00-05:00","timezone":"America/New_York","attendee_email":"owner@example.com"}
     reads=iter([{"ok":True,"etag":"version1","attendees":[{"email":"owner@example.com"}],"start":"old","end":"old"},{"ok":True,"event_id":"existing",**req}])
     monkeypatch.setattr(calendar,"get_event",lambda _:next(reads))
     monkeypatch.setattr(calendar,"check_availability",lambda _:{"ok":True,"available":True})
@@ -142,7 +142,7 @@ def test_reschedule_updates_existing_event_with_conditional_write(monkeypatch):
 def test_reschedule_rejects_unrelated_attendee(monkeypatch):
     monkeypatch.setattr(calendar,"get_event",lambda _:{"ok":True,"etag":"v1","attendees":[{"email":"other@example.com"}]})
     monkeypatch.setattr(calendar.requests,"patch",lambda *a,**k:pytest.fail("must not update unrelated event"))
-    req={"start":"2026-11-11T14:00:00-05:00","end":"2026-11-11T14:30:00-05:00","timezone":"America/New_York","attendee_email":"owner@example.com"}
+    req={"start":"2030-11-11T14:00:00-05:00","end":"2030-11-11T14:30:00-05:00","timezone":"America/New_York","attendee_email":"owner@example.com"}
     assert calendar.reschedule_event("existing",req)["error"] == "EVENT_ATTENDEE_MISMATCH"
 
 
@@ -150,7 +150,7 @@ def test_scheduled_worker_recovers_research_without_customer_poll(env,monkeypatc
     import outreach_scheduler as scheduler
     import background_research as jobs
     monkeypatch.setattr(scheduler,"_oauth_diagnostics",lambda:None)
-    monkeypatch.setattr(scheduler,"scan_real_inbound_replies",lambda:{"ok":True,"processed":[]})
+    monkeypatch.setattr(scheduler,"scan_real_inbound_replies",lambda **kwargs:{"ok":True,"processed":[]})
     monkeypatch.setattr(oa,"process_due_followups",lambda:{"ok":True,"processed":[]})
     monkeypatch.setattr(scheduler,"process_durable_followups",lambda:{"ok":True,"processed":[]})
     monkeypatch.setattr(jobs,"_smart_search",lambda *a,**k:{"results":[]})
@@ -328,6 +328,51 @@ def test_pending_date_retains_explicit_timezone():
     complete=interpret_booking('3 PM',now=now,prior_date=prior)
     assert complete['start']=='2026-11-22T15:00:00+00:00'
     assert complete['timezone']=='Europe/London'
+
+
+def test_time_only_conflicting_choices_do_not_book():
+    from src.scheduling_dates import interpret_booking
+    from datetime import timezone
+    prior=datetime(2030,11,22,14,tzinfo=timezone.utc)
+    assert not interpret_booking('3 PM or 4 PM',prior_date=prior)['ready']
+    assert not interpret_booking('maybe 3 PM',prior_date=prior)['ready']
+    assert interpret_booking('3 PM Pacific',prior_date=prior)['start']=='2030-11-22T15:00:00-08:00'
+
+
+def test_relative_proposal_uses_message_timestamp():
+    from src.scheduling_dates import resolve_relative_proposal
+    from datetime import timezone
+    received=datetime(2030,11,21,20,tzinfo=timezone.utc)
+    proposal=resolve_relative_proposal('tomorrow at 3 PM Pacific',int(received.timestamp()*1000))
+    assert proposal['start']=='2030-11-22T15:00:00-08:00'
+
+
+def test_cancel_verifies_attendee_and_sends_updates(monkeypatch):
+    monkeypatch.setattr(calendar,'get_event',lambda _: {'ok':True,'etag':'v1','attendees':[{'email':'prospect@example.com'}]})
+    monkeypatch.setattr(calendar,'_headers',lambda:{})
+    calls=[]
+    class Response:ok=True
+    monkeypatch.setattr(calendar.requests,'delete',lambda *a,**kw:calls.append(kw) or Response())
+    assert not calendar.cancel_event('event','other@example.com')['ok']
+    assert not calls
+    assert calendar.cancel_event('event','prospect@example.com')['ok']
+    assert calls[0]['params']=={'sendUpdates':'all'}
+    assert calls[0]['headers']['If-Match']=='v1'
+
+
+def test_cancel_route_persists_and_repeated_reply_does_not_cancel_again(env,monkeypatch):
+    lead=oa.OutreachLead(company='Example',contact_email='prospect@example.com',subject='Call',status='booked')
+    oa.db.session.add(lead);oa.db.session.commit()
+    oa.db.session.add(oa.OutreachBookingAttempt(lead_id=lead.id,reply_message_id='booking',idempotency_key='key',event_id='event',start='2030-11-22T15:00:00-05:00',end='2030-11-22T15:30:00-05:00',timezone='America/New_York',attendee_email=lead.contact_email,status='confirmed'))
+    oa.db.session.commit()
+    monkeypatch.setattr(oa,'_send_authorization_gate',lambda *a:{'ok':True})
+    cancelled=[]
+    monkeypatch.setattr(oa,'cancel_event',lambda *a:cancelled.append(a) or {'ok':True})
+    monkeypatch.setattr(oa,'_send_reply_for_message',lambda *a:{'ok':True})
+    reply={'reply_evidence':[{'message_id':'cancel','text':'Please cancel our meeting'}]}
+    assert oa._route_persisted_reply(lead,reply,datetime.utcnow())['stage']=='cancelled'
+    assert oa._route_persisted_reply(lead,reply,datetime.utcnow())['stage']=='cancelled'
+    assert len(cancelled)==1 and lead.follow_up_due_at is None
 
 
 @pytest.mark.parametrize('text', ["I'm interested when will you be available?", 'When are you free?', 'What is your availability?', 'I’m interested. When are you available?'])

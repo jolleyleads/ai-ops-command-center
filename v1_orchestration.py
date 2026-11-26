@@ -444,7 +444,11 @@ def scan_real_inbound_replies(*, gmail_read_interval=0):
         evidence.sort(key=lambda x:int(x.get("internal_date") or 0))
         if not evidence:
             processed.append({"lead_id":lead.id,"ok":True,"stage":"no_prospect_reply"});continue
-        latest=evidence[-1];message_id=_clean(latest.get("message_id"),255)
+        # An earlier opt-out must never be lost when several replies arrive
+        # between polls. Otherwise the newest message supersedes stale requests.
+        from src.reply_booking import deterministic_signals
+        stops=[e for e in evidence if deterministic_signals(e.get("text"))["opt_out"]]
+        latest=(stops or evidence)[-1];message_id=_clean(latest.get("message_id"),255)
         handled=OperatorAuditEvent.query.filter_by(lead_id=lead.id,action="inbound_processed").all()
         markers=[x for x in handled if json.loads(x.request_json).get("message_id")==message_id]
         if message_id and markers:
@@ -461,14 +465,20 @@ def scan_real_inbound_replies(*, gmail_read_interval=0):
         # Older manually imported conversations have a confirmed booking receipt
         # but predate the scanner's per-message marker. Preserve their completion.
         confirmed=OutreachBookingAttempt.query.filter_by(lead_id=lead.id,reply_message_id=message_id,status="confirmed").first()
-        if confirmed:
+        if confirmed and lead.last_error!="BOOKED_CONFIRMATION_REQUIRES_REVIEW":
             lead.status="booked";lead.follow_up_due_at=None
             if lead.last_error=="QUALIFICATION_REQUIRED_FOR_BOOKING":lead.last_error=""
             _audit_actor(lead.id,"inbound_processed",{"message_id":message_id},{"stage":"already_booked","event_id":confirmed.event_id},"scheduler")
             db.session.commit()
             processed.append({"lead_id":lead.id,"ok":True,"stage":"already_booked"});continue
         reply=dict(reply,reply_evidence=evidence)
-        _persist_reply_evidence(lead,reply); routed=_route_persisted_reply(lead,reply,now); lead.updated_at=now
+        _persist_reply_evidence(lead,reply);db.session.commit()
+        reply=dict(reply,reply_evidence=[e for e in evidence if e is not latest]+[latest])
+        try:
+            routed=_route_persisted_reply(lead,reply,now);lead.updated_at=now
+        except Exception as exc:
+            db.session.rollback();lead.last_error="INBOUND_ROUTING_"+type(exc).__name__.upper();lead.follow_up_due_at=None;db.session.commit()
+            processed.append({"lead_id":lead.id,"ok":False,"stage":"routing_failed"});continue
         if routed.get("ok"):
             _audit_actor(lead.id,"inbound_processed",{"message_id":message_id},{"stage":routed.get("stage")},"scheduler")
         db.session.commit()

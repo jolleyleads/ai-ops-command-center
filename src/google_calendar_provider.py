@@ -59,11 +59,29 @@ def get_event(event_id:str)->Dict[str,Any]:
             headers=_headers(),timeout=30,
         )
         if r.status_code==404:return {"ok":False,"found":False,"event_id":str(event_id)}
-        if not r.ok:return {"ok":False,"found":False,"error":f"Google Calendar get {r.status_code}: {r.text[:500]}"}
+        if not r.ok:return {"ok":False,"found":None,"error":f"Google Calendar get {r.status_code}: {r.text[:500]}"}
         data=r.json()
         return {"ok":True,"found":True,"event_id":data.get("id") or "","event_url":data.get("htmlLink") or "","start":((data.get("start") or {}).get("dateTime") or ""),"end":((data.get("end") or {}).get("dateTime") or ""),"etag":data.get("etag"),"status":data.get("status"),"attendees":data.get("attendees") or []}
     except Exception as exc:
-        return {"ok":False,"found":False,"error":str(exc)[:500]}
+        return {"ok":False,"found":None,"error":str(exc)[:500]}
+
+
+def cancel_event(event_id, attendee_email):
+    existing=get_event(event_id)
+    if existing.get("status")=="cancelled" or existing.get("found") is False:
+        return {"ok":True,"event_id":event_id,"already_cancelled":True}
+    if not existing.get("ok") or not existing.get("etag"):
+        return {"ok":False,"error":"CANCELLATION_EVENT_UNVERIFIED"}
+    if attendee_email.lower() not in {str(a.get("email") or "").lower() for a in existing.get("attendees",[])}:
+        return {"ok":False,"error":"EVENT_ATTENDEE_MISMATCH","definitely_not_executed":True}
+    calendar_id=os.environ.get("GOOGLE_CALENDAR_ID","primary").strip() or "primary"
+    try:
+        headers=_headers();headers["If-Match"]=existing["etag"]
+        response=requests.delete(f"{BASE}/calendars/{requests.utils.quote(calendar_id,safe='')}/events/{requests.utils.quote(event_id,safe='')}",headers=headers,params={"sendUpdates":"all"},timeout=30)
+        if response.ok:return {"ok":True,"event_id":event_id}
+        return {"ok":False,"error":f"CANCELLATION_HTTP_{response.status_code}"}
+    except Exception:
+        return {"ok":False,"error":"CANCELLATION_OUTCOME_UNCERTAIN"}
 
 
 def reschedule_event(event_id, req):

@@ -19,7 +19,7 @@ from src.outreach_execution import validate_outreach_message, execute_outreach_s
 from src.followup_control import classify_inbound, followup_permission
 from src.reply_booking_handoff import process_reply_to_booking
 from src.reply_booking import validate_reply_classification
-from src.google_calendar_provider import check_availability, create_event, get_event, reschedule_event
+from src.google_calendar_provider import check_availability, create_event, get_event, reschedule_event, cancel_event
 from src.outreach_safety import normalize_email, send_key, suppression_gate, send_attempt_gate
 from src.gmail_reply_parser import message_to_evidence
 from src.automatic_reply_router import classify_reply, extract_explicit_booking, current_reply_text
@@ -269,6 +269,16 @@ def _reconcile_external_command(cmd:ExternalSideEffectCommand, found:bool, proof
 def _calendar_create_via_command(lead:OutreachLead, req:Dict[str,Any], *, summary:str, description:str, idempotency_key:str) -> Dict[str,Any]:
     payload={"request":req,"summary":summary,"description":description,"provider_idempotency_key":idempotency_key}
     cmd=_enqueue_external_command(lead,"calendar_create",payload)
+    if cmd.status=="succeeded":
+        return json.loads(cmd.provider_receipt_json or '{}')
+    if cmd.status in {"uncertain","failed"}:
+        proof=get_event(idempotency_key)
+        if proof.get("found") is False:
+            # Only a definitive provider 404 permits retry; the event ID stays
+            # identical so a delayed create cannot generate a second event.
+            changed=ExternalSideEffectCommand.query.filter_by(id=cmd.id,status=cmd.status).update({"status":"pending","error":""},synchronize_session=False)
+            db.session.commit();db.session.refresh(cmd)
+            if not changed:return {"ok":False,"error":"CALENDAR_COMMAND_RETRY_CLAIM_LOST"}
     if cmd.status!="pending":
         return {"ok":False,"error":"EXTERNAL_COMMAND_NOT_PENDING","command_status":cmd.status}
     token=_claim_external_command(cmd)
@@ -619,6 +629,8 @@ def _send_reply_for_message(lead, item, body):
     if not message_id:return {"ok":False,"error":"MISSING_REPLY_MESSAGE_ID"}
     evidence=OutreachReplyEvidence.query.filter_by(lead_id=lead.id,message_id=message_id).first()
     if not evidence:return {"ok":False,"error":"REPLY_EVIDENCE_NOT_PERSISTED"}
+    existing=OutreachSendAttempt.query.filter_by(lead_id=lead.id,kind="automatic_reply",sequence=evidence.id,status="sent").first()
+    if existing:return {"ok":True,"already_sent":True}
     subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
     return _safe_send(lead,kind="automatic_reply",sequence=evidence.id,subject=subject,body=body)
 
@@ -630,6 +642,10 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         return {"ok":False,"stage":"no_reply_evidence"}
     item=evidence[-1]
     text=current_reply_text(_clean(item.get("text"),20000))
+    lead.follow_up_due_at=None
+    lead.replied_at=lead.replied_at or now
+    # Commit evidence before provider calls or independent mailbox checks.
+    db.session.commit()
     # A short time answer is understood in the context of the prior
     # unavailable booking request, without matching unrelated conversations.
     previous_unavailable=OutreachBookingAttempt.query.filter_by(
@@ -650,6 +666,23 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
                 pending_date=datetime.fromisoformat(saved["pending_date"]).astimezone(ZoneInfo(saved["timezone"]))
             except (ValueError,KeyError,ZoneInfoNotFoundError):pass
     classification=classify_reply(text)
+    offer=OperatorAuditEvent.query.filter_by(lead_id=lead.id,action="scheduling_offer").order_by(OperatorAuditEvent.id.desc()).first()
+    if classification.get('classification')=='unclear' and offer and previous and re.fullmatch(r"(?:that works|works for me|perfect|okay|ok)[.!\s]*",text,re.I):
+        if json.loads(offer.request_json or '{}').get('message_id')==previous.message_id:
+            classification=validate_reply_classification(text,{'classification':'interested'})
+    if not classification.get("signals",{}).get("opt_out") and re.fullmatch(r"(?:please\s+)?(?:cancel|call off)\s+(?:my |our |the )?(?:appointment|meeting|call)(?:\s+please)?[.!\s]*",text,re.I):
+        appointment=OutreachBookingAttempt.query.filter_by(lead_id=lead.id,status="confirmed").order_by(OutreachBookingAttempt.updated_at.desc()).first()
+        if appointment:
+            if not _send_authorization_gate(lead,'booking').get('ok'):
+                lead.last_error="CANCELLATION_REQUIRES_REVIEW";return {"ok":False,"stage":"cancel_blocked"}
+            cancelled=cancel_event(appointment.event_id,lead.contact_email)
+            if not cancelled.get("ok"):
+                lead.last_error=cancelled.get("error") or "CANCELLATION_REQUIRES_REVIEW";return {"ok":False,"stage":"cancel_blocked"}
+            appointment.status="cancelled";lead.status="cancelled";db.session.commit()
+        if appointment or lead.status=="cancelled":
+            sent=_send_reply_for_message(lead,item,"Your appointment has been cancelled. If you want to find another time later, just let me know.")
+            lead.last_error="" if sent.get("ok") else "CANCELLATION_CONFIRMATION_REQUIRES_REVIEW"
+            return {"ok":sent.get("ok") is True,"stage":"cancelled"}
     if classification.get("classification")=="unclear":
         # Natural dates and clear typographical variants can be scheduling
         # intent even when the original keyword classifier does not recognize
@@ -677,12 +710,27 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         lead.status="question";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now
         lead.last_error="UNSUPPORTED_QUESTION_REQUIRES_REVIEW"
         if answer:
+            # The approved answer remains authoritative; contextual wording is
+            # only used for the acknowledgement/clarification path.
             sent=_send_reply_for_message(lead,item,answer)
             lead.last_error="" if sent.get("ok") else "AUTOMATIC_REPLY_REQUIRES_REVIEW"
             return {"ok":sent.get("ok") is True,"stage":"question_answered","classification":classification,"reply":sent}
+        # Unsupported business commitments remain reviewable; acknowledge the
+        # actual question without making up an answer.
+        if os.getenv('OPENAI_API_KEY') and _send_authorization_gate(lead,'automatic_reply').get('ok'):
+            from src.conversation_reply import contextual_reply
+            history=reply.get('conversation') or evidence
+            body=contextual_reply(history,text,clarification='I’ll need to check that with the team before giving you an answer.')
+            sent=_send_reply_for_message(lead,item,body)
+            return {"ok":sent.get('ok') is True,"stage":"question_review","classification":classification}
         return {"ok":True,"stage":"question","classification":classification}
     if label!="interested":
         lead.status="responded";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="REPLY_REQUIRES_REVIEW"
+        if os.getenv('OPENAI_API_KEY') and _send_authorization_gate(lead,'automatic_reply').get('ok'):
+            from src.conversation_reply import contextual_reply
+            body=contextual_reply(reply.get('conversation') or evidence,text,clarification='Could you clarify what you mean?')
+            sent=_send_reply_for_message(lead,item,body)
+            return {"ok":sent.get('ok') is True,"stage":"clarification_sent","classification":classification}
         return {"ok":True,"stage":"unclear","classification":classification}
 
     qualification=_send_authorization_gate(lead,'booking')
@@ -695,9 +743,32 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         try:prior_date=datetime.fromisoformat(previous_unavailable.start)
         except ValueError:pass
     parsed=interpret_booking(text,prior_date=prior_date)
+    if parsed.get('reason')=='RELATIVE_DATE_REQUIRES_CONFIRMATION':
+        from src.scheduling_dates import resolve_relative_proposal
+        proposal=resolve_relative_proposal(text,item.get('internal_date'))
+        if proposal:
+            available=check_availability(proposal)
+            if not available.get('ok'):
+                lead.last_error='CALENDAR_AVAILABILITY_REQUIRES_RETRY';return {'ok':False,'stage':'availability_failed'}
+            if available.get('available'):
+                start=datetime.fromisoformat(proposal['start'])
+                body=f"Just to confirm, do you mean {start.strftime('%A, %B %d, %Y at %I:%M %p')} ({proposal['timezone']})? That time is available."
+                sent=_send_reply_for_message(lead,item,body)
+                if sent.get('ok'):
+                    _audit_actor(lead.id,'scheduling_offer',{'message_id':_clean(item.get('message_id'),255),'slots':[proposal]},{'stage':'offered'},'system')
+                return {'ok':sent.get('ok') is True,'stage':'awaiting_confirmation'}
+    # A prospect can accept a single explicitly offered slot without
+    # retyping it. Multiple alternatives are never treated as consent.
+    accepted=None
+    if offer and previous and re.fullmatch(r"(?:yes|sure|sounds good|that works|works for me|perfect|okay|ok)[.!\s]*",text,re.I):
+        saved=json.loads(offer.request_json or '{}')
+        if saved.get('message_id')==previous.message_id and len(saved.get('slots') or [])==1:
+            candidate=saved['slots'][0]
+            if datetime.fromisoformat(candidate['start'])>datetime.now(datetime.fromisoformat(candidate['start']).tzinfo):
+                accepted=candidate
     # Keep the existing extraction contract so command recovery, provider
     # reconciliation, and test adapters remain unchanged for ordinary replies.
-    booking=(extract_explicit_booking(text) if prior_date is None else
+    booking=accepted or (extract_explicit_booking(text) if prior_date is None else
              {key:parsed[key] for key in ("start","end","timezone")})
     booking["attendee_email"]=lead.contact_email
     # Missing explicit ISO start/end/timezone means interested, not booking-ready.
@@ -750,11 +821,13 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
             attempt=existing;gate=attempt_gate(attempt.status)
     if gate.get("reconcile"):
         existing=get_event(attempt.event_id)
-        if existing.get("ok") and existing.get("found") and existing.get("start")==attempt.start and existing.get("end")==attempt.end:
+        if existing.get("ok") and existing.get("found") and existing.get("status")!="cancelled" and existing.get("start")==attempt.start and existing.get("end")==attempt.end:
             attempt.status="confirmed";attempt.event_url=_clean(existing.get("event_url"),1800);attempt.error="";attempt.updated_at=now
             lead.status="booked";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=""
             db.session.commit()
-            return {"ok":True,"stage":"booked","reconciled":True,"event_id":attempt.event_id,"classification":classification}
+            sent=_send_reply_for_message(lead,item,f"Confirmed for {datetime.fromisoformat(attempt.start).strftime('%A, %B %d at %I:%M %p')} ({attempt.timezone}). Your calendar invitation has been created.")
+            if not sent.get("ok"):lead.last_error="BOOKED_CONFIRMATION_REQUIRES_REVIEW"
+            return {"ok":sent.get("ok") is True,"stage":"booked","reconciled":True,"event_id":attempt.event_id,"classification":classification}
         if existing.get("found") is False and attempt.status in {"pending","uncertain"}:
             attempt.status="failed";attempt.error="RECONCILIATION_EVENT_NOT_FOUND";db.session.commit()
         else:
@@ -787,8 +860,7 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         start=datetime.fromisoformat(booking["start"])
         end=datetime.fromisoformat(booking["end"])
         subject=lead.subject if lead.subject.lower().startswith("re:") else "Re: "+lead.subject
-        confirmation=_safe_send(lead,kind="booking_confirmation",sequence=0,subject=subject,
-            body=f"Awesome, {start.strftime('%A, %B %d at %I:%M %p')} works! I’m sending you a calendar invitation now. Looking forward to talking with you.")
+        confirmation=_send_reply_for_message(lead,item,f"Confirmed for {start.strftime('%A, %B %d at %I:%M %p')} ({booking['timezone']}) for {int((end-start).total_seconds()/60)} minutes. Your calendar invitation has been created. Looking forward to talking with you.")
         result["confirmation"]=confirmation
         if not confirmation.get("ok"):lead.last_error="BOOKED_CONFIRMATION_REQUIRES_REVIEW"
         try:stored=json.loads(lead.evidence_json or "[]")
@@ -797,20 +869,24 @@ def _route_persisted_reply(lead: OutreachLead, reply: Dict[str, Any], now: datet
         stored["booking"]=result.get("booking_execution") or {};lead.evidence_json=json.dumps(stored)
     elif stage=="unavailable":
         lead.status="booking_ready";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error="TIME_NOT_AVAILABLE"
-        alternatives=[]
+        alternatives=[];slots=[]
         start=datetime.fromisoformat(booking["start"]);end=datetime.fromisoformat(booking["end"])
         for offset in (timedelta(hours=1),timedelta(days=1),timedelta(days=2)):
             candidate=dict(booking,start=(start+offset).isoformat(),end=(end+offset).isoformat())
             availability=check_availability(candidate)
             if availability.get("ok") and availability.get("available"):
                 alternatives.append((start+offset).strftime("%B %d, %Y at %I:%M %p"))
+                slots.append(candidate)
             if len(alternatives)==2:break
         body="I’m tied up at that time. Could you do a different time that same day? "
         body+=("I can also check "+ " or ".join(alternatives)+f" ({booking['timezone']}). Just tell me what works for you.") if alternatives else "Send me another time that works, and I’ll check."
         result["reply"]=_send_reply_for_message(lead,item,body)
+        if result['reply'].get('ok') and slots:
+            _audit_actor(lead.id,'scheduling_offer',{'message_id':reply_message_id,'slots':slots},{'stage':'offered'},'system')
     else:
         lead.status="interested";lead.follow_up_due_at=None;lead.replied_at=lead.replied_at or now;lead.last_error=_clean(result,2000)
-    return {"ok":result.get("ok") is True,"stage":stage,"classification":classification,"booking_result":result}
+    delivered=(result.get("confirmation") or result.get("reply") or {}).get("ok") is True
+    return {"ok":delivered if stage in {"booked","unavailable"} else result.get("ok") is True,"stage":stage,"classification":classification,"booking_result":result}
 
 
 def _rank_status(score: int) -> str:
@@ -996,7 +1072,7 @@ def _gmail_thread_reply_state(thread_id: str) -> Dict[str, Any]:
         if not sender:
             return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"SENDER_IDENTITY_UNCONFIGURED","error":"GMAIL_FROM_EMAIL is required for deterministic reply detection."}
         # Exact parsed From address comparison happens in classify_inbound.
-        return classify_inbound(rows,sender_email=sender)
+        return {**classify_inbound(rows,sender_email=sender),"conversation":rows}
     except Exception as exc:
         return {"ok":False,"replied":False,"opted_out":False,"stop":True,"reason":"REPLY_CHECK_FAILED","error":_clean(exc,1000)}
 

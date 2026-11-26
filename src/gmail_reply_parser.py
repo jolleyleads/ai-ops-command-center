@@ -36,7 +36,7 @@ def extract_body(payload:Dict[str,Any],limit:int=20000)->Dict[str,Any]:
     walk(payload or {})
     source="text/plain" if plain else ("text/html" if html_parts else "none")
     text="\n".join(plain) if plain else _plain_html("\n".join(html_parts))
-    text=SPACE_RE.sub(" ",text).strip()[:limit]
+    text="\n".join(re.sub(r"[^\S\n]+", " ", line).strip() for line in text.splitlines()).strip()[:limit]
     return {"ok":bool(text),"text":text,"source":source}
 
 def message_to_evidence(message:Dict[str,Any])->Dict[str,Any]:

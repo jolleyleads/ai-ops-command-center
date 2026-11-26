@@ -30,7 +30,8 @@ def extract_explicit_booking(text:Any)->Dict[str,str]:
 
 def current_reply_text(text):
     # Quoted outbound questions must not become the customer's intent.
-    return re.split(r"\s+On\s+.{0,500}?wrote:\s*",str(text or ""),maxsplit=1,flags=re.I|re.S)[0].strip()
+    fresh=re.split(r"\s+On\s+.{0,500}?wrote:\s*|\n\s*(?:-{2,}\s*Original Message|From:)",str(text or ""),maxsplit=1,flags=re.I|re.S)[0]
+    return "\n".join(line for line in fresh.splitlines() if not line.lstrip().startswith(">")).strip()
 
 def classify_reply(text:Any,llm_func:Callable|None=None)->Dict[str,Any]:
     proposal=deterministic_proposal(text)
