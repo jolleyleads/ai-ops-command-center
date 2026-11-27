@@ -339,3 +339,13 @@ context.window.location.search='?research_prompt='+encodeURIComponent('x'.repeat
 context.window.openResearchLink();assert.equal(query,'');assert.equal(sends,0);
 """
     subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
+
+def test_workspace_menu_requested_order():
+    from pathlib import Path
+    import re
+    html = Path('demo/index.html').read_text()
+    menu = html.split('<div class="menu-scroll">', 1)[1].split('</nav>', 1)[0]
+    labels = re.findall(r'</span>([^<]+)</button>', menu)
+    assert labels[:8] == ['Settings', 'Import Leads', 'New Chat', 'My Leads', 'Verified Emails', 'My Campaigns', 'Drafts', 'Sent']
+    assert menu.count('data-view="settings"') == 1
